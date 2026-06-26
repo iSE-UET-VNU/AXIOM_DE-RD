@@ -37,7 +37,7 @@ The first workflow is intentionally simple:
 
 ```text
 raw data
--> ingestion: parse local files and infer initial schemas
+-> ingestion: parse local files or optional Lift API outputs, then infer initial schemas
 -> cleaning: pass parsed data through until cleaning logic is implemented
 -> enrichment: pass cleaned/parsed data through until enrichment logic is implemented
 -> indexing_cataloging: create metadata, DB, vector, and graph index records
@@ -73,6 +73,25 @@ The sample config is in `configs/pipeline.yaml`. It is JSON-compatible YAML so
 the scaffold can run without adding dependencies. If `PyYAML` is installed,
 regular YAML syntax will also work.
 
+The default parser uses the Lift hosted API for images/PDFs, with local fallback
+enabled for unsupported files or missing API setup:
+
+```bash
+pip install datalab-python-sdk
+export DATALAB_API_KEY="your_api_key_here"
+```
+
+Then set this in `configs/pipeline.yaml`:
+
+```json
+"parsing": {
+  "provider": "lift_api"
+}
+```
+
+AXIOM calls the hosted API directly through `datalab_sdk`; it does not import or
+execute the sibling `lift` repo.
+
 Stage outputs are written to:
 
 ```text
@@ -93,7 +112,8 @@ state.
 
 ## Current Limitations
 
-- Parsing is a local scaffold parser, not a production OCR/parser yet.
+- Parsing defaults to Lift API with local fallback. Real API calls require
+  `datalab-python-sdk` and `DATALAB_API_KEY`.
 - Binary files are represented as metadata-only placeholders.
 - Schema extraction uses simple Python type names.
 - Cleaning is currently pass-through.

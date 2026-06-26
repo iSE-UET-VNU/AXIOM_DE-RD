@@ -13,7 +13,14 @@
     "storage"
   ],
   "parsing": {
-    "provider": "local"
+    "provider": "lift_api",
+    "lift_api": {
+      "api_key_env": "DATALAB_API_KEY",
+      "mode": "balanced",
+      "schema_path": "src/ingestion/parsing/lift/schemas/omnidoc_markdown.json",
+      "output_dir": "data/processed/lift_outputs",
+      "fallback_to_local": true
+    }
   },
   "storage": {
     "mode": "local",

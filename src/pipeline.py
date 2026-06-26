@@ -47,7 +47,7 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
     logger.info("Starting pipeline run %s", state.run_id)
 
     if "ingestion" in enabled_modules:
-        result = ingestion.run(input_dir, parser_config=config.get("parsing", {}))
+        result = ingestion.run(input_dir, parser_config=_resolve_parser_config(project_root, config.get("parsing", {})))
         state.data_objects = result.data_objects
         state.parsed_data = result.parsed_data
         state.initial_schemas = result.initial_schemas
@@ -139,6 +139,22 @@ def _artifact_dir(project_root: Path, output_dir: Path, config: dict[str, Any]) 
     if configured:
         return resolve_project_path(project_root, configured)
     return output_dir / "artifacts"
+
+
+def _resolve_parser_config(project_root: Path, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+
+    parser_config = dict(value)
+    lift_config = parser_config.get("lift_api")
+    if isinstance(lift_config, dict):
+        lift_config = dict(lift_config)
+        for key in ("output_dir", "schema_path"):
+            path_value = lift_config.get(key)
+            if path_value:
+                lift_config[key] = str(resolve_project_path(project_root, path_value))
+        parser_config["lift_api"] = lift_config
+    return parser_config
 
 
 def _configure_logging(config: dict[str, Any]) -> None:

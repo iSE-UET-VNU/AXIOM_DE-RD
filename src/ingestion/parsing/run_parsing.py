@@ -34,7 +34,7 @@ def main() -> None:
         args.output_dir or config.get("processed_dir", "data/processed"),
     )
 
-    result = run_ingestion(input_dir, parser_config=config.get("parsing", {}))
+    result = run_ingestion(input_dir, parser_config=_resolve_parser_config(config.get("parsing", {})))
 
     store = LocalArtifactStore(output_dir)
     paths = {
@@ -59,6 +59,22 @@ def _resolve_config_path(config_path: str) -> Path:
         return cwd_candidate
 
     return PROJECT_ROOT / path
+
+
+def _resolve_parser_config(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+
+    parser_config = dict(value)
+    lift_config = parser_config.get("lift_api")
+    if isinstance(lift_config, dict):
+        lift_config = dict(lift_config)
+        for key in ("output_dir", "schema_path"):
+            path_value = lift_config.get(key)
+            if path_value:
+                lift_config[key] = str(resolve_project_path(PROJECT_ROOT, path_value))
+        parser_config["lift_api"] = lift_config
+    return parser_config
 
 
 if __name__ == "__main__":

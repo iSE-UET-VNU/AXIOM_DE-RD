@@ -11,6 +11,7 @@ import csv
 import json
 
 from ...models import DataObject, InitialSchema, ParsedData, make_id
+from .lift import LiftAPIConfig, LiftAPIParserClient
 
 TEXT_FORMATS = {"csv", "json", "jsonl", "txt", "md", "yaml", "yml"}
 BINARY_FORMATS = {"png", "jpg", "jpeg", "gif", "webp", "pdf", "parquet", "xlsx"}
@@ -21,11 +22,39 @@ def parse_raw_file(
     data_object: DataObject,
     parser_config: dict[str, Any] | None = None,
 ) -> ParsedData:
-    """Parse a raw file using the local scaffold parser.
+    """Parse a raw file using the configured parser provider."""
+    parser_config = parser_config or {}
+    if parser_config.get("provider") == "lift_api":
+        return _parse_with_lift_api(path, data_object, parser_config)
 
-    The config argument is accepted to keep the module interface stable as more
-    parsing providers are added later.
-    """
+    return _parse_locally(path, data_object)
+
+
+def _parse_with_lift_api(
+    path: str | Path,
+    data_object: DataObject,
+    parser_config: dict[str, Any],
+) -> ParsedData:
+    lift_config = LiftAPIConfig.from_mapping(parser_config.get("lift_api"))
+    client = LiftAPIParserClient(lift_config)
+
+    try:
+        return client.parse_file(path, data_object)
+    except RuntimeError as exc:
+        if not lift_config.fallback_to_local:
+            raise
+        parsed = _parse_locally(path, data_object)
+        parsed.metadata.update(
+            {
+                "parser": "local-fallback",
+                "requested_parser": "lift-api",
+                "fallback_reason": str(exc),
+            }
+        )
+        return parsed
+
+
+def _parse_locally(path: str | Path, data_object: DataObject) -> ParsedData:
     file_path = Path(path)
     file_format = data_object.metadata.get("format", file_path.suffix.lstrip("."))
 
