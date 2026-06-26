@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..models import DataObject, InitialSchema, ParsedData, make_id
 from .parsing import infer_initial_schema, parse_raw_file
@@ -17,7 +18,7 @@ class IngestionOutput:
     initial_schemas: list[InitialSchema] = field(default_factory=list)
 
 
-def run(input_dir: str | Path) -> IngestionOutput:
+def run(input_dir: str | Path, parser_config: dict[str, Any] | None = None) -> IngestionOutput:
     """Discover raw files and produce parsed data plus initial schemas."""
     input_path = Path(input_dir)
     output = IngestionOutput()
@@ -41,7 +42,7 @@ def run(input_dir: str | Path) -> IngestionOutput:
                 "size_bytes": path.stat().st_size,
             },
         )
-        parsed = parse_raw_file(path, data_object)
+        parsed = parse_raw_file(path, data_object, parser_config)
         schema = infer_initial_schema(parsed)
 
         output.data_objects.append(data_object)

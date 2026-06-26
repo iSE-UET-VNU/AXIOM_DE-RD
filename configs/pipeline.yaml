@@ -1,6 +1,9 @@
 {
   "input_dir": "data/raw",
-  "output_dir": "data/processed",
+  "processed_dir": "data/processed",
+  "cleaned_dir": "data/cleaned",
+  "enriched_dir": "data/enriched",
+  "output_dir": "data/output",
   "enabled_modules": [
     "ingestion",
     "cleaning",
@@ -9,10 +12,13 @@
     "integration",
     "storage"
   ],
+  "parsing": {
+    "provider": "local"
+  },
   "storage": {
     "mode": "local",
     "local": {
-      "artifacts_dir": "data/processed/artifacts"
+      "artifacts_dir": "data/output"
     }
   },
   "logging": {

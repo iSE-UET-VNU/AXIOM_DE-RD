@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..models import CleanedData, CleanedSchema, EnrichedData, EnrichedSchema, make_id
-from .annotation import annotate_data
-from .profiling import profile_data
 
 
 @dataclass
@@ -16,32 +14,33 @@ class EnrichmentOutput:
 
 
 def run(cleaned_data: list[CleanedData], cleaned_schemas: list[CleanedSchema]) -> EnrichmentOutput:
-    """Annotate and profile cleaned data."""
+    """Pass cleaned data through until the enrichment module is implemented."""
     output = EnrichmentOutput()
     schema_by_object = {schema.source_object_id: schema for schema in cleaned_schemas}
 
     for cleaned in cleaned_data:
-        annotations = annotate_data(cleaned.rows)
-        profile = profile_data(cleaned.rows)
         source_schema = schema_by_object.get(cleaned.source_object_id)
 
         enriched = EnrichedData(
             source_object_id=cleaned.source_object_id,
-            rows=cleaned.rows,
-            annotations=annotations,
-            profile=profile,
-            metadata={"todo": "Attach external metadata and richer annotations."},
+            rows=[dict(row) for row in cleaned.rows],
+            annotations={},
+            profile={},
+            metadata={
+                "pass_through": True,
+                "todo": "Implement annotation and profiling.",
+            },
         )
         enriched_schema = EnrichedSchema(
             schema_id=make_id(cleaned.source_object_id, "enriched-schema"),
             source_schema_id=source_schema.schema_id if source_schema else "",
             source_object_id=cleaned.source_object_id,
             fields=source_schema.fields if source_schema else {},
-            semantic_annotations={
-                "field_count": annotations["field_count"],
-                "has_text": annotations["has_text"],
+            semantic_annotations={},
+            metadata={
+                "pass_through": True,
+                "todo": "Add semantic types and ontology mappings.",
             },
-            metadata={"todo": "Add semantic types and ontology mappings."},
         )
 
         output.enriched_data.append(enriched)

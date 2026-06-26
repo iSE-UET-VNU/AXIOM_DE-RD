@@ -31,7 +31,10 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
     logger = logging.getLogger(__name__)
 
     input_dir = resolve_project_path(project_root, config.get("input_dir", "data/raw"))
-    output_dir = resolve_project_path(project_root, config.get("output_dir", "data/processed"))
+    processed_dir = resolve_project_path(project_root, config.get("processed_dir", config.get("output_dir", "data/processed")))
+    cleaned_dir = resolve_project_path(project_root, config.get("cleaned_dir", "data/cleaned"))
+    enriched_dir = resolve_project_path(project_root, config.get("enriched_dir", "data/enriched"))
+    output_dir = resolve_project_path(project_root, config.get("output_dir", "data/output"))
     artifact_dir = _artifact_dir(project_root, output_dir, config)
     enabled_modules = set(config.get("enabled_modules", MODULE_ORDER))
 
@@ -44,7 +47,7 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
     logger.info("Starting pipeline run %s", state.run_id)
 
     if "ingestion" in enabled_modules:
-        result = ingestion.run(input_dir)
+        result = ingestion.run(input_dir, parser_config=config.get("parsing", {}))
         state.data_objects = result.data_objects
         state.parsed_data = result.parsed_data
         state.initial_schemas = result.initial_schemas
@@ -56,14 +59,14 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
         state.cleaned_data = result.cleaned_data
         state.cleaned_schemas = result.cleaned_schemas
         state.completed_modules.append("cleaning")
-        logger.info("Cleaned %s dataset(s)", len(state.cleaned_data))
+        logger.info("Cleaning pass-through produced %s dataset(s)", len(state.cleaned_data))
 
     if "enrichment" in enabled_modules:
         result = enrichment.run(state.cleaned_data, state.cleaned_schemas)
         state.enriched_data = result.enriched_data
         state.enriched_schemas = result.enriched_schemas
         state.completed_modules.append("enrichment")
-        logger.info("Enriched %s dataset(s)", len(state.enriched_data))
+        logger.info("Enrichment pass-through produced %s dataset(s)", len(state.enriched_data))
 
     if "indexing_cataloging" in enabled_modules:
         result = indexing_cataloging.run(state.enriched_data, state.enriched_schemas)
@@ -77,21 +80,26 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
         )
 
     if "integration" in enabled_modules:
-        result = integration.run(state.enriched_data, state.enriched_schemas, state.metadata_records)
+        result = integration.run(state.index_records)
         state.schema_matches = result.schema_matches
         state.entity_matches = result.entity_matches
         state.relationship_records = result.relationship_records
         state.completed_modules.append("integration")
         logger.info(
-            "Built %s schema match(es), %s entity match(es), and %s relationship(s)",
-            len(state.schema_matches),
-            len(state.entity_matches),
-            len(state.relationship_records),
+            "Integration pass-through accepted %s index record(s)",
+            len(result.passed_index_records),
         )
 
     if "storage" in enabled_modules:
         mode = str(config.get("storage", {}).get("mode", "local"))
-        storage.run(state, artifact_dir, mode=mode)
+        storage.run(
+            state,
+            artifact_dir,
+            mode=mode,
+            processed_dir=processed_dir,
+            cleaned_dir=cleaned_dir,
+            enriched_dir=enriched_dir,
+        )
         state.completed_modules.append("storage")
         logger.info("Wrote artifacts to %s", artifact_dir)
 

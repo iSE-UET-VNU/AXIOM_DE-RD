@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from ..models import CleanedData, CleanedSchema, InitialSchema, ParsedData, make_id
-from .error_processing import process_errors
-from .imputation import impute_missing_values
-from .standardization import standardize_rows
 
 
 @dataclass
@@ -18,34 +14,31 @@ class CleaningOutput:
 
 
 def run(parsed_data: list[ParsedData], initial_schemas: list[InitialSchema]) -> CleaningOutput:
-    """Standardize fields, process simple errors, and impute missing values."""
+    """Pass parsed data through until the cleaning module is implemented."""
     output = CleaningOutput()
     schema_by_object = {schema.source_object_id: schema for schema in initial_schemas}
 
     for parsed in parsed_data:
-        standardized = standardize_rows(parsed.rows)
-        checked_rows, issues = process_errors(standardized)
-        imputed_rows = impute_missing_values(checked_rows)
-
         source_schema = schema_by_object.get(parsed.object_id)
-        fields = _infer_fields(imputed_rows)
         cleaned_schema = CleanedSchema(
             schema_id=make_id(parsed.object_id, "cleaned-schema"),
             source_schema_id=source_schema.schema_id if source_schema else "",
             source_object_id=parsed.object_id,
-            fields=fields,
-            transformations=["standardize_field_names", "process_errors", "impute_missing_values"],
+            fields=source_schema.fields if source_schema else {},
+            transformations=["pass_through"],
             metadata={
-                "todo": "Add validation contracts and domain-specific cleaning rules.",
+                "pass_through": True,
+                "todo": "Implement standardization, error processing, and imputation.",
             },
         )
         cleaned = CleanedData(
             source_object_id=parsed.object_id,
-            rows=imputed_rows,
-            issues=issues,
+            rows=[dict(row) for row in parsed.rows],
+            issues=[],
             metadata={
+                "pass_through": True,
                 "source_format": parsed.source_format,
-                "row_count": len(imputed_rows),
+                "row_count": len(parsed.rows),
             },
         )
 
@@ -53,27 +46,3 @@ def run(parsed_data: list[ParsedData], initial_schemas: list[InitialSchema]) -> 
         output.cleaned_schemas.append(cleaned_schema)
 
     return output
-
-
-def _infer_fields(rows: list[dict[str, Any]]) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for row in rows:
-        for key, value in row.items():
-            fields.setdefault(key, _type_name(value))
-    return fields
-
-
-def _type_name(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "bool"
-    if isinstance(value, int):
-        return "int"
-    if isinstance(value, float):
-        return "float"
-    if isinstance(value, list):
-        return "list"
-    if isinstance(value, dict):
-        return "dict"
-    return "str"

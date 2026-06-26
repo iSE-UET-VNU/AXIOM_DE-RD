@@ -1,4 +1,4 @@
-"""Minimal raw file parser.
+"""Minimal local raw file parser.
 
 TODO: Add real parsers for domain documents, images, PDFs, and structured files.
 """
@@ -16,7 +16,16 @@ TEXT_FORMATS = {"csv", "json", "jsonl", "txt", "md", "yaml", "yml"}
 BINARY_FORMATS = {"png", "jpg", "jpeg", "gif", "webp", "pdf", "parquet", "xlsx"}
 
 
-def parse_raw_file(path: str | Path, data_object: DataObject) -> ParsedData:
+def parse_raw_file(
+    path: str | Path,
+    data_object: DataObject,
+    parser_config: dict[str, Any] | None = None,
+) -> ParsedData:
+    """Parse a raw file using the local scaffold parser.
+
+    The config argument is accepted to keep the module interface stable as more
+    parsing providers are added later.
+    """
     file_path = Path(path)
     file_format = data_object.metadata.get("format", file_path.suffix.lstrip("."))
 

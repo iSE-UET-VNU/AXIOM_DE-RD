@@ -11,9 +11,15 @@ storage/**/*.jsonl
 storage/schema/*.json
 data/raw/*
 data/processed/
+data/cleaned/*
 data/enriched/
+data/output/*
 
 !data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/cleaned/.gitkeep
+!data/enriched/.gitkeep
+!data/output/.gitkeep
 !storage/schema/.gitkeep
 !storage/vector_db/.gitkeep
 !storage/db/.gitkeep
