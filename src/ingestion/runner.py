@@ -9,6 +9,7 @@ from typing import Any
 from ..models import DataObject, InitialSchema, ParsedData, make_id
 from .parsing import infer_initial_schema, parse_raw_file
 from .parsing_formatting import detect_content_type, detect_format
+from ..utils.paths import portable_path
 
 
 @dataclass
@@ -18,7 +19,11 @@ class IngestionOutput:
     initial_schemas: list[InitialSchema] = field(default_factory=list)
 
 
-def run(input_dir: str | Path, parser_config: dict[str, Any] | None = None) -> IngestionOutput:
+def run(
+    input_dir: str | Path,
+    parser_config: dict[str, Any] | None = None,
+    project_root: str | Path | None = None,
+) -> IngestionOutput:
     """Discover raw files and produce parsed data plus initial schemas."""
     input_path = Path(input_dir)
     output = IngestionOutput()
@@ -32,9 +37,10 @@ def run(input_dir: str | Path, parser_config: dict[str, Any] | None = None) -> I
 
         relative_uri = str(path.relative_to(input_path))
         file_format = detect_format(path)
+        portable_uri = portable_path(path, project_root)
         data_object = DataObject(
             object_id=make_id("data-object", relative_uri),
-            uri=str(path),
+            uri=portable_uri,
             content_type=detect_content_type(path),
             metadata={
                 "relative_uri": relative_uri,

@@ -13,9 +13,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.ingestion import run as run_ingestion  # noqa: E402
 from src.storage.local import LocalArtifactStore  # noqa: E402
 from src.utils.config import load_config, resolve_project_path  # noqa: E402
+from src.utils.env import load_dotenv_file  # noqa: E402
 
 
 def main() -> None:
+    load_dotenv_file(PROJECT_ROOT)
+
     parser = argparse.ArgumentParser(description="Run AXIOM parsing only.")
     parser.add_argument("--config", default="configs/pipeline.yaml")
     parser.add_argument("--input-dir", default=None)

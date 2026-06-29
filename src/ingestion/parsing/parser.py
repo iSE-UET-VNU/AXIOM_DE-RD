@@ -1,4 +1,4 @@
-"""Minimal local raw file parser.
+﻿"""Minimal local raw file parser.
 
 TODO: Add real parsers for domain documents, images, PDFs, and structured files.
 """
@@ -10,7 +10,8 @@ from typing import Any
 import csv
 import json
 
-from ...models import DataObject, InitialSchema, ParsedData, make_id
+from ...models import DataObject, InitialSchema, ParsedData
+from ..parsing_formatting import build_initial_schema
 from .lift import LiftAPIConfig, LiftAPIParserClient
 
 TEXT_FORMATS = {"csv", "json", "jsonl", "txt", "md", "yaml", "yml"}
@@ -100,24 +101,7 @@ def _parse_locally(path: str | Path, data_object: DataObject) -> ParsedData:
 
 
 def infer_initial_schema(parsed: ParsedData) -> InitialSchema:
-    fields: dict[str, str] = {}
-    for row in parsed.rows:
-        for key, value in row.items():
-            fields.setdefault(str(key), _type_name(value))
-
-    if parsed.text is not None and "text" not in fields:
-        fields["text"] = "str"
-
-    return InitialSchema(
-        schema_id=make_id(parsed.object_id, "initial-schema"),
-        source_object_id=parsed.object_id,
-        fields=fields,
-        metadata={
-            "source_format": parsed.source_format,
-            "row_count": len(parsed.rows),
-            "todo": "Improve type inference and nested schema extraction.",
-        },
-    )
+    return build_initial_schema(parsed)
 
 
 def _parse_csv(path: Path) -> list[dict[str, Any]]:
@@ -141,19 +125,3 @@ def _parse_json(path: Path) -> tuple[list[dict[str, Any]], str]:
 
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
-
-
-def _type_name(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "bool"
-    if isinstance(value, int):
-        return "int"
-    if isinstance(value, float):
-        return "float"
-    if isinstance(value, list):
-        return "list"
-    if isinstance(value, dict):
-        return "dict"
-    return "str"

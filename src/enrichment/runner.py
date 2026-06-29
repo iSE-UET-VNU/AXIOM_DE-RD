@@ -27,6 +27,7 @@ def run(cleaned_data: list[CleanedData], cleaned_schemas: list[CleanedSchema]) -
             annotations={},
             profile={},
             metadata={
+                **cleaned.metadata,
                 "pass_through": True,
                 "todo": "Implement annotation and profiling.",
             },
@@ -36,6 +37,8 @@ def run(cleaned_data: list[CleanedData], cleaned_schemas: list[CleanedSchema]) -
             source_schema_id=source_schema.schema_id if source_schema else "",
             source_object_id=cleaned.source_object_id,
             fields=source_schema.fields if source_schema else {},
+            entities=source_schema.entities if source_schema else [],
+            relationships=source_schema.relationships if source_schema else [],
             semantic_annotations={},
             metadata={
                 "pass_through": True,

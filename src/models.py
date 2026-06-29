@@ -36,6 +36,8 @@ class InitialSchema:
     schema_id: str
     source_object_id: str
     fields: dict[str, str] = field(default_factory=dict)
+    entities: list[dict[str, Any]] = field(default_factory=list)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -53,6 +55,8 @@ class CleanedSchema:
     source_schema_id: str
     source_object_id: str
     fields: dict[str, str] = field(default_factory=dict)
+    entities: list[dict[str, Any]] = field(default_factory=list)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
     transformations: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -72,6 +76,8 @@ class EnrichedSchema:
     source_schema_id: str
     source_object_id: str
     fields: dict[str, str] = field(default_factory=dict)
+    entities: list[dict[str, Any]] = field(default_factory=list)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
     semantic_annotations: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -135,7 +141,12 @@ class PipelineState:
     enriched_data: list[EnrichedData] = field(default_factory=list)
     enriched_schemas: list[EnrichedSchema] = field(default_factory=list)
     metadata_records: list[MetadataRecord] = field(default_factory=list)
+    documents: list[dict[str, Any]] = field(default_factory=list)
     index_records: list[IndexRecord] = field(default_factory=list)
+    index_quality_report: dict[str, Any] = field(default_factory=dict)
+    vector_records: list[dict[str, Any]] = field(default_factory=list)
+    embedding_report: dict[str, Any] = field(default_factory=dict)
+    vector_db_report: dict[str, Any] = field(default_factory=dict)
     schema_matches: list[SchemaMatch] = field(default_factory=list)
     entity_matches: list[EntityMatch] = field(default_factory=list)
     relationship_records: list[RelationshipRecord] = field(default_factory=list)

@@ -22,7 +22,7 @@ The default parsing config uses Lift API with local fallback:
     "lift_api": {
       "api_key_env": "DATALAB_API_KEY",
       "mode": "balanced",
-      "schema_path": "src/ingestion/parsing/lift/schemas/omnidoc_markdown.json",
+      "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
       "output_dir": "data/processed/lift_outputs",
       "fallback_to_local": true
     }
@@ -30,12 +30,21 @@ The default parsing config uses Lift API with local fallback:
 }
 ```
 
-Install the SDK and set the API key:
+Install the SDK:
 
 ```bash
+pip install -e .
 pip install datalab-python-sdk
-export DATALAB_API_KEY="your_api_key_here"
 ```
+
+Set the API key in `.env` at the project root:
+
+```dotenv
+DATALAB_API_KEY="your_api_key_here"
+```
+
+Parsing scripts load `.env` automatically. A shell-level `DATALAB_API_KEY`
+still takes precedence when present.
 
 If `DATALAB_API_KEY` or `datalab-python-sdk` is missing, the default config keeps
 running through local fallback because `fallback_to_local` is `true`.
@@ -44,13 +53,14 @@ Lift raw API responses are written to `data/processed/lift_outputs/`.
 
 ## Schema
 
-The project default points Lift to the OmniDocBench markdown schema:
+The project default points Lift to a general document-components schema:
 
-- `src/ingestion/parsing/lift/schemas/omnidoc_markdown.json`
-- output field: `markdown`
+- `src/ingestion/parsing/lift/schemas/document_components.json`
+- output fields: `document_type`, `language`, `title`, `main_text`, `tables`, `figures`, `formulas`
 
-The adapter still has a small generic document-page fallback schema internally,
-but normal AXIOM runs should pass `schema_path` from `configs/pipeline.yaml`.
+The adapter uses the same schema as its default when `schema_path` is omitted.
+The older `omnidoc_markdown.json` schema is still available for benchmark runs
+that need a single `markdown` field.
 
 To use a custom JSON schema, set:
 
@@ -72,7 +82,6 @@ python -m src.ingestion.parsing.lift.run_omnidocbench_subset --dry-run
 Run the API and then convert results to markdown:
 
 ```bash
-export DATALAB_API_KEY="your_api_key_here"
 python -m src.ingestion.parsing.lift.run_omnidocbench_subset \
   --dataset-root data/raw/omnidocbench_subset \
   --schema src/ingestion/parsing/lift/schemas/omnidoc_markdown.json \

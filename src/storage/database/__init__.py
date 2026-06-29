@@ -1,4 +1,4 @@
-"""Database storage mocks."""
+"""Database storage placeholders."""
 
 from .mock import DatabaseMock
 

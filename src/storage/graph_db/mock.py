@@ -1,14 +1,16 @@
-"""Local graph database mock.
-
-TODO: Replace with a graph database adapter.
-"""
+"""Local graph database placeholder for future storage development."""
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from dataclasses import dataclass
+from typing import Any
 
 
+@dataclass
 class GraphDBMock:
-    def upsert_relationships(self, records: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        records = list(records)
-        return {"mode": "graph-db-mock", "upserted": len(records)}
+    """No-op graph database adapter used as a future integration placeholder."""
+
+    name: str = "graph-db-mock"
+
+    def upsert_records(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"mode": self.name, "upserted": len(records)}

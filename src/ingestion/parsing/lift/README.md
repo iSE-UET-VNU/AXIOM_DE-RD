@@ -5,17 +5,21 @@ result into AXIOM `ParsedData`.
 
 ## Setup
 
-Install the SDK in your AXIOM environment:
+Install dependencies in your AXIOM environment:
 
 ```bash
+pip install -e .
 pip install datalab-python-sdk
 ```
 
-Set the API key:
+Set the API key in `.env` at the project root:
 
-```bash
-export DATALAB_API_KEY="your_api_key_here"
+```dotenv
+DATALAB_API_KEY="your_api_key_here"
 ```
+
+Local scripts load `.env` automatically. A shell-level `DATALAB_API_KEY` still
+takes precedence when present.
 
 ## Config
 
@@ -27,7 +31,7 @@ export DATALAB_API_KEY="your_api_key_here"
   "lift_api": {
     "api_key_env": "DATALAB_API_KEY",
     "mode": "balanced",
-    "schema_path": "src/ingestion/parsing/lift/schemas/omnidoc_markdown.json",
+    "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
     "output_dir": "data/processed/lift_outputs",
     "fallback_to_local": true
   }
@@ -39,18 +43,28 @@ local scaffold parser. Set it to `false` when you want parsing to fail fast.
 
 ## Default Schema
 
-By default, AXIOM uses the same markdown-style OmniDocBench schema as the
-current `lift` subset run:
+By default, AXIOM uses a general document-components schema:
 
-- `src/ingestion/parsing/lift/schemas/omnidoc_markdown.json`
-- output field: `markdown`
+- `src/ingestion/parsing/lift/schemas/document_components.json`
+- output fields: `document_type`, `language`, `title`, `main_text`, `tables`, `figures`, `formulas`
+
+The `omnidoc_markdown.json` schema is still available for OmniDocBench-style
+benchmark runs that require one markdown prediction field.
 
 The raw API response is saved under `data/processed/lift_outputs/`. The parsed
 AXIOM row stores:
 
 ```json
 {
-  "extraction": "...schema-shaped Lift result...",
+  "extraction": {
+    "document_type": "...",
+    "language": "...",
+    "title": "...",
+    "main_text": "...",
+    "tables": [],
+    "figures": [],
+    "formulas": []
+  },
   "text": "main_text or markdown when present"
 }
 ```
@@ -110,7 +124,6 @@ Run the API:
 
 ```bash
 cd /home/halinh/DE_R&D/AXIOM_DE-RD
-export DATALAB_API_KEY="your_api_key_here"
 python -m src.ingestion.parsing.lift.run_omnidocbench_subset \
   --dataset-root data/raw/omnidocbench_subset \
   --schema src/ingestion/parsing/lift/schemas/omnidoc_markdown.json \

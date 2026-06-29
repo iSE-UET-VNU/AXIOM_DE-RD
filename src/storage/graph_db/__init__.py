@@ -1,4 +1,4 @@
-"""Graph database storage mocks."""
+"""Graph database storage placeholders."""
 
 from .mock import GraphDBMock
 

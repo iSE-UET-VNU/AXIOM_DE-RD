@@ -24,6 +24,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.utils.env import load_dotenv_file  # noqa: E402
+
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data/raw/omnidocbench_subset"
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas/omnidoc_markdown.json"
@@ -46,6 +48,8 @@ class SelectedImage:
 
 
 def main() -> int:
+    load_dotenv_file(PROJECT_ROOT)
+
     args = parse_args()
     dataset_root = resolve_path(args.dataset_root)
     output_dir = resolve_path(args.output_dir)

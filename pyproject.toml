@@ -1,0 +1,9 @@
+[project]
+name = "axiom-de-rd"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0.0",
+    "pymilvus>=2.4.0",
+    "python-dotenv>=1.0.0",
+]

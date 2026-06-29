@@ -1,134 +1,136 @@
-# AXIOM - Data Engineering R&D Project
+# AXIOM_DE-RD
 
-AXIOM_DE-RD is an early-stage research scaffold for a modular data-engineering
-pipeline. The current implementation focuses on architecture, module
-boundaries, data contracts, and local artifact flow rather than production
-algorithms or infrastructure.
+AXIOM_DE-RD is an early-stage data pipeline for document ingestion and indexing.
+The current workflow focuses on stable artifacts for downstream retrieval and
+analytics systems.
 
-## Folder Structure
-
-```text
-AXIOM_DE-RD/
-├── configs/                  # Pipeline and storage configuration
-├── data/
-│   ├── raw/                  # Input data lake objects
-│   ├── processed/            # Parsed data and initial schemas
-│   ├── cleaned/              # Cleaned data and schemas
-│   ├── enriched/             # Enriched data and schemas
-│   └── output/               # System-level catalog/index/integration outputs
-├── scripts/
-│   └── run_pipeline.py       # CLI entrypoint
-└── src/
-    ├── cleaning/             # Standardization, error processing, imputation
-    ├── enrichment/           # Annotation and profiling
-    ├── indexing_cataloging/  # Metadata catalog and index record builders
-    ├── ingestion/            # Parsing, format detection, initial schemas
-    ├── integration/          # Schema/entity matching and relationships
-    ├── storage/              # Centralized local/DB/vector/graph persistence
-    ├── utils/                # Shared helpers
-    ├── models.py             # Shared dataclass contracts
-    ├── pipeline.py           # Orchestrator
-    └── main.py               # Thin entrypoint wrapper
-```
-
-## Pipeline Workflow
-
-The first workflow is intentionally simple:
+## Current Pipeline
 
 ```text
-raw data
--> ingestion: parse local files or optional Lift API outputs, then infer initial schemas
--> cleaning: pass parsed data through until cleaning logic is implemented
--> enrichment: pass cleaned/parsed data through until enrichment logic is implemented
--> indexing_cataloging: create metadata, DB, vector, and graph index records
--> integration: pass indexing records through until integration logic is implemented
--> storage: write local JSON artifacts
+raw document
+-> ingestion: parse with Lift API and the document-components schema
+-> cleaning: pass-through
+-> enrichment: pass-through
+-> indexing_cataloging:
+   - metadata catalog
+   - document index records
+   - text chunk index records
+   - table index records
+   - figure index records
+   - catalog index records
+   - index quality report
+   - OpenRouter text chunk embeddings
+-> integration: pass-through
+-> storage:
+   - local JSON artifacts
+   - Milvus vector collection for text chunks
 ```
 
-Shared intermediate artifacts live in `src/models.py`:
+The main config is:
 
-- `DataObject`
-- `ParsedData`
-- `InitialSchema`
-- `CleanedData`
-- `CleanedSchema`
-- `EnrichedData`
-- `EnrichedSchema`
-- `MetadataRecord`
-- `IndexRecord`
-- `SchemaMatch`
-- `EntityMatch`
-- `RelationshipRecord`
-- `PipelineState`
+```text
+configs/pipeline.yaml
+```
 
-## How To Run
+It is configured for a small final-test input:
 
-From the project root:
+```text
+data/raw/final_test
+```
+
+## Environment
+
+Create and activate the project environment:
+
+```bash
+conda env create -f environment.yml
+conda activate axiom-de-rd
+```
+
+The pipeline loads `.env` from the project root automatically. Required values
+for the current full workflow:
+
+```dotenv
+DATALAB_API_KEY=
+OPENROUTER_API_KEY=
+MILVUS_URI=
+MILVUS_TOKEN=
+```
+
+## Run
 
 ```bash
 python scripts/run_pipeline.py --config configs/pipeline.yaml
 ```
 
-The sample config is in `configs/pipeline.yaml`. It is JSON-compatible YAML so
-the scaffold can run without adding dependencies. If `PyYAML` is installed,
-regular YAML syntax will also work.
+Outputs are written to:
 
-The default parser uses the Lift hosted API for images/PDFs, with local fallback
-enabled for unsupported files or missing API setup:
+```text
+data/processed/final_test
+data/cleaned/final_test
+data/enriched/final_test
+data/output/final_test
+```
+
+Important output artifacts:
+
+```text
+data/documents.json
+data/metadata_catalog.json
+data/schemas.json
+data/index_records.json
+data/vector_records.json
+reports/embedding_report.json
+reports/index_quality_report.json
+reports/integration_updates.json
+reports/pipeline_state.json
+reports/vector_db_report.json
+```
+
+Schema payloads are stored with their stage outputs:
+
+```text
+data/processed/final_test/initial_schemas.json
+data/cleaned/final_test/cleaned_schemas.json
+data/enriched/final_test/enriched_schemas.json
+```
+
+`data/output/final_test/data/schemas.json` is only a lightweight registry that
+points to those files. `pipeline_state.json` is also a lightweight manifest with
+run metadata, artifact paths, counts, and report statuses; it does not duplicate
+records or embeddings.
+
+`data/output/final_test/data/documents.json` is the document-centric artifact. It
+stores normalized document data and elements such as main text, tables, figures,
+formulas, and text chunks. `index_records.json` is the indexing contract built
+from those document components.
+
+The configured Milvus collection is:
+
+```text
+axiom_text_chunks_openrouter_text_embedding_3_small_1536
+```
+
+## Contracts
+
+`IndexRecord.index_type` currently supports:
+
+```text
+document
+text_chunk
+table
+figure
+catalog
+```
+
+Only `text_chunk` records are embedded in this phase. Embeddings use OpenRouter
+with `openai/text-embedding-3-small` and dimension `1536`.
+
+## Tests
 
 ```bash
-pip install datalab-python-sdk
-export DATALAB_API_KEY="your_api_key_here"
+python -m unittest discover -s tests -v
 ```
 
-Then set this in `configs/pipeline.yaml`:
-
-```json
-"parsing": {
-  "provider": "lift_api"
-}
-```
-
-AXIOM calls the hosted API directly through `datalab_sdk`; it does not import or
-execute the sibling `lift` repo.
-
-Stage outputs are written to:
-
-```text
-data/processed/
-data/cleaned/
-data/enriched/
-```
-
-System-level outputs are written to:
-
-```text
-data/output/
-```
-
-Current system output files include the combined schema registry, metadata
-catalog records, index records, integration updates, and the final pipeline
-state.
-
-## Current Limitations
-
-- Parsing defaults to Lift API with local fallback. Real API calls require
-  `datalab-python-sdk` and `DATALAB_API_KEY`.
-- Binary files are represented as metadata-only placeholders.
-- Schema extraction uses simple Python type names.
-- Cleaning is currently pass-through.
-- Enrichment is currently pass-through.
-- Vector and graph indexing are demo records only.
-- Integration is currently pass-through from indexing records.
-- Storage writes local JSON artifacts; DB, VectorDB, and GraphDB adapters are
-  mocks.
-
-## Next Development Plan
-
-1. Replace placeholder parsers with domain-specific parsers.
-2. Add validation contracts and error quarantine behavior.
-3. Improve schema inference for nested and semi-structured data.
-4. Add semantic annotations, profiling metrics, and data-quality scoring.
-5. Implement real database, vector database, and graph database adapters under
-   `src/storage`.
-6. Add tests around module interfaces and end-to-end pipeline state.
+Unit tests use deterministic local embeddings and mock vector storage where
+needed. The production pipeline config uses OpenRouter and Milvus.

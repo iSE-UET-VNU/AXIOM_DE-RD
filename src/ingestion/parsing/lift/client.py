@@ -17,58 +17,7 @@ import time
 from ....models import DataObject, ParsedData
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
-
-DEFAULT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "document_type": {
-            "type": "string",
-            "description": "Likely document type, such as paper, report, slide, newspaper, note, form, or textbook.",
-        },
-        "language": {
-            "type": "string",
-            "description": "Dominant language on the page or document.",
-        },
-        "title": {
-            "type": "string",
-            "description": "Main visible title or heading, if any.",
-        },
-        "main_text": {
-            "type": "string",
-            "description": "Main readable text in natural reading order. Preserve important formulas, table text, and headings.",
-        },
-        "tables": {
-            "type": "array",
-            "description": "Tables visible in the document.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "caption": {"type": "string"},
-                    "content": {
-                        "type": "string",
-                        "description": "Compact plain-text or markdown representation of the table.",
-                    },
-                },
-            },
-        },
-        "figures": {
-            "type": "array",
-            "description": "Figures, charts, diagrams, or illustrations.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "caption": {"type": "string"},
-                    "description": {"type": "string"},
-                },
-            },
-        },
-        "formulas": {
-            "type": "array",
-            "description": "Important standalone mathematical formulas.",
-            "items": {"type": "string"},
-        },
-    },
-}
+DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas/document_components.json"
 
 
 @dataclass
@@ -159,12 +108,11 @@ class LiftAPIParserClient:
 
 
 def _load_schema(schema_path: str | None) -> dict[str, Any]:
-    if not schema_path:
-        return DEFAULT_SCHEMA
-    with Path(schema_path).open(encoding="utf-8") as handle:
+    path = Path(schema_path) if schema_path else DEFAULT_SCHEMA_PATH
+    with path.open(encoding="utf-8") as handle:
         schema = json.load(handle)
     if not isinstance(schema, dict):
-        raise RuntimeError(f"Lift schema must be a JSON object: {schema_path}")
+        raise RuntimeError(f"Lift schema must be a JSON object: {path}")
     return schema
 
 
@@ -192,7 +140,7 @@ def _parse_extraction(raw_json: Any) -> Any:
 def _extraction_text(extraction: Any) -> str | None:
     if not isinstance(extraction, dict):
         return None
-    for field in ("markdown", "main_text", "text", "content"):
+    for field in ("main_text", "markdown", "text", "content"):
         value = extraction.get(field)
         if value:
             return str(value)

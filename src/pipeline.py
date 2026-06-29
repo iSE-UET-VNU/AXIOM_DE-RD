@@ -11,6 +11,8 @@ import time
 from . import cleaning, enrichment, indexing_cataloging, ingestion, integration, storage
 from .models import PipelineState, make_id
 from .utils.config import load_config, resolve_project_path
+from .utils.env import load_dotenv_file
+from .utils.paths import portable_path
 
 MODULE_ORDER = [
     "ingestion",
@@ -24,6 +26,7 @@ MODULE_ORDER = [
 
 def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineState:
     project_root = Path(__file__).resolve().parents[1]
+    load_dotenv_file(project_root)
     config_file = _resolve_config_path(project_root, config_path)
     config = load_config(config_file)
 
@@ -40,14 +43,18 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
 
     state = PipelineState(
         run_id=make_id("pipeline-run", time.time_ns()),
-        input_dir=str(input_dir),
-        output_dir=str(output_dir),
+        input_dir=portable_path(input_dir, project_root),
+        output_dir=portable_path(output_dir, project_root),
     )
 
     logger.info("Starting pipeline run %s", state.run_id)
 
     if "ingestion" in enabled_modules:
-        result = ingestion.run(input_dir, parser_config=_resolve_parser_config(project_root, config.get("parsing", {})))
+        result = ingestion.run(
+            input_dir,
+            parser_config=_resolve_parser_config(project_root, config.get("parsing", {})),
+            project_root=project_root,
+        )
         state.data_objects = result.data_objects
         state.parsed_data = result.parsed_data
         state.initial_schemas = result.initial_schemas
@@ -69,14 +76,24 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
         logger.info("Enrichment pass-through produced %s dataset(s)", len(state.enriched_data))
 
     if "indexing_cataloging" in enabled_modules:
-        result = indexing_cataloging.run(state.enriched_data, state.enriched_schemas)
+        result = indexing_cataloging.run(
+            state.enriched_data,
+            state.enriched_schemas,
+            indexing_config=config.get("indexing", {}),
+        )
         state.metadata_records = result.metadata_records
+        state.documents = result.documents
         state.index_records = result.index_records
+        state.index_quality_report = result.index_quality_report
+        state.vector_records = result.vector_records
+        state.embedding_report = result.embedding_report
         state.completed_modules.append("indexing_cataloging")
         logger.info(
-            "Built %s metadata record(s) and %s index record(s)",
+            "Built %s metadata record(s), %s index record(s), and %s vector record(s); quality status: %s",
             len(state.metadata_records),
             len(state.index_records),
+            len(state.vector_records),
+            state.index_quality_report.get("status", "unknown"),
         )
 
     if "integration" in enabled_modules:
@@ -92,6 +109,7 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
 
     if "storage" in enabled_modules:
         mode = str(config.get("storage", {}).get("mode", "local"))
+        state.completed_modules.append("storage")
         storage.run(
             state,
             artifact_dir,
@@ -99,8 +117,9 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
             processed_dir=processed_dir,
             cleaned_dir=cleaned_dir,
             enriched_dir=enriched_dir,
+            vector_db_config=config.get("storage", {}).get("vector_db", {}),
+            project_root=project_root,
         )
-        state.completed_modules.append("storage")
         logger.info("Wrote artifacts to %s", artifact_dir)
 
     logger.info("Finished pipeline run %s", state.run_id)

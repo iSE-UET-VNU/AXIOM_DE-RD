@@ -1,0 +1,80 @@
+{
+  "type": "object",
+  "properties": {
+    "document_type": {
+      "type": "string",
+      "description": "Best-effort document type for the page or document, such as newspaper, report, invoice, form, slide, academic_paper, textbook, book_page, note, or unknown."
+    },
+    "language": {
+      "type": "string",
+      "description": "Dominant language of the visible content, using an ISO 639-1 code when possible, such as en, vi, zh, ja, fr, or unknown."
+    },
+    "title": {
+      "type": "string",
+      "description": "Main visible title, headline, or document heading. Use an empty string when no title is visible."
+    },
+    "main_text": {
+      "type": "string",
+      "description": "Full readable body text in natural reading order. Preserve headings, captions, list items, and important inline values. Do not add explanations that are not visible in the source."
+    },
+    "tables": {
+      "type": "array",
+      "description": "Tables visible in the source. Return an empty array when there are no tables.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "caption": {
+            "type": "string",
+            "description": "Visible table caption, title, or nearby label. Use an empty string when none is visible."
+          },
+          "content": {
+            "type": "string",
+            "description": "Table content as Markdown or compact plain text, preserving rows, columns, and header labels when possible."
+          }
+        },
+        "required": [
+          "caption",
+          "content"
+        ]
+      }
+    },
+    "figures": {
+      "type": "array",
+      "description": "Figures, charts, diagrams, photographs, or illustrations visible in the source. Return an empty array when there are no figures.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "caption": {
+            "type": "string",
+            "description": "Visible figure caption, label, or nearby title. Use an empty string when none is visible."
+          },
+          "description": {
+            "type": "string",
+            "description": "Brief factual description of the figure based only on visible content, labels, and captions."
+          }
+        },
+        "required": [
+          "caption",
+          "description"
+        ]
+      }
+    },
+    "formulas": {
+      "type": "array",
+      "description": "Important mathematical formulas visible in the source. Return an empty array when there are no formulas.",
+      "items": {
+        "type": "string",
+        "description": "Formula text, preferably in LaTeX when the formula is mathematical."
+      }
+    }
+  },
+  "required": [
+    "document_type",
+    "language",
+    "title",
+    "main_text",
+    "tables",
+    "figures",
+    "formulas"
+  ]
+}

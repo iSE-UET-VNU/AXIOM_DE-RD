@@ -25,6 +25,8 @@ def run(parsed_data: list[ParsedData], initial_schemas: list[InitialSchema]) -> 
             source_schema_id=source_schema.schema_id if source_schema else "",
             source_object_id=parsed.object_id,
             fields=source_schema.fields if source_schema else {},
+            entities=source_schema.entities if source_schema else [],
+            relationships=source_schema.relationships if source_schema else [],
             transformations=["pass_through"],
             metadata={
                 "pass_through": True,
@@ -38,7 +40,9 @@ def run(parsed_data: list[ParsedData], initial_schemas: list[InitialSchema]) -> 
             metadata={
                 "pass_through": True,
                 "source_format": parsed.source_format,
+                "source_uri": parsed.source_uri,
                 "row_count": len(parsed.rows),
+                "source_metadata": parsed.metadata,
             },
         )
 

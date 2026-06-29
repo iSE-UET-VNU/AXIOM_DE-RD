@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+.env
 
 storage/**/*.jsonl
 storage/schema/*.json
@@ -16,6 +17,8 @@ data/enriched/
 data/output/*
 
 !data/raw/.gitkeep
+!data/raw/final_test/
+!data/raw/final_test/**
 !data/processed/.gitkeep
 !data/cleaned/.gitkeep
 !data/enriched/.gitkeep
