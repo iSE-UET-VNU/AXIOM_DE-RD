@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from src.ingestion.parsing_formatting import build_initial_schema, normalize_parsed_document
+from src.ingestion.normalization import build_initial_schema, normalize_parsed_document
 from src.models import ParsedData
 
 
-class ParsingFormattingTests(unittest.TestCase):
-    def test_builds_canonical_initial_schema_from_lift_output(self) -> None:
+class InitialSchemaNormalizationTests(unittest.TestCase):
+    def test_builds_normalized_initial_schema_from_lift_output(self) -> None:
         parsed = ParsedData(
             object_id="doc-1",
             source_uri="data/raw/doc.png",

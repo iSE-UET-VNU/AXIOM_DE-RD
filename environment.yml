@@ -6,6 +6,3 @@ dependencies:
   - pip
   - pip:
       - -e .
-      - datalab-python-sdk
-      - openai
-      - pymilvus

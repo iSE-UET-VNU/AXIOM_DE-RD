@@ -10,7 +10,7 @@ import time
 
 from . import cleaning, enrichment, indexing_cataloging, ingestion, integration, storage
 from .models import PipelineState, make_id
-from .utils.config import load_config, resolve_project_path
+from .utils.config import load_config, resolve_parser_config, resolve_project_path
 from .utils.env import load_dotenv_file
 from .utils.paths import portable_path
 
@@ -35,6 +35,7 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
 
     input_dir = resolve_project_path(project_root, config.get("input_dir", "data/raw"))
     processed_dir = resolve_project_path(project_root, config.get("processed_dir", config.get("output_dir", "data/processed")))
+    work_dir = resolve_project_path(project_root, config.get("work_dir", "data/work"))
     cleaned_dir = resolve_project_path(project_root, config.get("cleaned_dir", "data/cleaned"))
     enriched_dir = resolve_project_path(project_root, config.get("enriched_dir", "data/enriched"))
     output_dir = resolve_project_path(project_root, config.get("output_dir", "data/output"))
@@ -45,21 +46,39 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
         run_id=make_id("pipeline-run", time.time_ns()),
         input_dir=portable_path(input_dir, project_root),
         output_dir=portable_path(output_dir, project_root),
+        work_dir=portable_path(work_dir, project_root),
     )
 
     logger.info("Starting pipeline run %s", state.run_id)
 
     if "ingestion" in enabled_modules:
+        parser_config = resolve_parser_config(
+            project_root,
+            config.get("parsing", {}),
+            work_dir,
+            state.run_id,
+        )
+        state.ingestion_config = parser_config
         result = ingestion.run(
             input_dir,
-            parser_config=_resolve_parser_config(project_root, config.get("parsing", {})),
+            parser_config=parser_config,
             project_root=project_root,
         )
         state.data_objects = result.data_objects
         state.parsed_data = result.parsed_data
         state.initial_schemas = result.initial_schemas
+        state.normalized_texts = result.normalized_texts
+        state.normalized_images = result.normalized_images
+        state.normalized_tables = result.normalized_tables
+        state.normalized_documents = result.documents
         state.completed_modules.append("ingestion")
-        logger.info("Ingested %s data object(s)", len(state.data_objects))
+        logger.info(
+            "Ingested %s data object(s) and normalized %s text block(s), %s image(s), and %s table(s)",
+            len(state.data_objects),
+            len(state.normalized_texts),
+            len(state.normalized_images),
+            len(state.normalized_tables),
+        )
 
     if "cleaning" in enabled_modules:
         result = cleaning.run(state.parsed_data, state.initial_schemas)
@@ -80,9 +99,12 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
             state.enriched_data,
             state.enriched_schemas,
             indexing_config=config.get("indexing", {}),
+            normalized_texts=state.normalized_texts,
+            normalized_images=state.normalized_images,
+            normalized_tables=state.normalized_tables,
+            normalized_documents=state.normalized_documents,
         )
         state.metadata_records = result.metadata_records
-        state.documents = result.documents
         state.index_records = result.index_records
         state.index_quality_report = result.index_quality_report
         state.vector_records = result.vector_records
@@ -158,22 +180,6 @@ def _artifact_dir(project_root: Path, output_dir: Path, config: dict[str, Any]) 
     if configured:
         return resolve_project_path(project_root, configured)
     return output_dir / "artifacts"
-
-
-def _resolve_parser_config(project_root: Path, value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-
-    parser_config = dict(value)
-    lift_config = parser_config.get("lift_api")
-    if isinstance(lift_config, dict):
-        lift_config = dict(lift_config)
-        for key in ("output_dir", "schema_path"):
-            path_value = lift_config.get(key)
-            if path_value:
-                lift_config[key] = str(resolve_project_path(project_root, path_value))
-        parser_config["lift_api"] = lift_config
-    return parser_config
 
 
 def _configure_logging(config: dict[str, Any]) -> None:

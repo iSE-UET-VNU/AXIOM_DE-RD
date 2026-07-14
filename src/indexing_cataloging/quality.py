@@ -7,7 +7,7 @@ from typing import Any
 
 from ..models import IndexRecord
 
-ALLOWED_INDEX_TYPES = {"document", "text_chunk", "table", "figure", "catalog"}
+ALLOWED_INDEX_TYPES = {"document", "text_chunk", "table", "image", "figure", "catalog"}
 REQUIRED_RECORD_FIELDS = {"record_id", "source_object_id", "index_type", "payload", "metadata"}
 REQUIRED_EMBEDDING_FIELDS = {"embedding_text", "embedding", "embedding_model", "embedding_status"}
 EXPECTED_EMBEDDING_STATUS = "pending"

@@ -40,11 +40,40 @@ data/raw/final_test
 
 ## Environment
 
-Create and activate the project environment:
+Python 3.11 or newer is required. Choose one of the following setup options.
+
+### Conda
 
 ```bash
 conda env create -f environment.yml
 conda activate axiom-de-rd
+```
+
+### Python venv and pip
+
+Create a virtual environment:
+
+```bash
+python -m venv .venv
+```
+
+Activate it on Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Or on macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+Then install the project and its dependencies:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
 The pipeline loads `.env` from the project root automatically. Required values
@@ -66,44 +95,51 @@ python scripts/run_pipeline.py --config configs/pipeline.yaml
 Outputs are written to:
 
 ```text
+data/work/final_test/<run_id>/datalab
 data/processed/final_test
 data/cleaned/final_test
 data/enriched/final_test
 data/output/final_test
 ```
 
-Important output artifacts:
+Important artifact directories:
 
 ```text
-data/documents.json
-data/metadata_catalog.json
-data/schemas.json
-data/index_records.json
-data/vector_records.json
-reports/embedding_report.json
-reports/index_quality_report.json
-reports/integration_updates.json
-reports/pipeline_state.json
-reports/vector_db_report.json
+data/work/final_test/<run_id>/datalab/
+data/processed/final_test/
+data/processed/final_test/normalization/
+data/output/final_test/data/
+data/output/final_test/reports/
 ```
 
-Schema payloads are stored with their stage outputs:
+Provider responses and decoded assets are retained in run-scoped document
+bundles under `data/work`. Canonical ingestion records are JSONL under
+`data/processed`; the large in-memory parsing intermediates are not persisted.
+
+The provider extraction contract and stage-specific schemas remain at their
+source or stage paths:
 
 ```text
-data/processed/final_test/initial_schemas.json
+src/ingestion/parsing/lift/schemas/document_components.json
+data/processed/final_test/manifest.json
 data/cleaned/final_test/cleaned_schemas.json
 data/enriched/final_test/enriched_schemas.json
 ```
 
-`data/output/final_test/data/schemas.json` is only a lightweight registry that
-points to those files. `pipeline_state.json` is also a lightweight manifest with
-run metadata, artifact paths, counts, and report statuses; it does not duplicate
-records or embeddings.
+`data/output/final_test/data/schemas.json` is a self-contained JSON Schema for
+one logical document. Its document metadata maps to `documents.jsonl`; its
+`texts`, `tables`, `images`, and `formulas` arrays map to the normalized JSONL
+files through `document_id`. The schema includes storage mappings, checksums,
+record counts, observed types, and dataset-level values without duplicating
+document content. `document_components.json` remains only the extraction schema
+sent to Datalab.
 
-`data/output/final_test/data/documents.json` is the document-centric artifact. It
-stores normalized document data and elements such as main text, tables, figures,
-formulas, and text chunks. `index_records.json` is the indexing contract built
-from those document components.
+`pipeline_state.json` is a lightweight manifest with run metadata, artifact
+paths, counts, and report statuses; it does not duplicate records or embeddings.
+
+`documents.jsonl` is a document registry containing source/parser metadata and
+component counts. Component content lives only in the three normalization JSONL
+files. `index_records.json` remains the downstream indexing contract.
 
 The configured Milvus collection is:
 
@@ -125,12 +161,3 @@ catalog
 
 Only `text_chunk` records are embedded in this phase. Embeddings use OpenRouter
 with `openai/text-embedding-3-small` and dimension `1536`.
-
-## Tests
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-Unit tests use deterministic local embeddings and mock vector storage where
-needed. The production pipeline config uses OpenRouter and Milvus.

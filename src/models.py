@@ -133,15 +133,19 @@ class PipelineState:
     run_id: str
     input_dir: str
     output_dir: str
+    work_dir: str | None = None
     data_objects: list[DataObject] = field(default_factory=list)
     parsed_data: list[ParsedData] = field(default_factory=list)
     initial_schemas: list[InitialSchema] = field(default_factory=list)
     cleaned_data: list[CleanedData] = field(default_factory=list)
     cleaned_schemas: list[CleanedSchema] = field(default_factory=list)
+    normalized_texts: list[dict[str, Any]] = field(default_factory=list)
+    normalized_images: list[dict[str, Any]] = field(default_factory=list)
+    normalized_tables: list[dict[str, Any]] = field(default_factory=list)
+    normalized_documents: list[dict[str, Any]] = field(default_factory=list)
     enriched_data: list[EnrichedData] = field(default_factory=list)
     enriched_schemas: list[EnrichedSchema] = field(default_factory=list)
     metadata_records: list[MetadataRecord] = field(default_factory=list)
-    documents: list[dict[str, Any]] = field(default_factory=list)
     index_records: list[IndexRecord] = field(default_factory=list)
     index_quality_report: dict[str, Any] = field(default_factory=dict)
     vector_records: list[dict[str, Any]] = field(default_factory=list)
@@ -152,4 +156,5 @@ class PipelineState:
     relationship_records: list[RelationshipRecord] = field(default_factory=list)
     completed_modules: list[str] = field(default_factory=list)
     artifact_paths: dict[str, str] = field(default_factory=dict)
+    ingestion_config: dict[str, Any] = field(default_factory=dict)
     errors: list[dict[str, Any]] = field(default_factory=list)

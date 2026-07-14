@@ -133,7 +133,7 @@ class BuildIndexRecordsTests(unittest.TestCase):
         records = build_index_records([data], [metadata_record])
         index_types = [record.index_type for record in records]
 
-        self.assertEqual(index_types, ["document", "text_chunk", "table", "figure", "catalog"])
+        self.assertEqual(index_types, ["document", "text_chunk", "table", "image", "catalog"])
         self.assertTrue(all(record.record_id for record in records))
         self.assertTrue(all(record.source_object_id == "doc-1" for record in records))
         self.assertTrue(all(record.payload for record in records))
@@ -153,6 +153,67 @@ class BuildIndexRecordsTests(unittest.TestCase):
         records = build_index_records([data], [])
 
         self.assertEqual([record.index_type for record in records], ["document", "catalog"])
+
+    def test_builds_index_records_from_normalized_artifacts(self) -> None:
+        data = EnrichedData(source_object_id="doc-1", rows=[{"extraction": {"main_text": "legacy"}}])
+        metadata_record = MetadataRecord(
+            record_id="metadata-1",
+            source_object_id="doc-1",
+            title="Data object doc-1",
+            schema_id="schema-1",
+        )
+
+        records = build_index_records(
+            [data],
+            [metadata_record],
+            normalized_texts=[
+                {
+                    "document_id": "doc-1",
+                    "text_id": "text-1",
+                    "source_block_id": "/page/0/Text/1",
+                    "page": 0,
+                    "role": "paragraph",
+                    "text": "normalized body",
+                    "section_path": ["News"],
+                }
+            ],
+            normalized_tables=[
+                {
+                    "document_id": "doc-1",
+                    "table_id": "table-1",
+                    "source_block_id": "/page/0/Table/6",
+                    "caption": "INDEX TO PEOPLE",
+                    "rows": [["A", "Adler, Jonathan.....B6"]],
+                    "markdown": "| A | Name |",
+                    "embedding_text": "Table: INDEX TO PEOPLE. Row 1: A; Adler, Jonathan.....B6.",
+                }
+            ],
+            normalized_images=[
+                {
+                    "document_id": "doc-1",
+                    "image_id": "image-1",
+                    "source_block_id": "/page/0/Picture/8",
+                    "visible_caption": "",
+                    "generated_description": "A busy city street.",
+                    "embedding_text": "Image: A busy city street.",
+                }
+            ],
+            normalized_documents=[
+                {
+                    "document_id": "doc-1",
+                    "source_uri": "data/raw/doc.png",
+                    "document_type": "newspaper",
+                    "language": "en",
+                    "title": "Title",
+                }
+            ],
+        )
+
+        index_types = [record.index_type for record in records]
+        self.assertEqual(index_types, ["document", "text_chunk", "table", "image", "catalog"])
+        self.assertEqual(records[1].payload["text"], "normalized body")
+        self.assertEqual(records[2].payload["source_block_id"], "/page/0/Table/6")
+        self.assertEqual(records[3].payload["embedding_text"], "Image: A busy city street.")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 {
   "input_dir": "data/raw/final_test",
   "processed_dir": "data/processed/final_test",
+  "work_dir": "data/work/final_test",
   "cleaned_dir": "data/cleaned/final_test",
   "enriched_dir": "data/enriched/final_test",
   "output_dir": "data/output/final_test",
@@ -16,17 +17,20 @@
     "provider": "lift_api",
     "lift_api": {
       "api_key_env": "DATALAB_API_KEY",
-      "mode": "balanced",
+      "mode": "accurate",
       "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
-      "output_dir": "data/processed/final_test/lift_outputs",
-      "fallback_to_local": false
+      "fallback_to_local": false,
+      "extract_images": true,
+      "save_raw_outputs": true
     }
   },
   "indexing": {
     "embeddings": {
       "enabled": true,
       "target_index_types": [
-        "text_chunk"
+        "text_chunk",
+        "table",
+        "image"
       ],
       "provider": "openrouter",
       "model": "openai/text-embedding-3-small",

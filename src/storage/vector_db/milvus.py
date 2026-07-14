@@ -82,10 +82,15 @@ class MilvusVectorDB:
         schema.add_field("vector_id", datatype=DataType.VARCHAR, is_primary=True, max_length=128)
         schema.add_field("embedding", datatype=DataType.FLOAT_VECTOR, dim=self.config.dimension)
         schema.add_field("record_id", datatype=DataType.VARCHAR, max_length=128)
+        schema.add_field("index_type", datatype=DataType.VARCHAR, max_length=64)
         schema.add_field("source_object_id", datatype=DataType.VARCHAR, max_length=128)
         schema.add_field("document_id", datatype=DataType.VARCHAR, max_length=128)
         schema.add_field("chunk_id", datatype=DataType.VARCHAR, max_length=128)
         schema.add_field("chunk_index", datatype=DataType.INT64)
+        schema.add_field("table_id", datatype=DataType.VARCHAR, max_length=128)
+        schema.add_field("image_id", datatype=DataType.VARCHAR, max_length=128)
+        schema.add_field("source_block_id", datatype=DataType.VARCHAR, max_length=256)
+        schema.add_field("page", datatype=DataType.INT64)
         schema.add_field("source_uri", datatype=DataType.VARCHAR, max_length=2048)
         schema.add_field("title", datatype=DataType.VARCHAR, max_length=1024)
         schema.add_field("document_type", datatype=DataType.VARCHAR, max_length=256)
@@ -129,10 +134,15 @@ def milvus_rows_from_vector_records(records: Iterable[dict[str, Any]]) -> list[d
                 "vector_id": _text(record.get("vector_id")),
                 "embedding": record.get("embedding") or [],
                 "record_id": _text(record.get("record_id")),
+                "index_type": _text(record.get("index_type")),
                 "source_object_id": _text(record.get("source_object_id")),
                 "document_id": _text(record.get("document_id")),
                 "chunk_id": _text(record.get("chunk_id")),
                 "chunk_index": _int(record.get("chunk_index")),
+                "table_id": _text(record.get("table_id")),
+                "image_id": _text(record.get("image_id")),
+                "source_block_id": _text(record.get("source_block_id")),
+                "page": _int(record.get("page")),
                 "source_uri": _text(record.get("source_uri")),
                 "title": _text(record.get("title")),
                 "document_type": _text(record.get("document_type")),

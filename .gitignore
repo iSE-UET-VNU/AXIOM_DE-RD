@@ -12,6 +12,7 @@ storage/**/*.jsonl
 storage/schema/*.json
 data/raw/*
 data/processed/
+data/work/
 data/cleaned/*
 data/enriched/
 data/output/*

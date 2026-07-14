@@ -1,4 +1,4 @@
-"""Parser-agnostic document schema normalization for ingestion."""
+"""Parser-agnostic initial document schema normalization for ingestion."""
 
 from __future__ import annotations
 
@@ -43,10 +43,10 @@ FORMULA_FIELDS = {
 
 
 def build_initial_schema(parsed: ParsedData) -> InitialSchema:
-    """Build a canonical document schema from raw parsed data.
+    """Build a normalized initial document schema from raw parsed data.
 
     Raw parser outputs can include provider-specific fields such as Lift
-    citations and verification metadata. This formatter keeps the canonical
+    citations and verification metadata. This formatter keeps the normalized
     document entities that downstream stages can rely on.
     """
     normalized = normalize_parsed_document(parsed)
@@ -60,9 +60,9 @@ def build_initial_schema(parsed: ParsedData) -> InitialSchema:
     return InitialSchema(
         schema_id=make_id(parsed.object_id, "initial-schema"),
         source_object_id=parsed.object_id,
-        fields=_canonical_fields(),
-        entities=_canonical_entities(component_counts),
-        relationships=_canonical_relationships(component_counts),
+        fields=_normalized_fields(),
+        entities=_normalized_entities(component_counts),
+        relationships=_normalized_relationships(component_counts),
         metadata={
             "contract_version": INITIAL_SCHEMA_CONTRACT_VERSION,
             "schema_type": "document",
@@ -79,7 +79,7 @@ def build_initial_schema(parsed: ParsedData) -> InitialSchema:
 
 
 def normalize_parsed_document(parsed: ParsedData) -> dict[str, Any]:
-    """Normalize raw parser rows into canonical document components."""
+    """Normalize raw parser rows into document components."""
     document: dict[str, Any] = {
         "document_id": parsed.object_id,
         "source_uri": parsed.source_uri,
@@ -119,7 +119,7 @@ def normalize_parsed_document(parsed: ParsedData) -> dict[str, Any]:
     return document
 
 
-def _canonical_fields() -> dict[str, str]:
+def _normalized_fields() -> dict[str, str]:
     return {
         **DOCUMENT_FIELDS,
         **TABLE_FIELDS,
@@ -128,7 +128,7 @@ def _canonical_fields() -> dict[str, str]:
     }
 
 
-def _canonical_entities(component_counts: dict[str, int]) -> list[dict[str, Any]]:
+def _normalized_entities(component_counts: dict[str, int]) -> list[dict[str, Any]]:
     return [
         {
             "entity_type": "document",
@@ -157,7 +157,7 @@ def _canonical_entities(component_counts: dict[str, int]) -> list[dict[str, Any]
     ]
 
 
-def _canonical_relationships(component_counts: dict[str, int]) -> list[dict[str, str]]:
+def _normalized_relationships(component_counts: dict[str, int]) -> list[dict[str, str]]:
     relationships = []
     for entity_type, relationship_type in (
         ("table", "has_table"),

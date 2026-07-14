@@ -1,5 +1,5 @@
 """Schema storage helpers."""
 
-from .registry import build_schema_registry
+from .logical_document import build_logical_document_schema
 
-__all__ = ["build_schema_registry"]
+__all__ = ["build_logical_document_schema"]
