@@ -139,7 +139,6 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
             processed_dir=processed_dir,
             cleaned_dir=cleaned_dir,
             enriched_dir=enriched_dir,
-            vector_db_config=config.get("storage", {}).get("vector_db", {}),
             project_root=project_root,
         )
         logger.info("Wrote artifacts to %s", artifact_dir)

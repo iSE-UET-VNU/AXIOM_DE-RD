@@ -82,10 +82,9 @@ def run(
     processed_dir: str | Path | None = None,
     cleaned_dir: str | Path | None = None,
     enriched_dir: str | Path | None = None,
-    vector_db_config: dict[str, Any] | None = None,
     project_root: str | Path | None = None,
 ) -> StorageOutput:
-    """Persist local artifacts and optionally upsert text chunk vectors."""
+    """Persist pipeline artifacts, including embeddings, as local JSON files."""
     if mode != "local":
         raise NotImplementedError(f"Only local storage mode is scaffolded, got: {mode}")
 
@@ -93,8 +92,6 @@ def run(
     output_reports_store = LocalArtifactStore(Path(output_dir) / "reports", project_root=project_root)
     cleaned_store = LocalArtifactStore(cleaned_dir or output_dir, project_root=project_root)
     enriched_store = LocalArtifactStore(enriched_dir or output_dir, project_root=project_root)
-    state.vector_db_report = _run_vector_db(state.vector_records, vector_db_config or {})
-
     paths: dict[str, Path] = {
         **write_processed_artifacts(state, processed_dir or output_dir, project_root),
         "cleaned_data": cleaned_store.write_json("cleaned_data.json", state.cleaned_data),
@@ -106,7 +103,6 @@ def run(
         "vector_records": output_data_store.write_json("vector_records.json", state.vector_records),
         "index_quality_report": output_reports_store.write_json("index_quality_report.json", state.index_quality_report),
         "embedding_report": output_reports_store.write_json("embedding_report.json", state.embedding_report),
-        "vector_db_report": output_reports_store.write_json("vector_db_report.json", state.vector_db_report),
         "integration_updates": output_reports_store.write_json(
             "integration_updates.json",
             {
@@ -238,55 +234,6 @@ def _atomic_write_text(path: Path, text: str) -> None:
     temporary.replace(path)
 
 
-def _run_vector_db(vector_records: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
-    provider = str(config.get("provider", "disabled"))
-    collection_name = str(config.get("collection_name", "axiom_text_chunks"))
-
-    if not vector_records:
-        return {
-            "provider": provider,
-            "collection_name": collection_name,
-            "status": "skipped",
-            "upserted": 0,
-            "reason": "no_vector_records",
-            "errors": [],
-            "warnings": [],
-        }
-
-    if provider in {"", "disabled", "none"}:
-        return {
-            "provider": provider,
-            "collection_name": collection_name,
-            "status": "skipped",
-            "upserted": 0,
-            "reason": "vector_db_provider_not_configured",
-            "errors": [],
-            "warnings": [],
-        }
-
-    if provider == "mock":
-        from .vector_db import VectorDBMock
-
-        return VectorDBMock(collection_name=collection_name).upsert_vectors(vector_records)
-
-    if provider == "milvus":
-        from .vector_db import MilvusConfig, MilvusVectorDB
-
-        milvus_config = dict(config)
-        milvus_config.setdefault("dimension", _infer_vector_dimension(vector_records))
-        return MilvusVectorDB(MilvusConfig.from_mapping(milvus_config)).upsert_vectors(vector_records)
-
-    raise ValueError(f"Unsupported vector_db provider: {provider}")
-
-
-def _infer_vector_dimension(vector_records: list[dict[str, Any]]) -> int:
-    for record in vector_records:
-        embedding = record.get("embedding")
-        if isinstance(embedding, list):
-            return len(embedding)
-    raise ValueError("Cannot infer vector dimension from vector records.")
-
-
 def _pipeline_state_manifest(state: PipelineState) -> dict[str, Any]:
     return {
         "contract_version": "pipeline-state-manifest-v1",
@@ -318,7 +265,6 @@ def _pipeline_state_manifest(state: PipelineState) -> dict[str, Any]:
         "reports": {
             "index_quality_status": state.index_quality_report.get("status"),
             "embedding_status": state.embedding_report.get("status"),
-            "vector_db_status": state.vector_db_report.get("status"),
         },
     }
 

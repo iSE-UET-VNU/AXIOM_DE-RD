@@ -1,8 +1,8 @@
 # AXIOM_DE-RD
 
-AXIOM_DE-RD is an early-stage data pipeline for document ingestion and indexing.
-The current workflow focuses on stable artifacts for downstream retrieval and
-analytics systems.
+AXIOM_DE-RD is an early-stage data pipeline for document ingestion, chunking,
+and embedding. The current workflow produces local artifacts for downstream
+retrieval and analytics systems; it does not write to a database.
 
 ## Current Pipeline
 
@@ -22,8 +22,7 @@ raw document
    - OpenRouter text chunk embeddings
 -> integration: pass-through
 -> storage:
-   - local JSON artifacts
-   - Milvus vector collection for text chunks
+   - local JSON artifacts, including text chunk embeddings
 ```
 
 The main config is:
@@ -82,8 +81,6 @@ for the current full workflow:
 ```dotenv
 DATALAB_API_KEY=
 OPENROUTER_API_KEY=
-MILVUS_URI=
-MILVUS_TOKEN=
 ```
 
 ## Run
@@ -140,12 +137,9 @@ paths, counts, and report statuses; it does not duplicate records or embeddings.
 `documents.jsonl` is a document registry containing source/parser metadata and
 component counts. Component content lives only in the three normalization JSONL
 files. `index_records.json` remains the downstream indexing contract.
-
-The configured Milvus collection is:
-
-```text
-axiom_text_chunks_openrouter_text_embedding_3_small_1536
-```
+`data/output/final_test/data/vector_records.json` is the final embedding output
+and includes each vector together with its chunk text and lineage metadata. No
+VectorDB or relational/graph database write is performed.
 
 ## Contracts
 
@@ -161,3 +155,12 @@ catalog
 
 Only `text_chunk` records are embedded in this phase. Embeddings use OpenRouter
 with `openai/text-embedding-3-small` and dimension `1536`.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Unit tests use deterministic local embeddings. The production pipeline config
+uses OpenRouter and writes the generated vectors only to local JSON artifacts.

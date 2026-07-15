@@ -59,6 +59,13 @@ class PortablePathTests(unittest.TestCase):
                 normalized_texts=[
                     {"contract_version": "normalized-text-v1", "document_id": "doc-1", "text": "xin chào"}
                 ],
+                vector_records=[
+                    {
+                        "record_id": "chunk-1",
+                        "embedding": [0.1, 0.2],
+                        "embedding_dimension": 2,
+                    }
+                ],
             )
             state.ingestion_config = {
                 "provider": "lift_api",
@@ -152,6 +159,15 @@ class PortablePathTests(unittest.TestCase):
             self.assertEqual(text_path.read_text(encoding="utf-8").count("\n"), 1)
             self.assertIn("xin chào", text_path.read_text(encoding="utf-8"))
             self.assertFalse((root / "data" / "output" / "final_test" / "data" / "documents.json").exists())
+            vector_path = root / state.artifact_paths["vector_records"]
+            self.assertEqual(
+                json.loads(vector_path.read_text(encoding="utf-8")),
+                state.vector_records,
+            )
+            self.assertNotIn("vector_db_report", state.artifact_paths)
+            self.assertFalse(
+                (root / "data/output/final_test/reports/vector_db_report.json").exists()
+            )
             self.assertFalse(any(str(path).startswith(str(root)) for path in state.artifact_paths.values()))
 
 

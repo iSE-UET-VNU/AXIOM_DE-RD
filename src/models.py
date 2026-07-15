@@ -150,7 +150,6 @@ class PipelineState:
     index_quality_report: dict[str, Any] = field(default_factory=dict)
     vector_records: list[dict[str, Any]] = field(default_factory=list)
     embedding_report: dict[str, Any] = field(default_factory=dict)
-    vector_db_report: dict[str, Any] = field(default_factory=dict)
     schema_matches: list[SchemaMatch] = field(default_factory=list)
     entity_matches: list[EntityMatch] = field(default_factory=list)
     relationship_records: list[RelationshipRecord] = field(default_factory=list)

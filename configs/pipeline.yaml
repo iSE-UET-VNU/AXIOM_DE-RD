@@ -45,14 +45,6 @@
     "mode": "local",
     "local": {
       "artifacts_dir": "data/output/final_test"
-    },
-    "vector_db": {
-      "provider": "milvus",
-      "uri": "",
-      "token_env": "MILVUS_TOKEN",
-      "collection_name": "axiom_text_chunks_openrouter_text_embedding_3_small_1536",
-      "drop_collection": false,
-      "metric_type": "COSINE"
     }
   },
   "logging": {
