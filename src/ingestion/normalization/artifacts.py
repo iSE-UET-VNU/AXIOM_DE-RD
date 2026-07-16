@@ -59,18 +59,24 @@ def _normalize_document_components(parsed: ParsedData, project_root: Path | None
     extraction = _extraction_from_parsed(parsed, lift)
     document_json = lift.get("document_json")
     convert_markdown = _text_or_none(lift.get("convert_markdown"))
+    parsed_tables = _tables_from_parsed_tables(parsed, project_root)
 
     if isinstance(document_json, dict):
         texts = _texts_from_document_json(parsed, document_json, project_root)
-        tables = _tables_from_document_json(parsed, document_json, extraction, project_root)
+        lift_tables = _tables_from_document_json(parsed, document_json, extraction, project_root)
         images = _images_from_document_json(parsed, document_json, extraction, project_root)
     else:
         texts = []
-        tables = []
+        lift_tables = []
         images = []
 
     if not texts:
         texts = _fallback_texts(parsed, extraction, convert_markdown, project_root)
+    # Structured tables emitted by a parser backend are already canonical at
+    # the cell level and therefore take precedence over provider fallbacks.
+    # Lift does not currently populate ParsedData.tables, so its behavior is
+    # unchanged.
+    tables = parsed_tables or lift_tables
     if not tables:
         tables = _fallback_tables(parsed, extraction, project_root)
     if not tables and convert_markdown:
@@ -317,6 +323,60 @@ def _fallback_tables(
     return _portable_records(records, project_root)
 
 
+def _tables_from_parsed_tables(
+    parsed: ParsedData,
+    project_root: Path | None,
+) -> list[dict[str, Any]]:
+    """Normalize provider-neutral ``ParsedTable`` values.
+
+    ``getattr`` intentionally keeps this normalizer compatible with ParsedData
+    instances produced before the tables field was introduced.
+    """
+    records: list[dict[str, Any]] = []
+    for index, table in enumerate(getattr(parsed, "tables", None) or []):
+        name = _text_or_none(_table_value(table, "name")) or f"Table {index + 1}"
+        source_ref = _text_or_none(_table_value(table, "source_ref")) or f"table-{index}"
+        headers = [_cell_text(value) for value in (_table_value(table, "headers") or [])]
+        data_rows = [
+            [_cell_text(value) for value in row]
+            for row in (_table_value(table, "rows") or [])
+            if isinstance(row, (list, tuple))
+        ]
+        rows = ([headers] if headers else []) + data_rows
+        metadata = _table_value(table, "metadata")
+        semantic = dict(metadata) if isinstance(metadata, dict) else {}
+        semantic.update(
+            {
+                "parser": _parser_provider(parsed),
+                "table_name": name,
+                "source_ref": source_ref,
+            }
+        )
+        markdown = _markdown_table(rows)
+
+        records.append(
+            {
+                "contract_version": NORMALIZED_TABLE_VERSION,
+                "table_id": make_id(parsed.object_id, "table", source_ref, index),
+                "document_id": parsed.object_id,
+                "source_uri": parsed.source_uri,
+                "source_block_id": source_ref,
+                "page": None,
+                "caption": name,
+                "html": "",
+                "rows": rows,
+                "markdown": markdown,
+                "embedding_text": _table_embedding_text(name, rows, markdown),
+                "row_count": len(rows),
+                "column_count": max((len(row) for row in rows), default=0),
+                "headers": headers,
+                "semantic": semantic,
+                "source_artifact": "parsed.tables",
+            }
+        )
+    return _portable_records(records, project_root)
+
+
 def _tables_from_markdown(
     parsed: ParsedData,
     markdown: str,
@@ -483,6 +543,15 @@ def _document_record(
     formula_count: int,
     project_root: Path | None,
 ) -> dict[str, Any]:
+    has_text = any(_text_or_none(item.get("text")) for item in texts)
+    has_table_content = any(
+        _text_or_none(cell)
+        for table in tables
+        for row in table.get("rows", [])
+        if isinstance(row, list)
+        for cell in row
+    )
+    has_image_content = any(image.get("image_path") for image in images)
     record = {
         "contract_version": NORMALIZED_DOCUMENT_VERSION,
         "document_id": parsed.object_id,
@@ -498,14 +567,15 @@ def _document_record(
             "formulas": formula_count,
         },
         "parser": {
-            "provider": parsed.metadata.get("parser"),
+            "provider": _parser_provider(parsed),
             "mode": parsed.metadata.get("mode"),
-            "status": parsed.metadata.get("status"),
+            "status": parsed.metadata.get("status") or "success",
         },
         "page_count": parsed.metadata.get("page_count"),
         "work_artifact_uri": _work_artifact_uri(parsed),
         "quality": {
-            "has_text": any(_text_or_none(item.get("text")) for item in texts),
+            "has_text": has_text,
+            "has_content": bool(has_text or has_table_content or has_image_content),
             "missing_image_assets": sum(1 for image in images if not image.get("image_path")),
         },
     }
@@ -520,6 +590,23 @@ def _extraction_from_parsed(parsed: ParsedData, lift: dict[str, Any]) -> dict[st
         if isinstance(extraction, dict):
             return extraction
     return {}
+
+
+def _parser_provider(parsed: ParsedData) -> str | None:
+    value = parsed.metadata.get("backend") or parsed.metadata.get("parser")
+    if isinstance(value, dict):
+        value = value.get("provider") or value.get("backend")
+    return _text_or_none(value)
+
+
+def _table_value(table: Any, field_name: str) -> Any:
+    if isinstance(table, dict):
+        return table.get(field_name)
+    return getattr(table, field_name, None)
+
+
+def _cell_text(value: Any) -> str:
+    return "" if value is None else str(value)
 
 
 def _walk_blocks(value: Any) -> list[dict[str, Any]]:

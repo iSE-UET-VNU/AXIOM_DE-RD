@@ -34,7 +34,10 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
     logger = logging.getLogger(__name__)
 
     input_dir = resolve_project_path(project_root, config.get("input_dir", "data/raw"))
-    processed_dir = resolve_project_path(project_root, config.get("processed_dir", config.get("output_dir", "data/processed")))
+    processed_dir = resolve_project_path(
+        project_root,
+        config.get("processed_dir", config.get("output_dir", "data/processed")),
+    )
     work_dir = resolve_project_path(project_root, config.get("work_dir", "data/work"))
     cleaned_dir = resolve_project_path(project_root, config.get("cleaned_dir", "data/cleaned"))
     enriched_dir = resolve_project_path(project_root, config.get("enriched_dir", "data/enriched"))
@@ -65,16 +68,20 @@ def run_pipeline(config_path: str | Path = "configs/pipeline.yaml") -> PipelineS
             project_root=project_root,
         )
         state.data_objects = result.data_objects
+        state.parse_results = result.parse_results
         state.parsed_data = result.parsed_data
         state.initial_schemas = result.initial_schemas
         state.normalized_texts = result.normalized_texts
         state.normalized_images = result.normalized_images
         state.normalized_tables = result.normalized_tables
         state.normalized_documents = result.documents
+        state.errors.extend(result.errors)
         state.completed_modules.append("ingestion")
         logger.info(
-            "Ingested %s data object(s) and normalized %s text block(s), %s image(s), and %s table(s)",
+            "Ingested %s data object(s), parsed %s successfully, and normalized "
+            "%s text block(s), %s image(s), and %s table(s)",
             len(state.data_objects),
+            len(state.parsed_data),
             len(state.normalized_texts),
             len(state.normalized_images),
             len(state.normalized_tables),

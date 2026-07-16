@@ -14,12 +14,23 @@
     "storage"
   ],
   "parsing": {
-    "provider": "lift_api",
+    "provider": "router",
+    "document": {
+      "provider": "lift_api",
+      "fallback_to_deferred": false
+    },
+    "chandra2": {
+      "batch_size": 28,
+      "max_workers": 4,
+      "max_output_tokens": 12384,
+      "max_retries": 6,
+      "include_headers_footers": false,
+      "save_raw_outputs": true
+    },
     "lift_api": {
       "api_key_env": "DATALAB_API_KEY",
       "mode": "accurate",
       "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
-      "fallback_to_local": false,
       "extract_images": true,
       "save_raw_outputs": true
     }

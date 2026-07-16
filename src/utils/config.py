@@ -59,4 +59,22 @@ def resolve_parser_config(
         lift_config["output_dir"] = str(Path(work_dir) / run_id / "datalab")
         lift_config["project_root"] = str(project_root)
         parser_config["lift_api"] = lift_config
+
+    document_config = parser_config.get("document")
+    document_config = document_config if isinstance(document_config, dict) else {}
+    document_provider = (
+        str(document_config.get("provider", "")).lower().replace("-", "_")
+    )
+    chandra_config = parser_config.get("chandra2")
+    if isinstance(chandra_config, dict) or document_provider in {
+        "chandra",
+        "chandra2",
+        "chandra_2",
+    }:
+        chandra_config = (
+            dict(chandra_config) if isinstance(chandra_config, dict) else {}
+        )
+        chandra_config["output_dir"] = str(Path(work_dir) / run_id / "chandra2")
+        chandra_config["project_root"] = str(project_root)
+        parser_config["chandra2"] = chandra_config
     return parser_config

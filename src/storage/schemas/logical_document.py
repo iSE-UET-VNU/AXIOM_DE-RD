@@ -222,6 +222,13 @@ def _provider_schema_path(
     project_root: str | Path | None,
 ) -> Path | None:
     parser = state.ingestion_config if isinstance(state.ingestion_config, dict) else {}
+    document = parser.get("document") if isinstance(parser.get("document"), dict) else {}
+    providers = {
+        str(parser.get("provider") or "").lower().replace("-", "_"),
+        str(document.get("provider") or "").lower().replace("-", "_"),
+    }
+    if not providers.intersection({"lift", "lift_api"}):
+        return None
     lift = parser.get("lift_api") if isinstance(parser.get("lift_api"), dict) else {}
     value = lift.get("schema_path")
     return _resolved_path(value, project_root) if value else None

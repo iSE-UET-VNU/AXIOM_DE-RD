@@ -6,21 +6,35 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..models import DataObject, InitialSchema, ParsedData, make_id
-from .parsing import infer_initial_schema, parse_raw_file
-from .normalization import detect_content_type, detect_format, normalize_parsed_data
+from ..models import (
+    DataObject,
+    InitialSchema,
+    ParsedData,
+    ParseResult,
+    ParseStatus,
+    make_id,
+)
+from .parsing import ParsingService
+from .normalization import (
+    build_initial_schema,
+    detect_content_type,
+    detect_format,
+    normalize_parsed_data,
+)
 from ..utils.paths import portable_path
 
 
 @dataclass
 class IngestionOutput:
     data_objects: list[DataObject] = field(default_factory=list)
+    parse_results: list[ParseResult] = field(default_factory=list)
     parsed_data: list[ParsedData] = field(default_factory=list)
     initial_schemas: list[InitialSchema] = field(default_factory=list)
     normalized_texts: list[dict[str, Any]] = field(default_factory=list)
     normalized_images: list[dict[str, Any]] = field(default_factory=list)
     normalized_tables: list[dict[str, Any]] = field(default_factory=list)
     documents: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
 
 
 def run(
@@ -35,38 +49,138 @@ def run(
     if not input_path.exists():
         return output
 
+    parsing_service = ParsingService.from_config(parser_config)
+
     for path in sorted(input_path.rglob("*")):
-        if not path.is_file() or path.name.startswith("."):
-            continue
+        inventory_error: Exception | None = None
+        try:
+            if path.is_dir():
+                continue
+        except Exception as exc:
+            inventory_error = exc
 
         relative_uri = path.relative_to(input_path).as_posix()
-        file_format = detect_format(path)
-        portable_uri = portable_path(path, project_root)
+        if inventory_error is None:
+            try:
+                file_format = detect_format(path)
+                portable_uri = portable_path(path, project_root)
+                content_type = detect_content_type(path)
+                size_bytes: int | None = path.stat().st_size
+            except Exception as exc:
+                inventory_error = exc
+        if inventory_error is not None:
+            file_format = path.suffix.lower().lstrip(".") or "unknown"
+            portable_uri = path.as_posix()
+            content_type = "application/octet-stream"
+            size_bytes = None
         data_object = DataObject(
             object_id=make_id("data-object", relative_uri),
             uri=portable_uri,
-            content_type=detect_content_type(path),
+            content_type=content_type,
             metadata={
                 "relative_uri": relative_uri,
                 "format": file_format,
-                "size_bytes": path.stat().st_size,
+                "size_bytes": size_bytes,
             },
         )
-        parsed = parse_raw_file(path, data_object, parser_config)
-        schema = infer_initial_schema(parsed)
-
         output.data_objects.append(data_object)
-        output.parsed_data.append(parsed)
-        output.initial_schemas.append(schema)
+        if inventory_error is not None:
+            routed_backend = parsing_service.router.resolve(path)
+            route = str(getattr(routed_backend, "backend_name", "unsupported"))
+            parse_result = ParseResult.failed(
+                data_object.object_id,
+                "inventory",
+                inventory_error,
+                route=route,
+                reason="source_inventory_failed",
+            )
+            output.parse_results.append(parse_result)
+            output.errors.append(_parse_error_record(parse_result))
+            continue
 
-    if output.parsed_data:
-        normalized = normalize_parsed_data(output.parsed_data, project_root=project_root)
-        output.normalized_texts = normalized.texts
-        output.normalized_images = normalized.images
-        output.normalized_tables = normalized.tables
-        output.documents = enrich_document_records(normalized.documents, output.data_objects)
+        parse_result = parsing_service.parse(path, data_object)
+        output.parse_results.append(parse_result)
+
+        if parse_result.status == ParseStatus.FAILED:
+            output.errors.append(_parse_error_record(parse_result))
+            continue
+        if parse_result.status != ParseStatus.SUCCESS:
+            continue
+
+        parsed = parse_result.parsed_data
+        if parsed is None:  # ParsingService enforces this invariant defensively.
+            continue
+        output.parsed_data.append(parsed)
+
+        try:
+            schema = build_initial_schema(parsed)
+        except Exception as exc:
+            output.errors.append(
+                _stage_error_record(
+                    parse_result,
+                    stage="ingestion.schema_inference",
+                    reason="schema_inference_failed",
+                    exc=exc,
+                )
+            )
+        else:
+            output.initial_schemas.append(schema)
+
+        try:
+            normalized = normalize_parsed_data([parsed], project_root=project_root)
+        except Exception as exc:
+            output.errors.append(
+                _stage_error_record(
+                    parse_result,
+                    stage="ingestion.normalization",
+                    reason="normalization_failed",
+                    exc=exc,
+                )
+            )
+        else:
+            output.normalized_texts.extend(normalized.texts)
+            output.normalized_images.extend(normalized.images)
+            output.normalized_tables.extend(normalized.tables)
+            output.documents.extend(normalized.documents)
+
+    if output.documents:
+        output.documents = enrich_document_records(output.documents, output.data_objects)
 
     return output
+
+
+def _stage_error_record(
+    result: ParseResult,
+    *,
+    stage: str,
+    reason: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "source_object_id": result.source_object_id,
+        "route": result.route,
+        "backend": result.backend,
+        "reason": reason,
+        "error": {"type": type(exc).__name__, "message": str(exc)},
+    }
+
+
+def _parse_error_record(result: ParseResult) -> dict[str, Any]:
+    """Convert a file-scoped parse/inventory failure to a pipeline error."""
+    stage = (
+        "ingestion.inventory"
+        if result.reason == "source_inventory_failed"
+        else "ingestion.parsing"
+    )
+    return {
+        "stage": stage,
+        "source_object_id": result.source_object_id,
+        "route": result.route,
+        "backend": result.backend,
+        "reason": result.reason or "parse_failed",
+        "error": dict(result.error),
+    }
 
 
 def enrich_document_records(

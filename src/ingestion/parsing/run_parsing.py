@@ -64,6 +64,7 @@ def main() -> None:
         output_dir=portable_path(output_dir, PROJECT_ROOT),
         work_dir=portable_path(work_dir, PROJECT_ROOT),
         data_objects=result.data_objects,
+        parse_results=result.parse_results,
         parsed_data=result.parsed_data,
         initial_schemas=result.initial_schemas,
         normalized_texts=result.normalized_texts,
@@ -71,11 +72,25 @@ def main() -> None:
         normalized_tables=result.normalized_tables,
         normalized_documents=result.documents,
         ingestion_config=parser_config,
+        errors=result.errors,
         completed_modules=["ingestion"],
     )
     paths = write_processed_artifacts(state, output_dir, PROJECT_ROOT)
 
-    print(f"Parsed {len(result.parsed_data)} object(s).")
+    status_counts: dict[str, int] = {}
+    for parse_result in result.parse_results:
+        status = parse_result.status.value
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    print(
+        f"Inventoried {len(result.data_objects)} object(s); "
+        f"parsed {len(result.parsed_data)} successfully."
+    )
+    if status_counts:
+        summary = ", ".join(
+            f"{status}={count}" for status, count in sorted(status_counts.items())
+        )
+        print(f"Parse statuses: {summary}")
     print(f"Artifacts: {output_dir}")
     for name, path in paths.items():
         print(f"- {name}: {path}")

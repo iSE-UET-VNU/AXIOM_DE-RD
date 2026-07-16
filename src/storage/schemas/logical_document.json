@@ -73,6 +73,10 @@
       "additionalProperties": false,
       "properties": {
         "has_text": {"type": "boolean"},
+        "has_content": {
+          "type": "boolean",
+          "description": "True when the document has non-empty text, table cells, or decoded image content."
+        },
         "missing_image_assets": {"type": "integer", "minimum": 0}
       },
       "required": ["has_text", "missing_image_assets"]

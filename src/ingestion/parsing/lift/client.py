@@ -16,7 +16,9 @@ import time
 from ....models import DataObject, ParsedData
 from ....utils.paths import portable_path_value
 
-SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+SUPPORTED_EXTENSIONS = frozenset(
+    {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+)
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas/document_components.json"
 
 
@@ -26,7 +28,6 @@ class LiftAPIConfig:
     mode: str = "balanced"
     schema_path: str | None = None
     output_dir: str | None = "data/work/datalab"
-    fallback_to_local: bool = True
     extract_images: bool = True
     save_raw_outputs: bool = True
     project_root: str | None = None
@@ -39,7 +40,6 @@ class LiftAPIConfig:
             mode=str(config.get("mode", "balanced")),
             schema_path=_optional_str(config.get("schema_path")),
             output_dir=_optional_str(config.get("output_dir", "data/work/datalab")),
-            fallback_to_local=bool(config.get("fallback_to_local", True)),
             extract_images=bool(config.get("extract_images", True)),
             save_raw_outputs=bool(config.get("save_raw_outputs", True)),
             project_root=_optional_str(config.get("project_root")),
@@ -52,6 +52,9 @@ class LiftAPIConfig:
 
 class LiftAPIParserClient:
     """Small wrapper around the Datalab hosted extraction API."""
+
+    provider_name = "lift_api"
+    supported_extensions = SUPPORTED_EXTENSIONS
 
     def __init__(self, config: LiftAPIConfig) -> None:
         self.config = config
@@ -68,7 +71,7 @@ class LiftAPIParserClient:
             from datalab_sdk import ConvertOptions, DatalabClient, ExtractOptions
         except ImportError as exc:
             raise RuntimeError(
-                "Missing datalab-python-sdk. Install it with: pip install datalab-python-sdk"
+                "Missing Lift dependency. Install it with: pip install -e .[lift]"
             ) from exc
 
         schema = _load_schema(self.config.schema_path)
