@@ -25,10 +25,10 @@ class LiftAPIConfig:
     api_key_env: str = "DATALAB_API_KEY"
     mode: str = "balanced"
     schema_path: str | None = None
-    output_dir: str | None = "data/work/datalab"
+    output_dir: str | None = "data/ingested/assets"
     fallback_to_local: bool = True
     extract_images: bool = True
-    save_raw_outputs: bool = True
+    save_raw_outputs: bool = False
     project_root: str | None = None
 
     @classmethod
@@ -38,10 +38,10 @@ class LiftAPIConfig:
             api_key_env=str(config.get("api_key_env", "DATALAB_API_KEY")),
             mode=str(config.get("mode", "balanced")),
             schema_path=_optional_str(config.get("schema_path")),
-            output_dir=_optional_str(config.get("output_dir", "data/work/datalab")),
+            output_dir=_optional_str(config.get("output_dir", "data/ingested/assets")),
             fallback_to_local=bool(config.get("fallback_to_local", True)),
             extract_images=bool(config.get("extract_images", True)),
-            save_raw_outputs=bool(config.get("save_raw_outputs", True)),
+            save_raw_outputs=bool(config.get("save_raw_outputs", False)),
             project_root=_optional_str(config.get("project_root")),
         )
 
@@ -94,10 +94,13 @@ class LiftAPIParserClient:
             images = _normalize_images(_get_attr(conversion, "images", {}))
             image_source = "convert"
 
-        bundle_dir = _bundle_dir(
-            self.config.output_dir,
-            file_path,
-            data_object.object_id,
+        bundle_dir = (
+            _bundle_dir(
+                self.config.output_dir,
+                data_object.object_id,
+            )
+            if images or self.config.save_raw_outputs
+            else None
         )
         image_files = _write_images(bundle_dir, images)
         raw_output_paths = _write_lift_raw_outputs(
@@ -125,7 +128,15 @@ class LiftAPIParserClient:
             "image_source": image_source,
             "raw_lift_outputs": raw_output_paths,
         }
-        output_path = _write_output(bundle_dir, payload, self.config.project_root)
+        output_path = (
+            _write_output(
+                bundle_dir / "debug" if bundle_dir else None,
+                payload,
+                self.config.project_root,
+            )
+            if self.config.save_raw_outputs
+            else None
+        )
 
         text = _extraction_text(extraction)
         return ParsedData(
@@ -158,11 +169,10 @@ def _load_schema(schema_path: str | None) -> dict[str, Any]:
     return schema
 
 
-def _bundle_dir(output_dir: str | None, file_path: Path, object_id: str) -> Path | None:
+def _bundle_dir(output_dir: str | None, object_id: str) -> Path | None:
     if not output_dir:
         return None
-    slug = _safe_slug(file_path.stem)
-    bundle_dir = Path(output_dir) / f"{slug}--{object_id}"
+    bundle_dir = Path(output_dir) / object_id
     bundle_dir.mkdir(parents=True, exist_ok=True)
     return bundle_dir
 
@@ -174,6 +184,7 @@ def _write_output(
 ) -> Path | None:
     if bundle_dir is None:
         return None
+    bundle_dir.mkdir(parents=True, exist_ok=True)
     output_path = bundle_dir / "result.json"
     output_path.write_text(
         json.dumps(portable_path_value(payload, project_root), indent=2, ensure_ascii=False),
@@ -227,11 +238,13 @@ def _write_lift_raw_outputs(
     if bundle_dir is None or not enabled:
         return {}
 
+    debug_dir = bundle_dir / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
     asset_map = _image_asset_map(image_files or [])
     paths: dict[str, str] = {}
-    paths.update(_write_result_artifacts(bundle_dir, "extract", extract_result, asset_map))
+    paths.update(_write_result_artifacts(debug_dir, "extract", extract_result, asset_map))
     if convert_result is not None:
-        paths.update(_write_result_artifacts(bundle_dir, "convert", convert_result, asset_map))
+        paths.update(_write_result_artifacts(debug_dir, "convert", convert_result, asset_map))
     return paths
 
 
@@ -328,11 +341,6 @@ def _deduplicate_image_name(candidate: str, original_name: str, used_names: set[
     path = Path(candidate)
     digest = hashlib.sha1(original_name.replace("\\", "/").encode("utf-8")).hexdigest()[:8]
     return f"{path.stem}--{digest}{path.suffix}"
-
-
-def _safe_slug(value: str, max_length: int = 80) -> str:
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._")
-    return (slug or "document")[:max_length].rstrip("-._") or "document"
 
 
 def _image_asset_map(image_files: list[dict[str, str]]) -> dict[str, str]:

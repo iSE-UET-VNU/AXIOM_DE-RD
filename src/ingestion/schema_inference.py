@@ -1,10 +1,10 @@
-"""Parser-agnostic initial document schema normalization for ingestion."""
+"""Parser-agnostic initial document schema inference for ingestion."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from ...models import InitialSchema, ParsedData, make_id
+from ..models import InitialSchema, ParsedData, make_id
 
 INITIAL_SCHEMA_CONTRACT_VERSION = "initial-document-schema-v1"
 
@@ -43,26 +43,26 @@ FORMULA_FIELDS = {
 
 
 def build_initial_schema(parsed: ParsedData) -> InitialSchema:
-    """Build a normalized initial document schema from raw parsed data.
+    """Infer an initial document schema from parsed data.
 
     Raw parser outputs can include provider-specific fields such as Lift
-    citations and verification metadata. This formatter keeps the normalized
-    document entities that downstream stages can rely on.
+    citations and verification metadata. This formatter exposes the document
+    entities that downstream stages can rely on.
     """
-    normalized = normalize_parsed_document(parsed)
+    document = _document_view(parsed)
     component_counts = {
         "rows": len(parsed.rows),
-        "tables": len(normalized["tables"]),
-        "figures": len(normalized["figures"]),
-        "formulas": len(normalized["formulas"]),
+        "tables": len(document["tables"]),
+        "figures": len(document["figures"]),
+        "formulas": len(document["formulas"]),
     }
 
     return InitialSchema(
         schema_id=make_id(parsed.object_id, "initial-schema"),
         source_object_id=parsed.object_id,
-        fields=_normalized_fields(),
-        entities=_normalized_entities(component_counts),
-        relationships=_normalized_relationships(component_counts),
+        fields=_schema_fields(),
+        entities=_schema_entities(component_counts),
+        relationships=_schema_relationships(component_counts),
         metadata={
             "contract_version": INITIAL_SCHEMA_CONTRACT_VERSION,
             "schema_type": "document",
@@ -72,14 +72,14 @@ def build_initial_schema(parsed: ParsedData) -> InitialSchema:
             "source_uri": parsed.source_uri,
             "row_count": len(parsed.rows),
             "component_counts": component_counts,
-            "observed_document_fields": _observed_document_fields(normalized),
+            "observed_document_fields": _observed_document_fields(document),
             "raw_parser_output": "parsed_data",
         },
     )
 
 
-def normalize_parsed_document(parsed: ParsedData) -> dict[str, Any]:
-    """Normalize raw parser rows into document components."""
+def _document_view(parsed: ParsedData) -> dict[str, Any]:
+    """Build a temporary document view for schema inference."""
     document: dict[str, Any] = {
         "document_id": parsed.object_id,
         "source_uri": parsed.source_uri,
@@ -119,7 +119,7 @@ def normalize_parsed_document(parsed: ParsedData) -> dict[str, Any]:
     return document
 
 
-def _normalized_fields() -> dict[str, str]:
+def _schema_fields() -> dict[str, str]:
     return {
         **DOCUMENT_FIELDS,
         **TABLE_FIELDS,
@@ -128,7 +128,7 @@ def _normalized_fields() -> dict[str, str]:
     }
 
 
-def _normalized_entities(component_counts: dict[str, int]) -> list[dict[str, Any]]:
+def _schema_entities(component_counts: dict[str, int]) -> list[dict[str, Any]]:
     return [
         {
             "entity_type": "document",
@@ -157,7 +157,7 @@ def _normalized_entities(component_counts: dict[str, int]) -> list[dict[str, Any
     ]
 
 
-def _normalized_relationships(component_counts: dict[str, int]) -> list[dict[str, str]]:
+def _schema_relationships(component_counts: dict[str, int]) -> list[dict[str, str]]:
     relationships = []
     for entity_type, relationship_type in (
         ("table", "has_table"),

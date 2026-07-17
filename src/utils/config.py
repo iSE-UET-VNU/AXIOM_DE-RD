@@ -42,10 +42,9 @@ def resolve_project_path(project_root: Path, value: str | Path) -> Path:
 def resolve_parser_config(
     project_root: Path,
     value: Any,
-    work_dir: str | Path,
-    run_id: str,
+    parser_assets_dir: str | Path,
 ) -> dict[str, Any]:
-    """Resolve parser paths and route provider artifacts into this run's work directory."""
+    """Resolve parser paths and route parsed assets into the ingested run."""
     if not isinstance(value, dict):
         return {}
 
@@ -56,7 +55,7 @@ def resolve_parser_config(
         schema_path = lift_config.get("schema_path")
         if schema_path:
             lift_config["schema_path"] = str(resolve_project_path(project_root, schema_path))
-        lift_config["output_dir"] = str(Path(work_dir) / run_id / "datalab")
+        lift_config["output_dir"] = str(Path(parser_assets_dir))
         lift_config["project_root"] = str(project_root)
         parser_config["lift_api"] = lift_config
     return parser_config

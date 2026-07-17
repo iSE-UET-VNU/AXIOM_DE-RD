@@ -8,22 +8,16 @@ __pycache__/
 venv/
 .env
 
-storage/**/*.jsonl
-storage/schema/*.json
-data/raw/*
-data/processed/
-data/work/
+# Local inputs and presigned-URL inventories can contain sensitive data.
+data/raw/
+data/ingested/*
 data/cleaned/*
-data/enriched/
+data/enriched/*
+data/embedded/*
 data/output/*
 
-!data/raw/.gitkeep
-!data/raw/final_test/
-!data/raw/final_test/**
-!data/processed/.gitkeep
+!data/ingested/.gitkeep
 !data/cleaned/.gitkeep
 !data/enriched/.gitkeep
+!data/embedded/.gitkeep
 !data/output/.gitkeep
-!storage/schema/.gitkeep
-!storage/vector_db/.gitkeep
-!storage/db/.gitkeep

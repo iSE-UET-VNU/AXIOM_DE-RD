@@ -1,4 +1,4 @@
-"""Minimal file format detection.
+"""Minimal ingestion file format detection.
 
 TODO: Replace extension-based detection with content sniffing when formats grow.
 """

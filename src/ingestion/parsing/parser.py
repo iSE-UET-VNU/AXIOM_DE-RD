@@ -11,7 +11,7 @@ import csv
 import json
 
 from ...models import DataObject, InitialSchema, ParsedData
-from ..normalization import build_initial_schema
+from ..schema_inference import build_initial_schema
 from .lift import LiftAPIConfig, LiftAPIParserClient
 
 TEXT_FORMATS = {"csv", "json", "jsonl", "txt", "md", "yaml", "yml"}
