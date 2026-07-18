@@ -44,14 +44,14 @@ Python 3.11 or newer is required.
 
 ## Installation
 
-### Conda
+### Option1: Conda
 
 ```bash
 conda env create -f environment.yml
 conda activate axiom-de-rd
 ```
 
-### Python virtual environment
+### Option2: Python virtual environment
 
 ```bash
 python -m venv .venv
@@ -68,17 +68,6 @@ Copy the example environment file and provide the required credentials:
 cp .env.example .env
 ```
 
-```dotenv
-S3_URI=s3://bucket/path/to/document.pdf
-# AWS_PROFILE=default
-# AWS_REGION=ap-southeast-1
-# S3_ENDPOINT_URL=http://localhost:9000
-# S3_OBJECT_KEY=path/to/document.pdf
-DATALAB_API_KEY=
-OPENROUTER_API_KEY=
-# Optional: only used when configured as the OpenRouter HTTP referer.
-OPENROUTER_HTTP_REFERER=
-```
 
 ## Configuration
 
@@ -108,7 +97,7 @@ Important settings include:
 python scripts/run_pipeline.py --config configs/pipeline.yaml
 ```
 
-Use the existing `s3://bucket/key` CLI option:
+#### Use the existing `s3://bucket/key` CLI option:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -116,7 +105,7 @@ python scripts/run_pipeline.py \
   --s3-uri 's3://bucket/path/to/document.pdf'
 ```
 
-Or select a presigned URL from a local S3 inventory:
+#### Or select a presigned URL from a local S3 inventory:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -125,7 +114,7 @@ python scripts/run_pipeline.py \
   --s3-object-key 'path/to/document.pdf'
 ```
 
-Process every presigned object from the inventory in one pipeline run:
+#### Process every presigned object from the inventory in one pipeline run:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -149,12 +138,7 @@ The equivalent configuration is:
 }
 ```
 
-`--s3-all-objects` and `--s3-object-key` cannot be combined. Batch downloads
-are persisted under `data/raw/<run_id>/objects/`, while each document retains
-its own `s3://bucket/key` lineage. S3 folder markers such as `test/` are skipped,
-and presigned URLs are never written to artifacts.
-
-Or override the config with a local raw file or directory:
+#### Or override the config with a local raw file or directory:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -197,13 +181,13 @@ data/enriched/<run_id>/
 
 data/embedded/<run_id>/
 ├── documents/
-│   └── <document_id>.json              # Unified retrieval items with nested vectors
-└── metadata.json                       # Common schemas and run reports
+│   └── <document_id>.json              # Compact retrieval items with nested vectors
+└── metadata.json                       # Retrieval schema and compact run summary
 
 data/output/<run_id>/
 ├── documents/
-│   └── <document_id>.json              # Consolidated ingest-to-embedding result
-└── metadata.json                       # Common document info, schemas, and reports
+│   └── <document_id>.json              # Compact semantic content plus retrieval vectors
+└── metadata.json                       # Common document schema and compact run summary
 ```
 
 An ingested quarantine record uses `status: "quarantined"`, has no `schema_id`,
@@ -218,62 +202,3 @@ For `--local-raw`, source files are read in place and are not copied into a new
 By default, `parsing.lift_api.save_raw_outputs` is `false`. Set it to `true`
 only when full Lift responses and Markdown are needed under each document's
 `assets/<document_id>/debug/` directory.
-
-### Vector embeddings
-
-The parsed document may keep text, tables, and figures in separate fields to
-preserve the source structure. From the embedded stage onward, searchable text,
-tables, and images are normalized into one `retrieval.items` array. Every item
-uses the same identity and linkage fields and contains its own `embeddings`
-array, so retrieval and frontend consumers do not need to join separate index
-and vector collections or iterate over multiple component arrays.
-
-```json
-{
-  "retrieval": {
-    "document": {
-      "record_id": "...",
-      "index_type": "document",
-      "document_id": "..."
-    },
-    "catalog": {
-      "metadata": {},
-      "index": {}
-    },
-    "items": [
-      {
-        "item_id": "...",
-        "type": "text",
-        "record_id": "...",
-        "document_id": "...",
-        "source_object_id": "...",
-        "position": {
-          "index": 0,
-          "start_char": 0,
-          "end_char": 1200
-        },
-        "content": {
-          "text": "..."
-        },
-        "embedding_text": "...",
-        "embeddings": [
-          {
-            "vector_id": "...",
-            "model": "openai/text-embedding-3-small",
-            "dimension": 1536,
-            "status": "embedded",
-            "values": [0.0]
-          }
-        ],
-        "metadata": {}
-      }
-    ]
-  }
-}
-```
-
-`type` is `text`, `table`, or `image`. `content` keeps the type-specific parsed
-payload, while `item_id`, `record_id`, `document_id`, `source_object_id`,
-`position`, and `embeddings` have the same meaning for every item. The same
-contract is written to both `data/embedded/<run_id>/documents/` and the final
-`data/output/<run_id>/documents/` files.

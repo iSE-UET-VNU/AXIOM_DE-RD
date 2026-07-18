@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..models import PipelineState
+from ..indexing_cataloging.index_builder import DocumentView, document_from_enriched_data
+from ..models import DataObject, EnrichedData, PipelineState
 from ..utils.paths import portable_path
 from .manifests import build_stage_metadata
 from .writer import LocalArtifactWriter
@@ -123,19 +125,25 @@ def write_embedded_artifacts(
     embedded_dir: str | Path,
     project_root: str | Path | None = None,
 ) -> ArtifactOutput:
-    """Write each document's indexes and embeddings plus common metadata."""
+    """Write compact per-document retrieval items plus common metadata."""
     writer = LocalArtifactWriter(embedded_dir, project_root=project_root)
+    parsed_by_id = {record.object_id: record for record in state.parsed_data}
     paths: dict[str, Path] = {}
 
     for data_object in state.data_objects:
         document_id = data_object.object_id
+        parsed = parsed_by_id.get(document_id)
         paths[f"embedded_document:{document_id}"] = writer.write_json(
             f"documents/{document_id}.json",
             {
-                "contract_version": "embedded-document-v2",
+                "contract_version": "embedded-document-v3",
                 "stage": "embedded",
                 "document_id": document_id,
-                **_retrieval_payload(state, document_id),
+                "retrieval": _compact_retrieval(
+                    state,
+                    document_id,
+                    parsed.metadata.get("image_files", []) if parsed else [],
+                ),
             },
             sort_keys=False,
         )
@@ -147,17 +155,20 @@ def write_embedded_artifacts(
             stage="embedded",
             document_summaries=_document_summaries(state),
             schemas={
-                "source": state.enriched_schemas,
-                "index_record_types": sorted({record.index_type for record in state.index_records}),
+                "retrieval": _compact_retrieval_schema(),
+                "source_reference": _source_reference_schema(),
+                "index_record_types": sorted(
+                    {record.index_type for record in state.index_records}
+                ),
                 "vector_dimension": state.embedding_report.get("dimension"),
             },
             document_schema={
                 "contract_version": "string",
                 "stage": "embedded",
                 "document_id": "string",
-                "retrieval": _retrieval_document_schema(),
+                "retrieval": _compact_retrieval_schema(),
             },
-            extra=_run_reports(state),
+            extra={"summary": _run_summary(state)},
         ),
         sort_keys=False,
     )
@@ -170,17 +181,23 @@ def write_output_artifacts(
     output_dir: str | Path,
     project_root: str | Path | None = None,
 ) -> ArtifactOutput:
-    """Write one consolidated end-to-end JSON per document plus common metadata."""
+    """Write one consumer-facing JSON per document plus common metadata.
+
+    Stage directories retain the complete parser and processing payloads.  The
+    final output deliberately exposes only stable semantic content, retrieval
+    items, and compact lineage references.
+    """
     writer = LocalArtifactWriter(output_dir, project_root=project_root)
     parsed_by_id = {record.object_id: record for record in state.parsed_data}
     initial_schema_by_id = {
         record.source_object_id: record for record in state.initial_schemas
     }
-    cleaned_by_id = {record.source_object_id: record for record in state.cleaned_data}
     cleaned_schema_by_id = {
         record.source_object_id: record for record in state.cleaned_schemas
     }
-    enriched_by_id = {record.source_object_id: record for record in state.enriched_data}
+    enriched_by_id = {
+        record.source_object_id: record for record in state.enriched_data
+    }
     enriched_schema_by_id = {
         record.source_object_id: record for record in state.enriched_schemas
     }
@@ -191,25 +208,30 @@ def write_output_artifacts(
         initial_schema = initial_schema_by_id.get(document_id)
         cleaned_schema = cleaned_schema_by_id.get(document_id)
         enriched_schema = enriched_schema_by_id.get(document_id)
+        parsed = parsed_by_id.get(document_id)
+        enriched = enriched_by_id.get(document_id)
+        document = document_from_enriched_data(enriched) if enriched else None
         paths[f"output_document:{document_id}"] = writer.write_json(
             f"documents/{document_id}.json",
             {
-                "contract_version": "output-document-v2",
-                "document_id": document_id,
-                "source": data_object,
-                "ingestion": {
-                    "parsed": parsed_by_id.get(document_id),
-                    "schema_id": initial_schema.schema_id if initial_schema else None,
+                "contract_version": "output-document-v3",
+                "document": _output_document(data_object, document, enriched),
+                "content": _output_content(document, enriched),
+                "retrieval": _compact_retrieval(
+                    state,
+                    document_id,
+                    parsed.metadata.get("image_files", []) if parsed else [],
+                ),
+                "lineage": {
+                    "run_id": state.run_id,
+                    "status": "succeeded",
+                    "schema_ids": {
+                        "ingested": initial_schema.schema_id if initial_schema else None,
+                        "cleaned": cleaned_schema.schema_id if cleaned_schema else None,
+                        "enriched": enriched_schema.schema_id if enriched_schema else None,
+                    },
+                    "completed_stages": list(state.completed_modules),
                 },
-                "cleaning": {
-                    "data": cleaned_by_id.get(document_id),
-                    "schema_id": cleaned_schema.schema_id if cleaned_schema else None,
-                },
-                "enrichment": {
-                    "data": enriched_by_id.get(document_id),
-                    "schema_id": enriched_schema.schema_id if enriched_schema else None,
-                },
-                **_retrieval_payload(state, document_id),
             },
             sort_keys=False,
         )
@@ -221,23 +243,22 @@ def write_output_artifacts(
             stage="output",
             document_summaries=_document_summaries(state),
             schemas={
-                "ingested": state.initial_schemas,
-                "cleaned": state.cleaned_schemas,
-                "enriched": state.enriched_schemas,
-                "index_record_types": sorted({record.index_type for record in state.index_records}),
+                "content_fields": _output_content_fields(state),
+                "source_reference": _source_reference_schema(),
+                "index_record_types": sorted(
+                    {record.index_type for record in state.index_records}
+                ),
                 "vector_dimension": state.embedding_report.get("dimension"),
             },
             document_schema={
                 "contract_version": "string",
-                "document_id": "string",
-                "source": "DataObject",
-                "ingestion": "object",
-                "cleaning": "object",
-                "enrichment": "object",
-                "retrieval": _retrieval_document_schema(),
+                "document": "consumer-facing document identity and source summary",
+                "content": "final semantic document content without parser audit fields",
+                "retrieval": _compact_retrieval_schema(),
+                "lineage": "run, status, stage, and schema references",
             },
             extra={
-                **_run_reports(state),
+                "summary": _run_summary(state),
                 "completed_modules": state.completed_modules,
                 "stage_dirs": {
                     "raw": state.raw_dir,
@@ -255,13 +276,72 @@ def write_output_artifacts(
     return ArtifactOutput(artifact_paths=state.artifact_paths)
 
 
-def _retrieval_payload(state: PipelineState, document_id: str) -> dict[str, Any]:
-    metadata_record = next(
-        (record for record in state.metadata_records if record.source_object_id == document_id),
-        None,
+def _output_document(
+    data_object: DataObject,
+    document: DocumentView | None,
+    enriched: EnrichedData | None,
+) -> dict[str, Any]:
+    metadata = data_object.metadata
+    payload: dict[str, Any] = {
+        "document_id": data_object.object_id,
+        "source_uri": data_object.uri,
+        "file_name": metadata.get("file_name"),
+        "content_type": data_object.content_type,
+        "size_bytes": metadata.get("size_bytes"),
+        "sha256": metadata.get("sha256"),
+        "title": document.title if document else None,
+        "document_type": document.document_type if document else None,
+        "language": document.language if document else None,
+    }
+    s3 = {
+        "bucket": metadata.get("s3_bucket"),
+        "key": metadata.get("s3_key"),
+        "etag": metadata.get("s3_etag"),
+        "version_id": metadata.get("s3_version_id"),
+    }
+    if any(value is not None for value in s3.values()):
+        payload["s3"] = _without_none(s3)
+    source_refs = _extraction_source_refs(
+        enriched,
+        ("document_type", "language", "title"),
     )
+    if source_refs:
+        payload["source_refs"] = source_refs
+    return _without_none(payload)
+
+
+def _output_content(
+    document: DocumentView | None,
+    enriched: EnrichedData | None,
+) -> dict[str, Any]:
+    if document is None:
+        return {"main_text": "", "tables": [], "figures": [], "formulas": []}
+    payload: dict[str, Any] = {
+        "main_text": document.main_text,
+        "tables": _strip_parser_audit(document.tables),
+        "figures": _strip_parser_audit(document.figures),
+        "formulas": _strip_parser_audit(document.formulas),
+    }
+    if enriched and enriched.annotations:
+        payload["annotations"] = _strip_parser_audit(enriched.annotations)
+    if enriched and enriched.profile:
+        payload["profile"] = _strip_parser_audit(enriched.profile)
+    source_refs = _extraction_source_refs(enriched, ("main_text",))
+    if source_refs:
+        payload["source_refs"] = source_refs
+    return payload
+
+
+def _compact_retrieval(
+    state: PipelineState,
+    document_id: str,
+    image_files: Any,
+) -> dict[str, Any]:
     index_records = [
-        record for record in state.index_records if record.source_object_id == document_id
+        record
+        for record in state.index_records
+        if record.source_object_id == document_id
+        and record.index_type in RETRIEVAL_ITEM_TYPES
     ]
     vectors_by_record: dict[str, list[dict[str, Any]]] = {}
     for vector in state.vector_records:
@@ -271,79 +351,230 @@ def _retrieval_payload(state: PipelineState, document_id: str) -> dict[str, Any]
         if record_id:
             vectors_by_record.setdefault(record_id, []).append(vector)
 
-    document_record = next(
-        (record for record in index_records if record.index_type == "document"),
-        None,
-    )
-    catalog_record = next(
-        (record for record in index_records if record.index_type == "catalog"),
-        None,
-    )
-    item_records = [
-        record for record in index_records if record.index_type in RETRIEVAL_ITEM_TYPES
-    ]
+    assets = image_files if isinstance(image_files, list) else []
     return {
-        "retrieval": {
-            "document": (
-                _retrieval_context_record(
-                    document_record,
-                    vectors_by_record.get(document_record.record_id, []),
+        "items": [
+            _compact_retrieval_item(
+                record,
+                vectors_by_record.get(record.record_id, []),
+                assets,
+            )
+            for record in index_records
+        ]
+    }
+
+
+def _compact_retrieval_item(
+    record: Any,
+    vectors: list[dict[str, Any]],
+    image_files: list[Any],
+) -> dict[str, Any]:
+    content = _strip_parser_audit(_retrieval_item_content(record))
+    item: dict[str, Any] = {
+        "item_id": _retrieval_item_id(record),
+        "type": RETRIEVAL_ITEM_TYPES[record.index_type],
+        "position": _without_none(_retrieval_item_position(record)),
+        "content": content,
+        "embeddings": [_compact_embedding(vector) for vector in vectors],
+    }
+    if record.index_type == "image":
+        image_index = record.payload.get("image_index")
+        if isinstance(image_index, int) and 0 <= image_index < len(image_files):
+            asset = image_files[image_index]
+            if isinstance(asset, dict):
+                item["asset"] = _without_none(
+                    {
+                        "name": asset.get("name"),
+                        "path": asset.get("path"),
+                    }
                 )
-                if document_record
-                else None
-            ),
-            "catalog": {
-                "metadata": metadata_record,
-                "index": (
-                    _retrieval_context_record(
-                        catalog_record,
-                        vectors_by_record.get(catalog_record.record_id, []),
-                    )
-                    if catalog_record
-                    else None
-                ),
-            },
-            "items": [
-                _retrieval_item(record, vectors_by_record.get(record.record_id, []))
-                for record in item_records
-            ],
+    return item
+
+
+def _compact_embedding(vector: dict[str, Any]) -> dict[str, Any]:
+    return _without_none(
+        {
+            "model": vector.get("embedding_model"),
+            "dimension": vector.get("embedding_dimension"),
+            "values": vector.get("embedding", []),
+        }
+    )
+
+
+def _strip_parser_audit(value: Any) -> Any:
+    """Remove provider audit fields while retaining normalized source references."""
+    if isinstance(value, list):
+        return [_strip_parser_audit(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    result: dict[str, Any] = {}
+    source_refs: list[dict[str, Any]] = []
+    for key, item in value.items():
+        if key == "source_refs":
+            source_refs.extend(_existing_source_refs(item))
+            continue
+        if key == "citations":
+            source_refs.extend(_normalize_source_refs(item))
+            continue
+        if key.endswith("_citations"):
+            source_refs.extend(
+                _normalize_source_refs(item, field=key.removesuffix("_citations"))
+            )
+            continue
+        if key in {"reasoning", "verification", "extraction_status"}:
+            continue
+        if key.endswith("_meta"):
+            continue
+        result[key] = _strip_parser_audit(item)
+    if source_refs:
+        result["source_refs"] = _deduplicate_source_refs(source_refs)
+    return result
+
+
+def _extraction_source_refs(
+    enriched: EnrichedData | None,
+    fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if enriched is None:
+        return []
+    source_refs: list[dict[str, Any]] = []
+    for row in enriched.rows:
+        extraction = row.get("extraction")
+        if not isinstance(extraction, dict):
+            continue
+        for field in fields:
+            source_refs.extend(
+                _normalize_source_refs(
+                    extraction.get(f"{field}_citations"),
+                    field=field,
+                )
+            )
+    return _deduplicate_source_refs(source_refs)
+
+
+def _normalize_source_refs(
+    value: Any,
+    *,
+    field: str | None = None,
+) -> list[dict[str, Any]]:
+    citations = value if isinstance(value, list) else [value]
+    refs: list[dict[str, Any]] = []
+    for citation in citations:
+        if not isinstance(citation, str) or not citation.strip():
+            continue
+        component_id = citation.strip()
+        ref: dict[str, Any] = {"component_id": component_id}
+        page_match = re.match(r"^/page/(\d+)(?:/|$)", component_id)
+        if page_match:
+            ref["page"] = int(page_match.group(1))
+        if field:
+            ref["field"] = field
+        refs.append(ref)
+    return refs
+
+
+def _existing_source_refs(value: Any) -> list[dict[str, Any]]:
+    candidates = value if isinstance(value, list) else [value]
+    refs: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not candidate.get("component_id"):
+            continue
+        refs.append(
+            _without_none(
+                {
+                    "component_id": str(candidate["component_id"]),
+                    "page": candidate.get("page"),
+                    "field": candidate.get("field"),
+                }
+            )
+        )
+    return refs
+
+
+def _deduplicate_source_refs(
+    source_refs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for ref in source_refs:
+        identity = (ref.get("component_id"), ref.get("page"), ref.get("field"))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(ref)
+    return unique
+
+
+def _without_none(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if item is not None}
+
+
+def _output_content_fields(state: PipelineState) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for schema in state.enriched_schemas:
+        fields.update(schema.fields)
+    return fields
+
+
+def _source_reference_schema() -> dict[str, str]:
+    return {
+        "component_id": "string; parser component path",
+        "page": "integer; page index parsed from component_id when available",
+        "field": "string; semantic field supported by the reference",
+    }
+
+
+def _run_summary(state: PipelineState) -> dict[str, Any]:
+    index_report = state.index_quality_report
+    embedding_report = state.embedding_report
+    return {
+        "indexing": _without_none(
+            {
+                "status": index_report.get("status"),
+                "record_count": index_report.get("record_count"),
+                "counts_by_type": index_report.get("counts_by_index_type"),
+            }
+        ),
+        "embedding": _without_none(
+            {
+                "status": embedding_report.get("status"),
+                "provider": embedding_report.get("provider"),
+                "model": embedding_report.get("model"),
+                "dimension": embedding_report.get("dimension"),
+                "generated_count": embedding_report.get("generated_count"),
+                "skipped_count": embedding_report.get("skipped_count"),
+            }
+        ),
+        "integration": {
+            "schema_match_count": len(state.schema_matches),
+            "entity_match_count": len(state.entity_matches),
+            "relationship_count": len(state.relationship_records),
         },
     }
 
 
-def _retrieval_context_record(
-    record: Any,
-    vectors: list[dict[str, Any]],
-) -> dict[str, Any]:
-    payload = {
-        key: value
-        for key, value in record.payload.items()
-        if key not in {"embedding", "embedding_model", "embedding_status"}
-    }
+def _compact_retrieval_schema() -> dict[str, Any]:
     return {
-        "record_id": record.record_id,
-        "index_type": record.index_type,
-        "source_object_id": record.source_object_id,
-        **payload,
-        "embeddings": [_nested_embedding(vector) for vector in vectors],
-        "metadata": record.metadata,
-    }
-
-
-def _retrieval_item(record: Any, vectors: list[dict[str, Any]]) -> dict[str, Any]:
-    item_type = RETRIEVAL_ITEM_TYPES[record.index_type]
-    payload = record.payload
-    return {
-        "item_id": _retrieval_item_id(record),
-        "type": item_type,
-        "record_id": record.record_id,
-        "document_id": payload.get("document_id") or record.source_object_id,
-        "source_object_id": record.source_object_id,
-        "position": _retrieval_item_position(record),
-        "content": _retrieval_item_content(record),
-        "embedding_text": payload.get("embedding_text", ""),
-        "embeddings": [_nested_embedding(vector) for vector in vectors],
-        "metadata": record.metadata,
+        "items": [
+            {
+                "item_id": "string; stable component id",
+                "type": "text|table|image",
+                "position": "source position",
+                "content": (
+                    "consumer content without parser audit fields; may contain "
+                    "normalized source_refs"
+                ),
+                "asset": "object; optional parsed image asset",
+                "embeddings": [
+                    {
+                        "model": "string",
+                        "dimension": "integer",
+                        "values": "number[]",
+                    }
+                ],
+            }
+        ]
     }
 
 
@@ -386,45 +617,6 @@ def _retrieval_item_content(record: Any) -> dict[str, Any]:
     return dict(image) if isinstance(image, dict) else {"content": image}
 
 
-def _nested_embedding(vector: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "vector_id": vector.get("vector_id"),
-        "model": vector.get("embedding_model"),
-        "dimension": vector.get("embedding_dimension"),
-        "status": vector.get("embedding_status"),
-        "values": vector.get("embedding", []),
-        "metadata": vector.get("metadata", {}),
-    }
-
-
-def _retrieval_document_schema() -> dict[str, Any]:
-    return {
-        "document": "IndexRecord|null; document-level retrieval context",
-        "catalog": {
-            "metadata": "MetadataRecord|null",
-            "index": "IndexRecord|null; catalog-level retrieval context",
-        },
-        "items": [
-            {
-                "item_id": "string; stable component id",
-                "type": "text|table|image",
-                "record_id": "string; source index record id",
-                "document_id": "string",
-                "source_object_id": "string",
-                "position": {
-                    "index": "integer",
-                    "start_char": "integer; text only",
-                    "end_char": "integer; text only",
-                },
-                "content": "object; shape depends on type",
-                "embedding_text": "string; exact text sent to the embedding provider",
-                "embeddings": "Embedding[]",
-                "metadata": "object",
-            }
-        ],
-    }
-
-
 def _document_summaries(state: PipelineState) -> list[dict[str, Any]]:
     return [
         {
@@ -436,21 +628,6 @@ def _document_summaries(state: PipelineState) -> list[dict[str, Any]]:
         }
         for record in state.data_objects
     ]
-
-
-def _run_reports(state: PipelineState) -> dict[str, Any]:
-    return {
-        "reports": {
-            "index_quality": state.index_quality_report,
-            "embedding": state.embedding_report,
-            "integration": {
-                "mode": "indexing-pass-through",
-                "schema_matches": state.schema_matches,
-                "entity_matches": state.entity_matches,
-                "relationship_records": state.relationship_records,
-            },
-        }
-    }
 
 
 def _stage_mode(records: list[Any]) -> str:
