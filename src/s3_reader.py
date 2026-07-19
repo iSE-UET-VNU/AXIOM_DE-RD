@@ -167,14 +167,36 @@ def download_all_presigned_s3_info(
     """Download every valid presigned object from one S3 inventory."""
     path = Path(info_path)
     inventory = _load_s3_info(path)
-    bucket = _inventory_bucket(inventory, path)
-    inventory_entries = _presigned_entries(inventory.get("files"), path)
+    return download_all_presigned_s3_inventory(
+        inventory=inventory,
+        destination_dir=destination_dir,
+        file_name=file_name,
+        max_size_bytes=max_size_bytes,
+        timeout_seconds=timeout_seconds,
+        source=path,
+    )
+
+
+def download_all_presigned_s3_inventory(
+    *,
+    inventory: dict[str, Any],
+    destination_dir: str | Path,
+    file_name: str | None = None,
+    max_size_bytes: int = DEFAULT_MAX_SIZE_BYTES,
+    timeout_seconds: float = 60.0,
+    source: str | Path = "request payload",
+) -> DownloadedObjectBatch:
+    """Download every object from an in-memory presigned S3 inventory."""
+    if not isinstance(inventory, dict):
+        raise ValueError(f"S3 inventory must contain a JSON object: {source}")
+    bucket = _inventory_bucket(inventory, source)
+    inventory_entries = _presigned_entries(inventory.get("files"), source)
     entries = [entry for entry in inventory_entries if not str(entry["key"]).endswith("/")]
     skipped_count = len(inventory_entries) - len(entries)
     if skipped_count:
         logger.info("Skipping %s S3 folder marker(s) from the inventory", skipped_count)
     if not entries:
-        raise RuntimeError(f"No downloadable file objects found in S3 info file: {path}")
+        raise RuntimeError(f"No downloadable file objects found in S3 inventory: {source}")
     destination = Path(destination_dir)
     objects: list[DownloadedObject] = []
     for index, entry in enumerate(entries):
@@ -202,10 +224,21 @@ def read_all_presigned_s3_inputs(
     destination_dir: str | Path,
     *,
     s3_info_file: str | Path | None = None,
+    inventory: dict[str, Any] | None = None,
     project_root: str | Path | None = None,
 ) -> DownloadedObjectBatch:
-    """Resolve the configured inventory and download every presigned object."""
+    """Resolve a file-backed or in-memory inventory and download every object."""
     config = S3InputConfig.from_mapping(config_value)
+    if inventory is not None:
+        if s3_info_file is not None:
+            raise ValueError("Use either inventory or s3_info_file, not both.")
+        return download_all_presigned_s3_inventory(
+            inventory=inventory,
+            destination_dir=destination_dir,
+            file_name=config.file_name,
+            max_size_bytes=config.max_size_bytes,
+            timeout_seconds=config.request_timeout_seconds,
+        )
     configured_info_file = s3_info_file or config.info_file
     if not configured_info_file:
         raise RuntimeError(
@@ -426,9 +459,12 @@ def _select_presigned_entry(
     )
 
 
-def _presigned_entries(value: Any, info_path: Path) -> list[dict[str, Any]]:
+def _presigned_entries(
+    value: Any,
+    source: str | Path,
+) -> list[dict[str, Any]]:
     if not isinstance(value, list):
-        raise ValueError(f"S3 info file is missing a files array: {info_path}")
+        raise ValueError(f"S3 inventory is missing a files array: {source}")
     entries = [
         entry
         for entry in value
@@ -437,14 +473,14 @@ def _presigned_entries(value: Any, info_path: Path) -> list[dict[str, Any]]:
         and _optional_string(entry.get("presigned_url"))
     ]
     if not entries:
-        raise ValueError(f"S3 info file has no downloadable objects: {info_path}")
+        raise ValueError(f"S3 inventory has no downloadable objects: {source}")
     return entries
 
 
-def _inventory_bucket(inventory: dict[str, Any], info_path: Path) -> str:
+def _inventory_bucket(inventory: dict[str, Any], source: str | Path) -> str:
     bucket = _optional_string(inventory.get("bucket"))
     if not bucket:
-        raise ValueError(f"S3 info file is missing a bucket: {info_path}")
+        raise ValueError(f"S3 inventory is missing a bucket: {source}")
     return bucket
 
 

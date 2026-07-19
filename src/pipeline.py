@@ -36,6 +36,7 @@ MODULE_ORDER = [
 def run_pipeline(
     config_path: str | Path = "configs/pipeline.yaml",
     *,
+    presigned_inventory: dict[str, Any] | None = None,
     s3_uri: str | None = None,
     s3_info_file: str | Path | None = None,
     s3_object_key: str | None = None,
@@ -89,11 +90,16 @@ def run_pipeline(
         input_mode = _resolve_input_mode(
             input_config,
             s3_config,
+            presigned_inventory=presigned_inventory,
             s3_uri=s3_uri,
             s3_info_file=s3_info_file,
             local_raw=local_raw,
         )
-        process_all_objects = s3_all_objects or bool(s3_config.get("all_objects", False))
+        process_all_objects = (
+            presigned_inventory is not None
+            or s3_all_objects
+            or bool(s3_config.get("all_objects", False))
+        )
         if process_all_objects and input_mode != "presigned_info":
             raise ValueError("s3_all_objects requires presigned_info input.")
         if process_all_objects and s3_object_key:
@@ -144,6 +150,7 @@ def run_pipeline(
                     resolved_s3_config,
                     raw_objects_dir,
                     s3_info_file=s3_info_file,
+                    inventory=presigned_inventory,
                     project_root=project_root,
                 )
                 state.input_source = batch.source
@@ -428,6 +435,7 @@ def _resolve_input_mode(
     input_config: dict[str, Any],
     s3_config: dict[str, Any],
     *,
+    presigned_inventory: dict[str, Any] | None,
     s3_uri: str | None,
     s3_info_file: str | Path | None,
     local_raw: str | Path | None,
@@ -435,6 +443,7 @@ def _resolve_input_mode(
     explicit_modes = [
         mode
         for mode, value in (
+            ("presigned_info", presigned_inventory),
             ("s3_uri", s3_uri),
             ("presigned_info", s3_info_file),
             ("local_raw", local_raw),

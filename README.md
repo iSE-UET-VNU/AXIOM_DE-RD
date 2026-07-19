@@ -68,7 +68,6 @@ Copy the example environment file and provide the required credentials:
 cp .env.example .env
 ```
 
-
 ## Configuration
 
 The main configuration file is `configs/pipeline.yaml`. It is intentionally
@@ -145,6 +144,39 @@ python scripts/run_pipeline.py \
   --config configs/pipeline.yaml \
   --local-raw data/raw/omnidocbench_subset
 ```
+
+## REST API
+
+Start the synchronous REST service with:
+
+```bash
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+```
+
+Submit a batch of presigned S3 objects:
+
+```bash
+curl -X POST http://localhost:8000/v1/dataeng \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "bucket": "example-bucket",
+    "files": [
+      {
+        "key": "document.pdf",
+        "presigned_url": "https://example.invalid/presigned-document-url"
+      }
+    ]
+  }'
+```
+
+The response groups the existing final artifacts without changing their
+contracts: `metadata` contains `data/output/<run_id>/metadata.json`, and
+`documents` contains the corresponding `output-document-v3` JSON objects.
+The existing CLI and all other input modes remain available.
+
+Health checks are exposed at `/health/live` and `/health/ready`. Interactive
+OpenAPI documentation is available at `/docs`.
+
 
 ## Output Artifacts
 
