@@ -14,10 +14,23 @@ import os
 import time
 
 from ....models import DataObject, ParsedData
+from ....reading_order import (
+    parse_document_json,
+    source_blocks_from_parser_json,
+)
 from ....utils.paths import portable_path_value
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas/document_components.json"
+
+
+class LiftAPIRequestError(RuntimeError):
+    """Actionable Lift provider failure safe to surface to API/UI consumers."""
+
+    def __init__(self, message: str, *, status_code: int, operation: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.operation = operation
 
 
 @dataclass
@@ -73,24 +86,48 @@ class LiftAPIParserClient:
 
         schema = _load_schema(self.config.schema_path)
         client = DatalabClient()
-        options = ExtractOptions(page_schema=json.dumps(schema), mode=self.config.mode)
+        options = ExtractOptions(
+            page_schema=json.dumps(schema),
+            mode=self.config.mode,
+            output_format="json",
+        )
 
         started = time.monotonic()
-        result = client.extract(str(file_path), options=options)
+        try:
+            result = client.extract(str(file_path), options=options)
+        except Exception as exc:
+            request_error = _lift_api_request_error(exc, operation="extract")
+            if request_error is not None:
+                raise request_error from None
+            raise
         raw_json = _get_attr(result, "extraction_schema_json")
         extraction = _parse_extraction(raw_json)
+        document_json = parse_document_json(_get_attr(result, "json", {}))
+        source_blocks = source_blocks_from_parser_json(
+            document_json,
+            extraction if isinstance(extraction, dict) else {},
+        )
+        reading_order_is_complete = bool(source_blocks) and all(
+            block.get("source") == "parser_json" for block in source_blocks
+        )
         images = _normalize_images(_get_attr(result, "images", {}))
         image_source = "extract"
         conversion = None
         if self.config.extract_images and not images:
-            conversion = client.convert(
-                str(file_path),
-                options=ConvertOptions(
-                    mode=self.config.mode,
-                    disable_image_extraction=False,
-                    output_format="markdown",
-                ),
-            )
+            try:
+                conversion = client.convert(
+                    str(file_path),
+                    options=ConvertOptions(
+                        mode=self.config.mode,
+                        disable_image_extraction=False,
+                        output_format="markdown",
+                    ),
+                )
+            except Exception as exc:
+                request_error = _lift_api_request_error(exc, operation="convert")
+                if request_error is not None:
+                    raise request_error from None
+                raise
             images = _normalize_images(_get_attr(conversion, "images", {}))
             image_source = "convert"
 
@@ -123,6 +160,7 @@ class LiftAPIParserClient:
             "page_count": _get_attr(result, "page_count"),
             "latency_seconds": round(time.monotonic() - started, 3),
             "extraction": extraction,
+            "source_block_count": len(source_blocks),
             "images": images,
             "image_files": image_files,
             "image_source": image_source,
@@ -143,7 +181,16 @@ class LiftAPIParserClient:
             object_id=data_object.object_id,
             source_uri=data_object.uri,
             source_format=str(data_object.metadata.get("format", file_path.suffix.lstrip("."))),
-            rows=[{"extraction": extraction, "text": text}],
+            rows=[
+                {
+                    "extraction": extraction,
+                    "text": text,
+                    "source_blocks": source_blocks,
+                    "reading_order": [
+                        block["component_id"] for block in source_blocks
+                    ],
+                }
+            ],
             text=text,
             metadata={
                 "parser": "lift-api",
@@ -156,6 +203,15 @@ class LiftAPIParserClient:
                 "image_files": image_files,
                 "image_source": image_source,
                 "raw_lift_outputs": raw_output_paths,
+                "reading_order_source": (
+                    "parser_json"
+                    if reading_order_is_complete
+                    else "structured_extraction_citations"
+                    if source_blocks
+                    else "unavailable"
+                ),
+                "reading_order_complete": reading_order_is_complete,
+                "source_block_count": len(source_blocks),
             },
         )
 
@@ -446,3 +502,32 @@ def _optional_str(value: Any) -> str | None:
     if value in {None, ""}:
         return None
     return str(value)
+
+
+def _lift_api_request_error(
+    error: Exception,
+    *,
+    operation: str,
+) -> LiftAPIRequestError | None:
+    status_code = getattr(error, "status_code", None)
+    if not isinstance(status_code, int):
+        return None
+
+    messages = {
+        401: "Datalab API key không hợp lệ hoặc đã hết hiệu lực.",
+        402: (
+            "Datalab API trả về 402 Payment Required. Tài khoản/API key hiện không "
+            "còn credit; hãy nạp credit trên Datalab rồi chạy lại pipeline."
+        ),
+        403: "Datalab API key không có quyền thực hiện yêu cầu này.",
+        429: "Datalab API đang giới hạn tần suất yêu cầu; hãy đợi rồi chạy lại.",
+    }
+    message = messages.get(
+        status_code,
+        f"Datalab API thất bại ở bước {operation} với HTTP {status_code}.",
+    )
+    return LiftAPIRequestError(
+        message,
+        status_code=status_code,
+        operation=operation,
+    )

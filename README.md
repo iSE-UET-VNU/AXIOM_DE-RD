@@ -171,11 +171,32 @@ curl -X POST http://localhost:8000/v1/dataeng \
 
 The response groups the existing final artifacts without changing their
 contracts: `metadata` contains `data/output/<run_id>/metadata.json`, and
-`documents` contains the corresponding `output-document-v3` JSON objects.
+`documents` contains the corresponding `output-document-v4` JSON objects.
 The existing CLI and all other input modes remain available.
 
 Health checks are exposed at `/health/live` and `/health/ready`. Interactive
 OpenAPI documentation is available at `/docs`.
+
+## Streamlit Demo
+
+Start the interactive demo from the repository root:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+The app opens existing persisted runs immediately, so it can be demonstrated
+without calling external services. The **Run pipeline** page accepts a batch of
+PDF, PNG, or JPEG files. Parsing new files uses `DATALAB_API_KEY`; the demo uses
+local hash embeddings and does not require `OPENROUTER_API_KEY`.
+
+The demo includes:
+
+- multi-document upload and synchronous pipeline execution;
+- exploration of both current `output-document-v4` and legacy artifacts;
+- side-by-side raw document and reading-order parsing content comparison;
+- chunking, embeddings, lineage, and raw JSON views;
+- per-document JSON and full-run ZIP downloads.
 
 
 ## Output Artifacts
@@ -218,9 +239,16 @@ data/embedded/<run_id>/
 
 data/output/<run_id>/
 ├── documents/
-│   └── <document_id>.json              # Compact semantic content plus retrieval vectors
+│   └── <document_id>.json              # Semantic content, source blocks, reading order, retrieval
 └── metadata.json                       # Common document schema and compact run summary
 ```
+
+`output-document-v4` stores parser-native source components in
+`content.blocks`, their ordered component IDs in `content.reading_order`, and
+provenance/completeness in `content.reading_order_meta`. New Lift runs use JSON
+output so the order includes text, headings, equations, figures, captions, and
+tables. Older artifacts can be reconstructed from structured-extraction
+citations, with `reading_order_meta.complete` set to `false`.
 
 An ingested quarantine record uses `status: "quarantined"`, has no `schema_id`,
 and includes machine-readable failure reasons such as `zero_page_count`,
@@ -232,5 +260,5 @@ For `--local-raw`, source files are read in place and are not copied into a new
 `raw/<run_id>` directory.
 
 By default, `parsing.lift_api.save_raw_outputs` is `false`. Set it to `true`
-only when full Lift responses and Markdown are needed under each document's
+only when full Lift responses and rendered JSON/Markdown are needed under each document's
 `assets/<document_id>/debug/` directory.

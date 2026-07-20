@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from ..indexing_cataloging.index_builder import DocumentView, document_from_enriched_data
-from ..models import DataObject, EnrichedData, PipelineState
+from ..models import DataObject, EnrichedData, ParsedData, PipelineState
+from ..reading_order import reading_order_from_rows
 from ..utils.paths import portable_path
 from .manifests import build_stage_metadata
 from .writer import LocalArtifactWriter
@@ -214,9 +215,9 @@ def write_output_artifacts(
         paths[f"output_document:{document_id}"] = writer.write_json(
             f"documents/{document_id}.json",
             {
-                "contract_version": "output-document-v3",
+                "contract_version": "output-document-v4",
                 "document": _output_document(data_object, document, enriched),
-                "content": _output_content(document, enriched),
+                "content": _output_content(document, enriched, parsed),
                 "retrieval": _compact_retrieval(
                     state,
                     document_id,
@@ -253,7 +254,9 @@ def write_output_artifacts(
             document_schema={
                 "contract_version": "string",
                 "document": "consumer-facing document identity and source summary",
-                "content": "final semantic document content without parser audit fields",
+                "content": (
+                    "semantic content plus ordered source blocks and reading-order provenance"
+                ),
                 "retrieval": _compact_retrieval_schema(),
                 "lineage": "run, status, stage, and schema references",
             },
@@ -313,20 +316,43 @@ def _output_document(
 def _output_content(
     document: DocumentView | None,
     enriched: EnrichedData | None,
+    parsed: ParsedData | None = None,
 ) -> dict[str, Any]:
     if document is None:
-        return {"main_text": "", "tables": [], "figures": [], "formulas": []}
+        return {
+            "main_text": "",
+            "tables": [],
+            "figures": [],
+            "formulas": [],
+            "blocks": [],
+            "reading_order": [],
+            "reading_order_meta": {
+                "source": "unavailable",
+                "complete": False,
+                "block_count": 0,
+            },
+        }
+    if enriched is not None:
+        source_rows = enriched.rows
+    elif parsed is not None:
+        source_rows = parsed.rows
+    else:
+        source_rows = []
+    blocks, reading_order, reading_order_meta = reading_order_from_rows(source_rows)
     payload: dict[str, Any] = {
         "main_text": document.main_text,
         "tables": _strip_parser_audit(document.tables),
         "figures": _strip_parser_audit(document.figures),
         "formulas": _strip_parser_audit(document.formulas),
+        "blocks": blocks,
+        "reading_order": reading_order,
+        "reading_order_meta": reading_order_meta,
     }
     if enriched and enriched.annotations:
         payload["annotations"] = _strip_parser_audit(enriched.annotations)
     if enriched and enriched.profile:
         payload["profile"] = _strip_parser_audit(enriched.profile)
-    source_refs = _extraction_source_refs(enriched, ("main_text",))
+    source_refs = _extraction_source_refs(enriched, ("main_text", "formulas"))
     if source_refs:
         payload["source_refs"] = source_refs
     return payload
