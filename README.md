@@ -93,7 +93,10 @@ Install only the optional document provider you use:
 
 ```bash
 python -m pip install -e ".[lift]"
+# Chandra2 through a vLLM server
 python -m pip install -e ".[chandra2]"
+# Chandra2 loaded directly with HuggingFace on the local machine
+python -m pip install -e ".[chandra2-local]"
 ```
 
 The pipeline loads `.env` from the project root automatically. Text/table-only
@@ -106,10 +109,38 @@ DATALAB_API_KEY=
 VLLM_API_BASE=http://localhost:8000/v1
 VLLM_MODEL_NAME=chandra
 VLLM_API_KEY=EMPTY
+MODEL_CHECKPOINT=datalab-to/chandra-ocr-2
+# Empty uses device_map="auto"; use cuda to require full-GPU placement.
+TORCH_DEVICE=
 OPENROUTER_API_KEY=
 MILVUS_URI=
 MILVUS_TOKEN=
 ```
+
+Chandra2 supports two inference methods through the same document provider. The
+default `vllm` method calls a separately running vLLM server. The `hf` method
+(also accepted as `local`) loads the HuggingFace model directly in the pipeline
+process and uses `TORCH_DEVICE` when it is set:
+
+```json
+{
+  "parsing": {
+    "provider": "router",
+    "document": {"provider": "chandra2"},
+    "chandra2": {
+      "method": "hf",
+      "batch_size": 1,
+      "save_raw_outputs": true
+    }
+  }
+}
+```
+
+When `batch_size` is omitted, it defaults to `28` for `vllm` and `1` for `hf`.
+Local inference downloads `MODEL_CHECKPOINT` on first use unless it is already
+present in the HuggingFace cache. It does not require `VLLM_API_BASE`. Leave
+`TORCH_DEVICE` empty to let Accelerate choose GPU/CPU placement, or set it to
+`cuda` only when the complete model fits in GPU memory.
 
 The Chandra code package and model weights use different licenses. Review the
 [model's commercial-use terms](https://github.com/datalab-to/chandra#commercial-usage)

@@ -102,6 +102,20 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertEqual(backend.provider.config.batch_size, 7)
         self.assertTrue(backend.fallback_to_deferred)
 
+    def test_local_alias_builds_hf_provider_with_safe_batch_default(self) -> None:
+        service = ParsingService.from_config(
+            {
+                "document": {"provider": "chandra2"},
+                "chandra2": {"method": "local"},
+            }
+        )
+
+        backend = service.router.resolve(Path("scan.pdf"))
+        self.assertIsInstance(backend, DocumentParser)
+        self.assertIsInstance(backend.provider, Chandra2Provider)
+        self.assertEqual(backend.provider.config.method, "hf")
+        self.assertEqual(backend.provider.config.batch_size, 1)
+
     def test_chandra_defers_pptx_without_loading_runtime(self) -> None:
         with patch("src.ingestion.parsing.chandra2._load_runtime") as load_runtime:
             service = ParsingService.from_config(
@@ -147,7 +161,8 @@ class Chandra2ProviderTests(unittest.TestCase):
                 _runtime_loader=lambda: _runtime(pages, manager),
             )
 
-            parsed = provider.parse_file(path, _data_object(path))
+            with patch.dict("os.environ", {"VLLM_MODEL_NAME": "chandra-test"}):
+                parsed = provider.parse_file(path, _data_object(path))
             bundle = root / "outputs" / "scan--document-1"
             metadata = json.loads(
                 (bundle / "metadata.json").read_text(encoding="utf-8")
@@ -174,6 +189,42 @@ class Chandra2ProviderTests(unittest.TestCase):
         )
         self.assertEqual(metadata["page_count"], 3)
         self.assertEqual(metadata["token_count"], 12)
+        self.assertEqual(metadata["method"], "vllm")
+        self.assertEqual(metadata["model_name"], "chandra-test")
+
+    def test_hf_method_runs_in_process_without_vllm_options(self) -> None:
+        manager = _FakeManager({"page-1": _result("Local result", 2)})
+        manager_methods: list[str] = []
+        runtime = _ChandraRuntime(
+            load_file=lambda path, config: ["page-1"],
+            inference_manager=lambda **kwargs: (
+                manager_methods.append(str(kwargs["method"])) or manager
+            ),
+            batch_input_item=_FakeBatchInput,
+        )
+        provider = Chandra2Provider(
+            Chandra2Config.from_mapping(
+                {"method": "hf", "save_raw_outputs": False}
+            ),
+            _runtime_loader=lambda: runtime,
+        )
+
+        with patch.dict(
+            "os.environ", {"MODEL_CHECKPOINT": "datalab-to/chandra-ocr-2-test"}
+        ):
+            parsed = provider.parse_file(
+                Path("scan.pdf"), _data_object(Path("scan.pdf"))
+            )
+
+        self.assertEqual(manager_methods, ["hf"])
+        self.assertEqual(parsed.text, "Local result")
+        self.assertEqual(parsed.metadata["method"], "hf")
+        self.assertEqual(
+            parsed.metadata["model_name"], "datalab-to/chandra-ocr-2-test"
+        )
+        self.assertEqual(len(manager.calls), 1)
+        self.assertNotIn("max_workers", manager.calls[0][1])
+        self.assertNotIn("max_retries", manager.calls[0][1])
 
     def test_any_failed_page_fails_the_document_without_partial_artifacts(self) -> None:
         pages = ["page-1", "page-2"]
@@ -202,6 +253,8 @@ class Chandra2ProviderTests(unittest.TestCase):
             Chandra2Config.from_mapping({"batch_size": 0})
         with self.assertRaisesRegex(ValueError, "max_retries"):
             Chandra2Config.from_mapping({"max_retries": -1})
+        with self.assertRaisesRegex(ValueError, "method"):
+            Chandra2Config.from_mapping({"method": "unknown"})
 
     def test_parser_config_resolves_chandra_output_into_run_work_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -20,6 +20,7 @@
       "fallback_to_deferred": false
     },
     "chandra2": {
+      "method": "vllm",
       "batch_size": 28,
       "max_workers": 4,
       "max_output_tokens": 12384,

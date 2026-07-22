@@ -13,6 +13,7 @@ dependencies = [
 [project.optional-dependencies]
 lift = ["datalab-python-sdk"]
 chandra2 = ["chandra-ocr>=0.2,<0.3"]
+chandra2-local = ["chandra-ocr[hf]>=0.2,<0.3"]
 
 [tool.setuptools.package-data]
 "src.storage.schemas" = ["*.json"]

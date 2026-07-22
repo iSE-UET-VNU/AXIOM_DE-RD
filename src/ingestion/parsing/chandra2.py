@@ -20,8 +20,9 @@ CHANDRA2_EXTENSIONS = frozenset(
 
 @dataclass(frozen=True)
 class Chandra2Config:
-    """Runtime and artifact settings for Chandra2 vLLM inference."""
+    """Runtime and artifact settings for Chandra2 inference."""
 
+    method: str = "vllm"
     batch_size: int = 28
     max_workers: int = 4
     max_output_tokens: int = 12384
@@ -34,8 +35,14 @@ class Chandra2Config:
     @classmethod
     def from_mapping(cls, config: dict[str, Any] | None) -> "Chandra2Config":
         config = config or {}
+        method = _inference_method(config.get("method", "vllm"))
         return cls(
-            batch_size=_positive_int(config, "batch_size", 28),
+            method=method,
+            batch_size=_positive_int(
+                config,
+                "batch_size",
+                1 if method == "hf" else 28,
+            ),
             max_workers=_positive_int(config, "max_workers", 4),
             max_output_tokens=_positive_int(config, "max_output_tokens", 12384),
             max_retries=_non_negative_int(config, "max_retries", 6),
@@ -92,16 +99,17 @@ class Chandra2Provider:
                 runtime.batch_input_item(image=image, prompt_type="ocr_layout")
                 for image in page_batch
             ]
-            generated = list(
-                self._get_manager().generate(
-                    batch,
-                    include_images=False,
-                    include_headers_footers=self.config.include_headers_footers,
-                    max_output_tokens=self.config.max_output_tokens,
+            generate_options: dict[str, Any] = {
+                "include_images": False,
+                "include_headers_footers": self.config.include_headers_footers,
+                "max_output_tokens": self.config.max_output_tokens,
+            }
+            if self.config.method == "vllm":
+                generate_options.update(
                     max_workers=self.config.max_workers,
                     max_retries=self.config.max_retries,
                 )
-            )
+            generated = list(self._get_manager().generate(batch, **generate_options))
             if len(generated) != len(batch):
                 raise RuntimeError(
                     "Chandra2 returned a different number of results than input pages."
@@ -142,8 +150,8 @@ class Chandra2Provider:
             text=markdown,
             metadata={
                 "parser": "chandra2",
-                "method": "vllm",
-                "model_name": os.getenv("VLLM_MODEL_NAME", "chandra"),
+                "method": self.config.method,
+                "model_name": _model_name(self.config.method),
                 "page_count": len(results),
                 "token_count": token_count,
                 "latency_seconds": latency_seconds,
@@ -159,7 +167,17 @@ class Chandra2Provider:
 
     def _get_manager(self) -> Any:
         if self._manager is None:
-            self._manager = self._get_runtime().inference_manager(method="vllm")
+            try:
+                self._manager = self._get_runtime().inference_manager(
+                    method=self.config.method
+                )
+            except ImportError as exc:
+                if self.config.method == "hf":
+                    raise RuntimeError(
+                        "Chandra2 local inference requires the HuggingFace extras. "
+                        'Install them with: pip install -e ".[chandra2-local]"'
+                    ) from exc
+                raise
         return self._manager
 
 
@@ -198,6 +216,8 @@ def _write_raw_outputs(
             {
                 "source_object_id": data_object.object_id,
                 "file_name": file_path.name,
+                "method": config.method,
+                "model_name": _model_name(config.method),
                 "page_count": len(results),
                 "token_count": sum(
                     int(getattr(result, "token_count", 0) or 0)
@@ -231,6 +251,23 @@ def _positive_int(config: dict[str, Any], name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"chandra2.{name} must be greater than zero")
     return value
+
+
+def _inference_method(value: Any) -> str:
+    method = str(value).strip().lower().replace("-", "_")
+    if method == "vllm":
+        return "vllm"
+    if method in {"hf", "local", "huggingface", "hugging_face"}:
+        return "hf"
+    raise ValueError(
+        "chandra2.method must be 'vllm' or 'hf' (alias: 'local')"
+    )
+
+
+def _model_name(method: str) -> str:
+    if method == "hf":
+        return os.getenv("MODEL_CHECKPOINT", "datalab-to/chandra-ocr-2")
+    return os.getenv("VLLM_MODEL_NAME", "chandra")
 
 
 def _non_negative_int(config: dict[str, Any], name: str, default: int) -> int:
