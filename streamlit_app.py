@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 import html
+from html.parser import HTMLParser
 from importlib.util import find_spec
 import json
 import logging
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -45,6 +48,90 @@ st.set_page_config(
 )
 
 SUPPORTED_UPLOAD_TYPES = ["pdf", "png", "jpg", "jpeg"]
+DISPLAY_TITLE_OVERRIDES = {
+    "5.4. Data size analysis (RQ4)": "Analysis",
+}
+RUN_PAGE = "Run pipeline"
+RESULTS_PAGE = "Explore results"
+LEGACY_PAGE_NAMES = {
+    "Chạy pipeline": RUN_PAGE,
+    "Khám phá kết quả": RESULTS_PAGE,
+    "Pipeline overview": RUN_PAGE,
+}
+
+
+class _OutputHTMLSanitizer(HTMLParser):
+    """Keep parser content markup while dropping executable or styling markup."""
+
+    ALLOWED_TAGS = {
+        "a",
+        "b",
+        "blockquote",
+        "br",
+        "caption",
+        "code",
+        "div",
+        "em",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "i",
+        "li",
+        "math",
+        "mi",
+        "mn",
+        "mo",
+        "mrow",
+        "msub",
+        "msup",
+        "ol",
+        "p",
+        "pre",
+        "span",
+        "strong",
+        "sub",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
+    }
+    VOID_TAGS = {"br"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized = tag.casefold()
+        if normalized not in self.ALLOWED_TAGS:
+            return
+        safe_attrs = ""
+        if normalized in {"td", "th"}:
+            spans = []
+            for name, value in attrs:
+                if name.casefold() in {"colspan", "rowspan"} and value and value.isdigit():
+                    spans.append(f" {name.casefold()}='{html.escape(value, quote=True)}'")
+            safe_attrs = "".join(spans)
+        self.parts.append(f"<{normalized}{safe_attrs}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.casefold()
+        if normalized in self.ALLOWED_TAGS and normalized not in self.VOID_TAGS:
+            self.parts.append(f"</{normalized}>")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(html.escape(data))
 
 
 def main() -> None:
@@ -52,10 +139,13 @@ def main() -> None:
     _inject_styles()
     next_page = st.session_state.pop("_next_page", None)
     if next_page:
-        st.session_state["page"] = next_page
+        st.session_state["page"] = LEGACY_PAGE_NAMES.get(next_page, next_page)
+    current_page = st.session_state.get("page")
+    if current_page in LEGACY_PAGE_NAMES:
+        st.session_state["page"] = LEGACY_PAGE_NAMES[current_page]
     page = _sidebar()
     runs = discover_runs()
-    if page == "Chạy pipeline":
+    if page == RUN_PAGE:
         _render_pipeline_runner()
     else:
         _render_run_explorer(runs)
@@ -65,7 +155,6 @@ def _sidebar() -> str:
     with st.sidebar:
         st.markdown(
             """
-            <div class="brand-mark">AX</div>
             <div class="brand-title">AXIOM</div>
             <div class="brand-subtitle">DOCUMENT INTELLIGENCE</div>
             """,
@@ -73,8 +162,8 @@ def _sidebar() -> str:
         )
         st.markdown("<div class='sidebar-rule'></div>", unsafe_allow_html=True)
         page = st.radio(
-            "Điều hướng",
-            ["Chạy pipeline", "Khám phá kết quả"],
+            "Navigation",
+            [RUN_PAGE, RESULTS_PAGE],
             label_visibility="collapsed",
             key="page",
         )
@@ -85,22 +174,22 @@ def _sidebar() -> str:
 
 def _render_pipeline_runner() -> None:
     _hero(
-        "Chạy pipeline",
-        "Upload PDF hoặc ảnh để parse và tạo output artifact.",
+        "Run pipeline",
+        "Upload PDF or image files to parse and generate output artifacts.",
         "NEW RUN",
     )
     parser_key_ready = bool(os.getenv("DATALAB_API_KEY"))
     parser_sdk_ready = find_spec("datalab_sdk") is not None
     if not parser_sdk_ready:
-        st.error("Thiếu `datalab-python-sdk`. Chạy `pip install -e .` rồi khởi động lại Streamlit.")
+        st.error("Missing `datalab-python-sdk`. Run `pip install -e .`, then restart Streamlit.")
     elif not parser_key_ready:
-        st.warning("Thêm `DATALAB_API_KEY` vào file `.env` để chạy parser.")
+        st.warning("Add `DATALAB_API_KEY` to `.env` to run the parser.")
 
     uploads = st.file_uploader(
-        "Chọn PDF, PNG hoặc JPEG",
+        "Choose PDF, PNG, or JPEG files",
         type=SUPPORTED_UPLOAD_TYPES,
         accept_multiple_files=True,
-        help="Các file được chọn sẽ được xử lý chung trong một pipeline run.",
+        help="Selected files will be processed together in a single pipeline run.",
     )
     if uploads:
         for item in uploads:
@@ -128,21 +217,21 @@ def _execute_upload_run(uploads: list) -> None:
         file_name = _unique_file_name(_safe_upload_name(uploaded.name), used_names)
         (upload_root / file_name).write_bytes(uploaded.getvalue())
 
-    progress = st.progress(8, text="Đã lưu tài liệu upload")
+    progress = st.progress(8, text="Uploaded files saved")
     config_path: Path | None = None
     try:
         config_path = _demo_config()
-        progress.progress(18, text="Đang parse và xử lý tài liệu…")
-        with st.spinner("Pipeline đang chạy. Với PDF lớn, bước parser có thể mất vài phút."):
+        progress.progress(18, text="Parsing and processing documents…")
+        with st.spinner("Pipeline running. Large PDFs may take several minutes to parse."):
             state = run_pipeline(config_path, local_raw=upload_root)
-        progress.progress(100, text="Pipeline hoàn tất")
+        progress.progress(100, text="Pipeline completed")
         st.session_state["selected_run"] = state.run_id
         st.session_state["run_notice"] = (
-            f"Run `{state.run_id}` hoàn tất với {len(state.errors)} lỗi/quarantine."
+            f"Run `{state.run_id}` completed with {len(state.errors)} errors/quarantined documents."
             if state.errors
-            else f"Run `{state.run_id}` hoàn tất với {len(state.data_objects)} tài liệu."
+            else f"Run `{state.run_id}` completed with {len(state.data_objects)} documents."
         )
-        st.session_state["_next_page"] = "Khám phá kết quả"
+        st.session_state["_next_page"] = RESULTS_PAGE
         st.rerun()
     except Exception as exc:
         status_code = getattr(exc, "status_code", None)
@@ -155,7 +244,7 @@ def _execute_upload_run(uploads: list) -> None:
         else:
             logging.getLogger(__name__).exception("Streamlit pipeline run failed")
         progress.empty()
-        st.error(f"Pipeline chưa thể hoàn tất: {_pipeline_error_message(exc)}")
+        st.error(f"Pipeline could not complete: {_pipeline_error_message(exc)}")
     finally:
         if config_path is not None:
             config_path.unlink(missing_ok=True)
@@ -189,28 +278,28 @@ def _demo_config() -> Path:
 def _pipeline_error_message(error: Exception) -> str:
     status_code = getattr(error, "status_code", None)
     messages = {
-        401: "Datalab API key không hợp lệ hoặc đã hết hiệu lực.",
+        401: "The Datalab API key is invalid or expired.",
         402: (
-            "Datalab API trả về 402 Payment Required. Tài khoản/API key hiện không "
-            "còn credit; hãy nạp credit trên Datalab rồi chạy lại pipeline."
+            "Datalab returned 402 Payment Required. The account or API key has no "
+            "remaining credits; add Datalab credits and run the pipeline again."
         ),
-        403: "Datalab API key không có quyền thực hiện yêu cầu này.",
-        429: "Datalab API đang giới hạn tần suất yêu cầu; hãy đợi rồi chạy lại.",
+        403: "The Datalab API key is not authorized to perform this request.",
+        429: "Datalab is rate-limiting requests; wait briefly and try again.",
     }
     return messages.get(status_code, str(error))
 
 
 def _render_run_explorer(runs: list[RunOverview]) -> None:
     _hero(
-        "Khám phá kết quả",
-        "Chọn một pipeline run và xem nội dung đã trích xuất theo từng tài liệu.",
+        "Explore results",
+        "Select a pipeline run and inspect the extracted content for each document.",
         "RESULTS",
     )
     notice = st.session_state.pop("run_notice", None)
     if notice:
         st.success(notice)
     if not runs:
-        st.info("Chưa có artifact nào để hiển thị.")
+        st.info("No artifacts are available yet.")
         return
 
     run_ids = [run.run_id for run in runs]
@@ -228,7 +317,7 @@ def _render_run_explorer(runs: list[RunOverview]) -> None:
     run_info, download = st.columns([3, 1])
     with run_info:
         st.caption(
-            f"{selected_run.document_count} tài liệu · {selected_run.status.replace('_', ' ')}"
+            f"{selected_run.document_count} documents · {selected_run.status.replace('_', ' ')}"
         )
     with download:
         st.download_button(
@@ -240,19 +329,27 @@ def _render_run_explorer(runs: list[RunOverview]) -> None:
         )
     documents = list_documents(selected_run_id)
     if not documents:
-        st.warning("Run này chưa có document artifact.")
+        st.warning("This run has no document artifacts.")
         return
 
-    search = st.text_input("Tìm tài liệu", placeholder="Tên file, title hoặc document ID…")
+    search = st.text_input("Search documents", placeholder="File name, title, or document ID…")
     if search:
         needle = search.casefold()
         documents = [
             item
             for item in documents
-            if needle in " ".join((item.file_name, item.title or "", item.document_id)).casefold()
+            if needle
+            in " ".join(
+                (
+                    item.file_name,
+                    item.title or "",
+                    _display_title(item.title),
+                    item.document_id,
+                )
+            ).casefold()
         ]
     if not documents:
-        st.info("Không tìm thấy tài liệu phù hợp.")
+        st.info("No matching documents found.")
         return
 
     selected_document_id = st.selectbox(
@@ -286,7 +383,7 @@ def _render_document(run: RunOverview, document, payload: dict, view: dict) -> N
 
     st.markdown("---")
     title_col, badge_col = st.columns([5, 1])
-    title_col.markdown(f"## {identity.get('title') or document.file_name}")
+    title_col.markdown(f"## {_display_title(identity.get('title')) or document.file_name}")
     title_col.caption(f"{document.file_name}  ·  `{document.document_id}`")
     badge_col.markdown(_status_badge(document.status), unsafe_allow_html=True)
 
@@ -314,29 +411,55 @@ def _render_document(run: RunOverview, document, payload: dict, view: dict) -> N
         _mini_metric(metric_cols[3], "Chunks", len(items))
 
     with content_tab:
-        source_column, parsed_column = st.columns([1, 1.1], gap="large")
-        with source_column:
-            st.markdown("#### Tài liệu gốc")
-            _render_source_preview(source_file, document)
-        with parsed_column:
-            st.markdown("#### Nội dung parsing")
-            has_final_reading_order = bool(
-                output_content.get("blocks") and output_content.get("reading_order")
+        has_final_reading_order = bool(
+            output_content.get("blocks") and output_content.get("reading_order")
+        )
+        display_mode = "Rendered"
+        if has_final_reading_order:
+            display_mode = st.segmented_control(
+                "Content display",
+                ["Rendered", "Raw"],
+                default="Rendered",
+                key=f"content-display-{run.run_id}-{document.document_id}",
+                help="Rendered displays block HTML. Raw shows every content field stored in output JSON.",
+            ) or "Rendered"
+        interactive_rendered = False
+        if has_final_reading_order:
+            interactive_rendered = _render_interactive_content(
+                source_file,
+                document,
+                output_content,
+                raw=display_mode == "Raw",
             )
-            if has_final_reading_order:
-                st.caption(f"data/output/{run.run_id}/documents/{document.document_id}.json")
-                with st.container(height=650, border=True):
-                    _render_output_content(output_content)
-            elif parsed_payload is not None:
-                st.caption(f"data/ingested/{run.run_id}/documents/{document.document_id}.json")
-                with st.container(height=650, border=True):
-                    _render_parsed_content(parsed_payload)
-            else:
-                st.info("Artifact không có reading order hoặc payload parsing khả dụng.")
+
+        if not interactive_rendered:
+            source_column, parsed_column = st.columns([1, 1.1], gap="large")
+            with source_column:
+                st.markdown("#### Source document")
+                _render_source_preview(source_file, document)
+            with parsed_column:
+                st.markdown("#### Parsed content")
+                if has_final_reading_order:
+                    st.caption(
+                        f"data/output/{run.run_id}/documents/{document.document_id}.json"
+                    )
+                    with st.container(height=650, border=True):
+                        _render_output_content(
+                            output_content,
+                            raw=display_mode == "Raw",
+                        )
+                elif parsed_payload is not None:
+                    st.caption(
+                        f"data/ingested/{run.run_id}/documents/{document.document_id}.json"
+                    )
+                    with st.container(height=650, border=True):
+                        _render_parsed_content(parsed_payload)
+                else:
+                    st.info("This artifact has no reading order or usable parsing payload.")
 
     with chunking_tab:
         if not items:
-            st.info("Không có chunk hoặc embedding trong artifact này.")
+            st.info("This artifact has no chunks or embeddings.")
         else:
             type_counts: dict[str, int] = {}
             for item in items:
@@ -378,8 +501,8 @@ def _render_source_preview(source_file: Path | None, document) -> None:
     """Render the persisted raw input alongside its parsed representation."""
     if source_file is None:
         st.markdown(
-            "<div class='document-placeholder'><span>DOC</span><b>Không tìm thấy file gốc</b>"
-            "<small>Artifact có thể đến từ một run cũ hoặc source ngoài hệ thống</small></div>",
+            "<div class='document-placeholder'><span>DOC</span><b>Source file not found</b>"
+            "<small>The artifact may come from an older run or an external source</small></div>",
             unsafe_allow_html=True,
         )
         return
@@ -391,13 +514,13 @@ def _render_source_preview(source_file: Path | None, document) -> None:
         st.pdf(source_file.read_bytes(), height=650)
     else:
         st.markdown(
-            "<div class='document-placeholder'><span>DOC</span><b>Không hỗ trợ preview</b>"
-            "<small>Hãy tải file gốc để xem nội dung</small></div>",
+            "<div class='document-placeholder'><span>DOC</span><b>Preview not supported</b>"
+            "<small>Download the source file to view its content</small></div>",
             unsafe_allow_html=True,
         )
 
     st.download_button(
-        "Tải file gốc",
+        "Download source file",
         data=source_file.read_bytes(),
         file_name=source_file.name,
         mime=document.content_type or "application/octet-stream",
@@ -405,10 +528,334 @@ def _render_source_preview(source_file: Path | None, document) -> None:
     )
 
 
+def _render_interactive_content(
+    source_file: Path | None,
+    document,
+    content: dict,
+    *,
+    raw: bool = False,
+) -> bool:
+    """Render synchronized source boxes and reading-order blocks for image inputs."""
+    component_html = _build_content_inspector_html(source_file, content, raw=raw)
+    if component_html is None:
+        return False
+
+    st.caption(
+        "Click a box on the source image to highlight its parsed block. "
+        "You can also select a parsed block to locate it on the image."
+    )
+    st.iframe(component_html, height=780, tab_index=0)
+    st.download_button(
+        "Download source file",
+        data=source_file.read_bytes(),
+        file_name=source_file.name,
+        mime=document.content_type or "application/octet-stream",
+        key=f"interactive-source-{document.document_id}",
+    )
+    return True
+
+
+def _build_content_inspector_html(
+    source_file: Path | None,
+    content: dict,
+    *,
+    raw: bool = False,
+) -> str | None:
+    """Build a self-contained image/block inspector, or return None for fallback."""
+    if source_file is None or not source_file.is_file():
+        return None
+    if source_file.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        return None
+
+    blocks = content.get("blocks")
+    reading_order = content.get("reading_order")
+    if not isinstance(blocks, list) or not isinstance(reading_order, list):
+        return None
+
+    block_by_id = {
+        block.get("component_id"): block
+        for block in blocks
+        if isinstance(block, dict) and isinstance(block.get("component_id"), str)
+    }
+    ordered_blocks = [
+        block_by_id[component_id]
+        for component_id in reading_order
+        if isinstance(component_id, str) and component_id in block_by_id
+    ]
+    if not ordered_blocks:
+        return None
+
+    try:
+        from PIL import Image
+
+        with Image.open(source_file) as image:
+            image_width, image_height = image.size
+        image_bytes = source_file.read_bytes()
+    except (OSError, ValueError):
+        return None
+    if image_width <= 0 or image_height <= 0:
+        return None
+
+    canvas_width, canvas_height = _bbox_canvas_size(
+        ordered_blocks,
+        image_width,
+        image_height,
+    )
+    overlay_parts: list[str] = []
+    card_parts: list[str] = []
+    boxed_ids: set[str] = set()
+    for index, block in enumerate(ordered_blocks, 1):
+        component_id = str(block.get("component_id") or "")
+        escaped_id = html.escape(component_id, quote=True)
+        path_parts = _component_path_parts(component_id)
+        block_type = str(block.get("type") or (path_parts[2] if path_parts else "Block"))
+        escaped_type = html.escape(block_type.upper())
+        card_content = _output_block_html(block, raw=raw)
+        bbox = _valid_bbox(block.get("bbox"), canvas_width, canvas_height)
+        page = block.get("page")
+        page_label = f"PAGE {page + 1}" if isinstance(page, int) else "PAGE —"
+
+        if bbox is not None and page in (None, 0):
+            left, top, right, bottom = bbox
+            style = (
+                f"left:{left / canvas_width * 100:.5f}%;"
+                f"top:{top / canvas_height * 100:.5f}%;"
+                f"width:{(right - left) / canvas_width * 100:.5f}%;"
+                f"height:{(bottom - top) / canvas_height * 100:.5f}%;"
+            )
+            overlay_parts.append(
+                f"<button class='source-box' style='{style}' data-id='{escaped_id}' "
+                f"aria-label='Select block {index}: {escaped_type}' "
+                f"title='{index:02d} · {escaped_type}'><span>{index:02d}</span></button>"
+            )
+            boxed_ids.add(component_id)
+
+        box_state = "BOXED" if component_id in boxed_ids else "NO BOX"
+        bbox_label = (
+            " · [" + ", ".join(f"{coordinate:g}" for coordinate in bbox) + "]"
+            if bbox is not None
+            else ""
+        )
+        card_parts.append(
+            f"<article class='parsed-card' data-id='{escaped_id}' "
+            "role='button' tabindex='0'>"
+            "<span class='card-meta'>"
+            f"<i>{index:02d}</i><b>{escaped_type}</b>"
+            f"<small>{html.escape(page_label)} · {box_state}{bbox_label}</small>"
+            "</span>"
+            f"<code>{escaped_id}</code>"
+            f"{card_content}"
+            "</article>"
+        )
+
+    if not overlay_parts:
+        return None
+
+    mime_type = mimetypes.guess_type(source_file.name)[0] or "image/png"
+    image_data = base64.b64encode(image_bytes).decode("ascii")
+    image_name = html.escape(source_file.name)
+    overlay_html = "".join(overlay_parts)
+    cards_html = "".join(card_parts)
+
+    return f"""
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {{
+    --black:#11110f; --black-soft:#1d1d19; --gold:#c7a34a;
+    --gold-dark:#9a792d; --paper:#f2efe7; --surface:#fbf9f3;
+    --line:#d9d0b9; --ink:#1b1b17; --muted:#706b5d;
+  }}
+  * {{ box-sizing:border-box; }}
+  html, body {{ margin:0; color:var(--ink); background:var(--paper); font-family:Inter,Manrope,Arial,sans-serif; }}
+  .inspector {{ height:758px; display:grid; grid-template-columns:minmax(0,1fr) minmax(360px,1.08fr); border:1px solid #b9aa83; border-radius:5px; overflow:hidden; background:var(--surface); }}
+  .pane {{ min-width:0; display:flex; flex-direction:column; overflow:hidden; }}
+  .source-pane {{ background:#25241f; border-right:1px solid #3c392f; }}
+  .pane-header {{ flex:none; height:58px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 16px; border-bottom:1px solid #d0c39f; background:var(--surface); }}
+  .source-pane .pane-header {{ color:#f8f2df; background:var(--black-soft); border-color:#3c392f; }}
+  .pane-header div {{ min-width:0; }}
+  .pane-header strong {{ display:block; font-size:14px; letter-spacing:.01em; }}
+  .pane-header small {{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px; color:var(--muted); font-size:10px; letter-spacing:.07em; }}
+  .source-pane .pane-header small {{ color:#aaa38e; }}
+  .count {{ flex:none; padding:5px 7px; color:var(--black); background:var(--gold); border-radius:2px; font:700 10px ui-monospace,SFMono-Regular,Menlo,monospace; }}
+  .source-scroll, .parsed-scroll {{ flex:1; min-height:0; overflow:auto; }}
+  .source-scroll {{ padding:18px; }}
+  .image-stage {{ position:relative; width:100%; line-height:0; box-shadow:0 7px 24px rgba(0,0,0,.28); }}
+  .image-stage img {{ display:block; width:100%; height:auto; background:#fff; }}
+  .source-box {{ position:absolute; z-index:2; min-width:10px; min-height:10px; margin:0; padding:0; cursor:pointer; border:1.5px solid rgba(154,121,45,.92); border-radius:1px; background:rgba(199,163,74,.10); box-shadow:inset 0 0 0 1px rgba(255,255,255,.18); transition:background .12s,border-color .12s,box-shadow .12s; }}
+  .source-box span {{ position:absolute; top:-1px; left:-1px; min-width:20px; padding:2px 3px; color:#fff8e5; background:rgba(17,17,15,.82); font:700 8px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; }}
+  .source-box:hover {{ z-index:4; border-color:#f0cf73; background:rgba(199,163,74,.27); }}
+  .source-box.active {{ z-index:5; border:2.5px solid #e8bd53; background:rgba(232,189,83,.30); box-shadow:0 0 0 2px rgba(17,17,15,.78),0 0 14px rgba(232,189,83,.82); }}
+  .source-box.active span {{ color:var(--black); background:#e8bd53; }}
+  .parsed-scroll {{ padding:12px; background:#eee9dd; }}
+  .parsed-card {{ display:block; width:100%; margin:0 0 10px; padding:0; overflow:hidden; text-align:left; color:var(--ink); cursor:pointer; border:1px solid #d3c7a8; border-radius:4px; background:var(--surface); box-shadow:0 2px 0 rgba(17,17,15,.04); transition:border-color .13s,box-shadow .13s,transform .13s; }}
+  .parsed-card:hover {{ border-color:#9a8248; transform:translateY(-1px); box-shadow:3px 3px 0 rgba(154,121,45,.18); }}
+  .parsed-card.active {{ border:2px solid var(--gold-dark); box-shadow:4px 4px 0 rgba(154,121,45,.28); }}
+  .card-meta {{ display:flex; align-items:center; gap:8px; min-height:34px; padding:6px 9px; color:#d6cfbd; background:var(--black-soft); }}
+  .parsed-card.active .card-meta {{ color:#fff4d8; background:var(--black); }}
+  .card-meta i {{ min-width:25px; padding:3px; color:var(--black); background:var(--gold); text-align:center; font:normal 700 10px ui-monospace,SFMono-Regular,Menlo,monospace; }}
+  .card-meta b {{ color:var(--gold); font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.05em; }}
+  .card-meta small {{ margin-left:auto; color:#aaa38e; font:9px ui-monospace,SFMono-Regular,Menlo,monospace; }}
+  .parsed-card code {{ display:block; padding:7px 10px; overflow-wrap:anywhere; color:#756d59; border-bottom:1px solid #e3dccb; background:#f5f1e8; font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }}
+  .card-output {{ padding:10px 12px 12px; overflow-x:auto; white-space:pre-wrap; font-size:13px; line-height:1.6; }}
+  .card-output p:first-child, .card-output div:first-child {{ margin-top:0; }}
+  .card-output p:last-child, .card-output div:last-child {{ margin-bottom:0; }}
+  .card-output table {{ width:100%; min-width:max-content; border-collapse:collapse; background:#fffdf7; font-size:11px; line-height:1.4; white-space:normal; }}
+  .card-output th, .card-output td {{ padding:6px 8px; border:1px solid #cfc19d; text-align:left; vertical-align:top; }}
+  .card-output th {{ color:#f6e8bd; background:#2a2923; font-weight:700; }}
+  .card-output tr:nth-child(even) td {{ background:#f2ecdc; }}
+  .card-output caption {{ margin-bottom:7px; color:#514a3a; font-weight:700; text-align:left; }}
+  .card-raw {{ margin:0; padding:10px 12px 12px; overflow:auto; color:#302e27; background:#fffdf7; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }}
+  @media (max-width:720px) {{
+    .inspector {{ height:758px; grid-template-columns:1fr; grid-template-rows:50% 50%; }}
+    .source-pane {{ border-right:0; border-bottom:1px solid #3c392f; }}
+  }}
+</style>
+</head>
+<body>
+  <main class="inspector">
+    <section class="pane source-pane">
+      <header class="pane-header"><div><strong>Source document</strong><small>{image_name}</small></div><span class="count">{len(overlay_parts)} BOXES</span></header>
+      <div class="source-scroll">
+        <div class="image-stage">
+          <img src="data:{mime_type};base64,{image_data}" alt="Raw source document">
+          {overlay_html}
+        </div>
+      </div>
+    </section>
+    <section class="pane parsed-pane">
+      <header class="pane-header"><div><strong>Parsed content</strong><small>JSON READING ORDER · {'JSON OUTPUT' if raw else 'RENDERED'}</small></div><span class="count">{len(ordered_blocks)} BLOCKS</span></header>
+      <div class="parsed-scroll">{cards_html}</div>
+    </section>
+  </main>
+<script>
+  const boxes = Array.from(document.querySelectorAll('.source-box'));
+  const cards = Array.from(document.querySelectorAll('.parsed-card'));
+
+  function activate(componentId, scrollTarget) {{
+    boxes.forEach((box) => box.classList.toggle('active', box.dataset.id === componentId));
+    cards.forEach((card) => card.classList.toggle('active', card.dataset.id === componentId));
+    if (scrollTarget === 'card') {{
+      const card = cards.find((item) => item.dataset.id === componentId);
+      if (card) card.scrollIntoView({{behavior:'smooth', block:'center'}});
+    }}
+    if (scrollTarget === 'box') {{
+      const box = boxes.find((item) => item.dataset.id === componentId);
+      if (box) box.scrollIntoView({{behavior:'smooth', block:'center', inline:'center'}});
+    }}
+  }}
+
+  boxes.forEach((box) => box.addEventListener('click', () => activate(box.dataset.id, 'card')));
+  cards.forEach((card) => card.addEventListener('click', () => activate(card.dataset.id, 'box')));
+  cards.forEach((card) => card.addEventListener('keydown', (event) => {{
+    if (event.key === 'Enter' || event.key === ' ') {{
+      event.preventDefault();
+      activate(card.dataset.id, 'box');
+    }}
+  }}));
+  if (boxes.length) activate(boxes[0].dataset.id, null);
+</script>
+</body>
+</html>
+"""
+
+
+def _valid_bbox(
+    value: object,
+    canvas_width: float,
+    canvas_height: float,
+) -> tuple[float, float, float, float] | None:
+    """Validate and clamp one parser bbox to its parser coordinate canvas."""
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    if any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value):
+        return None
+    left, top, right, bottom = (float(item) for item in value)
+    left = max(0.0, min(left, canvas_width))
+    top = max(0.0, min(top, canvas_height))
+    right = max(0.0, min(right, canvas_width))
+    bottom = max(0.0, min(bottom, canvas_height))
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def _output_block_html(block: dict, *, raw: bool = False) -> str:
+    """Render one output block without merging in any other output collection."""
+    if raw:
+        value = _output_block_source_value(block)
+        if value is None:
+            value = "[No content representation is available for this block]"
+        return f"<pre class='card-raw'>{html.escape(value)}</pre>"
+
+    parser_html = block.get("html")
+    if isinstance(parser_html, str) and parser_html.strip():
+        sanitized = _sanitize_output_html(parser_html)
+        visible_text = re.sub(r"<[^>]+>", "", sanitized).strip()
+        if visible_text:
+            return f"<div class='card-output'>{sanitized}</div>"
+
+    for field in ("text", "semantic_text"):
+        value = block.get(field)
+        if isinstance(value, str) and value:
+            return f"<div class='card-output'>{html.escape(value)}</div>"
+    return (
+        "<div class='card-output'>"
+        "[No content representation is available for this block]"
+        "</div>"
+    )
+
+
+def _output_block_source_value(block: dict) -> str | None:
+    """Return all content representations stored in the output JSON block."""
+    content_fields = {
+        field: block[field]
+        for field in ("text", "semantic_text", "html")
+        if field in block
+    }
+    if not content_fields:
+        return None
+    return json.dumps(content_fields, ensure_ascii=False, indent=2)
+
+
+def _sanitize_output_html(value: str) -> str:
+    sanitizer = _OutputHTMLSanitizer()
+    sanitizer.feed(value)
+    sanitizer.close()
+    return "".join(sanitizer.parts)
+
+
+def _bbox_canvas_size(
+    blocks: list[dict],
+    image_width: int,
+    image_height: int,
+) -> tuple[float, float]:
+    """Infer parser coordinates without assuming they match raw image pixels."""
+    right_edges = [float(image_width)]
+    bottom_edges = [float(image_height)]
+    for block in blocks:
+        value = block.get("bbox")
+        if not isinstance(value, (list, tuple)) or len(value) != 4:
+            continue
+        if any(
+            isinstance(item, bool) or not isinstance(item, (int, float))
+            for item in value
+        ):
+            continue
+        left, top, right, bottom = (float(item) for item in value)
+        if right > left and bottom > top:
+            right_edges.append(right)
+            bottom_edges.append(bottom)
+    return max(right_edges), max(bottom_edges)
+
+
 def _render_parsed_content(parsed_payload: object) -> None:
     """Render semantic extraction fields while preserving parser reading order."""
     if not isinstance(parsed_payload, dict):
-        st.info("Payload parsing không có content khả dụng.")
+        st.info("The parsing payload has no usable content.")
         return
 
     rows = parsed_payload.get("rows")
@@ -417,7 +864,7 @@ def _render_parsed_content(parsed_payload: object) -> None:
         if text:
             _parsed_text_block(str(text))
         else:
-            st.info("Payload parsing không có content khả dụng.")
+            st.info("The parsing payload has no usable content.")
         return
 
     rendered = False
@@ -464,10 +911,10 @@ def _render_parsed_content(parsed_payload: object) -> None:
         _render_parsed_collection("Formulas", extraction.get("formulas"))
 
         if citations and not reading_order_is_mapped:
-            with st.expander(f"Source citations chưa ánh xạ · {len(citations)} blocks"):
+            with st.expander(f"Unmapped source citations · {len(citations)} blocks"):
                 st.caption(
-                    "Artifact này không chứa đủ dữ liệu block-level để gắn chính xác "
-                    "từng component ID vào từng đoạn văn."
+                    "This artifact does not contain enough block-level data to map "
+                    "each component ID to an exact paragraph."
                 )
                 ordered_blocks = "\n".join(
                     f"{index:02d}  {citation}"
@@ -476,10 +923,10 @@ def _render_parsed_content(parsed_payload: object) -> None:
                 st.code(ordered_blocks, language=None)
 
     if not rendered:
-        st.info("Payload parsing không có main text khả dụng.")
+        st.info("The parsing payload has no usable main text.")
 
 
-def _render_output_content(content: dict) -> None:
+def _render_output_content(content: dict, *, raw: bool = False) -> None:
     """Render the final output contract without reconstructing component order."""
     blocks = content.get("blocks")
     reading_order = content.get("reading_order")
@@ -505,7 +952,7 @@ def _render_output_content(content: dict) -> None:
     st.caption(
         f"READING ORDER · {len(ordered_blocks)} SOURCE BLOCKS · {source.upper()} · {status}"
     )
-    _render_source_blocks(ordered_blocks)
+    _render_source_blocks(ordered_blocks, raw=raw)
 
     _render_parsed_collection("Tables", content.get("tables"))
     _render_parsed_collection("Figures", content.get("figures"))
@@ -585,12 +1032,11 @@ def _render_reading_order_blocks(
     return True
 
 
-def _render_source_blocks(blocks: list[dict]) -> None:
+def _render_source_blocks(blocks: list[dict], *, raw: bool = False) -> None:
     for index, block in enumerate(blocks, 1):
         component_id = str(block.get("component_id") or "")
-        block_text = str(block.get("text") or block.get("semantic_text") or "")
         escaped_id = html.escape(component_id, quote=True)
-        escaped_text = html.escape(block_text or "[Không có biểu diễn text cho block này]")
+        block_content = _output_block_html(block, raw=raw)
         path_parts = _component_path_parts(component_id)
         block_type = str(block.get("type") or (path_parts[2] if path_parts else "Block"))
         st.markdown(
@@ -602,7 +1048,7 @@ def _render_source_blocks(blocks: list[dict]) -> None:
                 f"<b>{html.escape(block_type.upper())}</b>"
                 f"<code>{escaped_id}</code>"
                 "</header>"
-                f"<div class='parsed-block-text'>{escaped_text}</div>"
+                f"<div class='parsed-block-text'>{block_content}</div>"
                 "</section>"
             ),
             unsafe_allow_html=True,
@@ -661,8 +1107,16 @@ def _run_option(run: RunOverview) -> str:
 
 
 def _document_option(document) -> str:
-    title = f" — {document.title}" if document.title and document.title != document.file_name else ""
+    display_title = _display_title(document.title)
+    title = f" — {display_title}" if display_title and display_title != document.file_name else ""
     return f"{document.file_name}{title}  [{document.status}]"
+
+
+def _display_title(value: object) -> str:
+    if value is None:
+        return ""
+    title = str(value)
+    return DISPLAY_TITLE_OVERRIDES.get(title, title)
 
 
 def _unique_file_name(name: str, used: set[str]) -> str:
@@ -690,42 +1144,127 @@ def _inject_styles() -> None:
         """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap');
-        :root { --ink:#17211c; --muted:#66706a; --paper:#f5f4ee; --acid:#d8ff3e; --green:#184d39; }
+        :root {
+            --black:#11110f;
+            --black-soft:#1d1d19;
+            --yellow:#c7a34a;
+            --yellow-deep:#a17d2b;
+            --yellow-soft:#eee2bc;
+            --ink:#1b1b17;
+            --muted:#706b5d;
+            --paper:#f2efe7;
+            --surface:#fbf9f3;
+            --line:#d9d0b9;
+        }
         html, body, [class*="css"] { font-family:'Manrope',sans-serif; }
-        .stApp { background:var(--paper); color:var(--ink); }
-        [data-testid="stSidebar"] { background:#17211c; }
-        [data-testid="stSidebar"] * { color:#eef1e9; }
-        [data-testid="stSidebar"] [role="radiogroup"] label { padding:.48rem .7rem; border-radius:8px; }
-        [data-testid="stSidebar"] [role="radiogroup"] label:hover { background:#28342e; }
-        [data-testid="stSidebar"] hr { border-color:#344139; }
-        .block-container { max-width:1440px; padding-top:2.2rem; padding-bottom:4rem; }
-        .brand-mark { width:42px; height:42px; display:grid; place-items:center; background:var(--acid); color:#17211c!important; font-family:'DM Mono'; font-weight:500; border-radius:3px; margin-bottom:.8rem; }
-        .brand-title { font-size:1.25rem; font-weight:700; letter-spacing:.14em; }
-        .brand-subtitle { font-family:'DM Mono'; font-size:.66rem; color:#98a49d!important; letter-spacing:.14em; }
-        .sidebar-rule { height:1px; background:#344139; margin:1.5rem 0; }
+        .stApp {
+            color:var(--ink);
+            background:
+                radial-gradient(circle at 88% 4%, rgba(199,163,74,.09), transparent 24rem),
+                var(--paper);
+        }
+        [data-testid="stSidebar"] {
+            background:var(--black);
+            border-right:1px solid #2f2e26;
+            box-shadow:8px 0 28px rgba(17,17,15,.12);
+        }
+        [data-testid="stSidebar"]::before {
+            content:"";
+            display:block;
+            height:3px;
+            background:var(--yellow);
+        }
+        [data-testid="stSidebar"] * { color:#f7f2e5; }
+        [data-testid="stSidebar"] [role="radiogroup"] { gap:.45rem; }
+        [data-testid="stSidebar"] [role="radiogroup"] label {
+            padding:.7rem .8rem;
+            border:1px solid #303029;
+            border-radius:4px;
+            transition:all .16s ease;
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] label:hover {
+            background:#292821;
+            border-color:#5a5542;
+            transform:translateX(2px);
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+            background:var(--yellow);
+            border-color:var(--yellow);
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) * {
+            color:var(--black)!important;
+            font-weight:700;
+        }
+        [data-testid="stSidebar"] hr { border-color:#38372f; }
+        .block-container { max-width:1440px; padding-top:1.8rem; padding-bottom:4rem; }
+        .brand-title { padding-top:.35rem; font-size:1.3rem; font-weight:700; letter-spacing:.16em; }
+        .brand-subtitle { font-family:'DM Mono'; font-size:.64rem; color:#aaa38e!important; letter-spacing:.14em; }
+        .sidebar-rule { height:1px; background:#37362e; margin:1.5rem 0; }
         .sidebar-spacer { height:12rem; }
-        .hero { padding:.6rem 0 1.25rem; border-bottom:1px solid #d8d8d0; margin-bottom:1.6rem; }
-        .hero .eyebrow { color:#466452; font-family:'DM Mono'; font-size:.72rem; letter-spacing:.12em; margin-bottom:.7rem; }
-        .hero h1 { max-width:900px; font-size:clamp(2rem,3vw,3rem); line-height:1.08; letter-spacing:-.04em; margin:0; color:var(--ink); }
-        .hero p { max-width:760px; color:var(--muted); font-size:1.03rem; margin:.95rem 0 0; line-height:1.65; }
-        .status-badge { display:inline-block; font-family:'DM Mono'; font-size:.64rem; letter-spacing:.05em; padding:.35rem .55rem; border-radius:2px; background:#e4eadf; color:#24513d; }
-        .status-badge.warning { background:#fff0d2; color:#8a5616; }
-        .document-placeholder { min-height:330px; background:#e8e8e0; display:flex; flex-direction:column; align-items:center; justify-content:center; border:1px solid #d3d4cb; }
-        .document-placeholder span { width:72px; height:88px; display:grid; place-items:center; background:#faf9f4; border:1px solid #c9cbc1; font-family:'DM Mono'; color:#788078; }
+        .hero {
+            position:relative;
+            overflow:hidden;
+            padding:1.55rem 1.75rem 1.65rem;
+            margin-bottom:1.75rem;
+            border:1px solid var(--black);
+            border-left:6px solid var(--yellow);
+            border-radius:5px;
+            background:
+                linear-gradient(115deg, transparent 72%, rgba(199,163,74,.08) 72%),
+                var(--black);
+            box-shadow:5px 5px 0 rgba(199,163,74,.38);
+        }
+        .hero .eyebrow { color:var(--yellow); font-family:'DM Mono'; font-size:.7rem; letter-spacing:.15em; margin-bottom:.65rem; }
+        .hero h1 { position:relative; z-index:1; max-width:900px; font-size:clamp(2rem,3vw,3rem); line-height:1.08; letter-spacing:-.04em; margin:0; color:#fffdf4; }
+        .hero p { position:relative; z-index:1; max-width:760px; color:#beb8a7; font-size:1rem; margin:.75rem 0 0; line-height:1.65; }
+        .status-badge { display:inline-block; font-family:'DM Mono'; font-size:.64rem; font-weight:500; letter-spacing:.05em; padding:.4rem .58rem; border:1px solid var(--black); border-radius:2px; background:var(--yellow); color:var(--black); }
+        .status-badge.warning { background:#ead8a4; color:#574719; border-color:#92742e; }
+        .document-placeholder { min-height:330px; background:#f7f2e4; display:flex; flex-direction:column; align-items:center; justify-content:center; border:1px dashed #9b8244; border-radius:4px; }
+        .document-placeholder span { width:72px; height:88px; display:grid; place-items:center; background:var(--black); border:2px solid var(--yellow); font-family:'DM Mono'; color:#d8bd78; box-shadow:4px 4px 0 #d8c993; }
         .document-placeholder b { margin-top:1rem; }
-        .document-placeholder small { color:#747c77; margin-top:.3rem; }
-        .parsed-article { white-space:pre-wrap; line-height:1.72; color:#243029; font-size:.94rem; }
-        .parsed-block { margin:0 0 .8rem; border:1px solid #d9ddd4; background:#faf9f4; border-radius:4px; overflow:hidden; }
-        .parsed-block-meta { display:flex; align-items:center; gap:.65rem; padding:.42rem .65rem; border-bottom:1px solid #e2e4dc; background:#f0f1e9; }
-        .parsed-block-meta span { min-width:1.7rem; color:#587062; font-family:'DM Mono'; font-size:.68rem; }
-        .parsed-block-meta b { color:#476152; font-family:'DM Mono'; font-size:.62rem; font-weight:500; letter-spacing:.05em; }
-        .parsed-block-meta code { overflow-wrap:anywhere; color:#315442; background:transparent; font-size:.72rem; }
-        .parsed-block-text { padding:.72rem .8rem .82rem; white-space:pre-wrap; line-height:1.68; color:#243029; font-size:.94rem; }
-        .stButton>button[kind="primary"], .stDownloadButton>button { border-radius:3px; }
-        .stButton>button[kind="primary"] { background:#173f31; border-color:#173f31; }
-        .stButton>button[kind="primary"]:hover { background:#235844; border-color:#235844; }
-        [data-testid="stMetric"] { background:#faf9f4; border:1px solid #dedfd6; padding:.8rem; }
-        @media(max-width:800px) { .hero h1 { font-size:2.2rem; } }
+        .document-placeholder small { color:#786f5b; margin-top:.3rem; }
+        .parsed-article { white-space:pre-wrap; line-height:1.72; color:var(--ink); font-size:.94rem; }
+        .parsed-block { margin:0 0 .85rem; border:1px solid #d8ceaf; background:var(--surface); border-radius:4px; overflow:hidden; box-shadow:0 2px 0 rgba(17,17,15,.04); }
+        .parsed-block:hover { border-color:#a58a4c; box-shadow:3px 3px 0 rgba(199,163,74,.18); }
+        .parsed-block-meta { display:flex; align-items:center; gap:.65rem; padding:.48rem .65rem; border-bottom:1px solid #3b392f; background:var(--black-soft); }
+        .parsed-block-meta span { min-width:1.75rem; color:var(--black); background:var(--yellow); padding:.16rem .25rem; text-align:center; font-family:'DM Mono'; font-size:.68rem; font-weight:500; }
+        .parsed-block-meta b { color:var(--yellow); font-family:'DM Mono'; font-size:.62rem; font-weight:500; letter-spacing:.06em; }
+        .parsed-block-meta code { overflow-wrap:anywhere; color:#c7c0ad; background:transparent; font-size:.7rem; }
+        .parsed-block-text { padding:.8rem .9rem .9rem; white-space:pre-wrap; line-height:1.7; color:#28271f; font-size:.94rem; }
+        .parsed-block-text .card-output { padding:0; overflow-x:auto; }
+        .parsed-block-text .card-raw { margin:0; overflow:auto; color:#302e27; background:#fffdf7; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.55 'DM Mono',monospace; }
+        .parsed-block-text table { width:100%; min-width:max-content; border-collapse:collapse; background:#fffdf7; font-size:.82rem; white-space:normal; }
+        .parsed-block-text th, .parsed-block-text td { padding:.4rem .55rem; border:1px solid #cfc19d; text-align:left; vertical-align:top; }
+        .parsed-block-text th { color:#f6e8bd; background:#2a2923; }
+
+        /* Streamlit controls */
+        [data-testid="stFileUploaderDropzone"] { background:#f8f3e6; border:1.5px dashed #9d8448; border-radius:5px; }
+        [data-testid="stFileUploaderDropzone"] button { background:var(--black); color:var(--yellow); border-color:var(--black); }
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+        [data-testid="stTextInput"] input { background:var(--surface); border-color:#c9bd9e; }
+        [data-testid="stTabs"] [data-baseweb="tab-list"] { gap:.35rem; border-bottom:1px solid #cfc3a4; }
+        [data-testid="stTabs"] button[role="tab"] { color:#665f4f; padding:.7rem .95rem; border-radius:4px 4px 0 0; }
+        [data-testid="stTabs"] button[role="tab"][aria-selected="true"] { color:var(--black); background:var(--yellow); font-weight:700; }
+        [data-testid="stTabs"] [data-baseweb="tab-highlight"] { background:var(--black); }
+        [data-testid="stExpander"] { background:var(--surface); border-color:#d6caab; border-radius:4px; }
+        [data-testid="stVerticalBlockBorderWrapper"] { background:rgba(255,253,246,.74); border-color:#d4c7a6!important; }
+        .stButton>button, .stDownloadButton>button { border-radius:3px; font-weight:700; transition:all .14s ease; }
+        .stButton>button[kind="primary"] { background:var(--yellow); color:var(--black); border:1px solid var(--black); box-shadow:4px 4px 0 var(--black); }
+        .stButton>button[kind="primary"]:hover { background:#d4b45f; color:var(--black); border-color:var(--black); transform:translate(-1px,-1px); box-shadow:5px 5px 0 var(--black); }
+        .stDownloadButton>button { background:var(--black); color:var(--yellow); border:1px solid var(--black); }
+        .stDownloadButton>button:hover { background:#2c2b23; color:#d9bc72; border-color:#2c2b23; }
+        [data-testid="stMetric"] { background:var(--surface); border:1px solid #d5caad; border-top:4px solid var(--yellow); padding:.85rem; box-shadow:2px 2px 0 rgba(17,17,15,.07); }
+        [data-testid="stAlert"] { border-radius:4px; }
+        code { color:#6b5200; }
+        ::selection { color:var(--black); background:var(--yellow); }
+        ::-webkit-scrollbar { width:10px; height:10px; }
+        ::-webkit-scrollbar-track { background:#ebe4d3; }
+        ::-webkit-scrollbar-thumb { background:#89816c; border:2px solid #ebe4d3; border-radius:8px; }
+        ::-webkit-scrollbar-thumb:hover { background:var(--yellow-deep); }
+        @media(max-width:800px) {
+            .hero { padding:1.2rem; box-shadow:3px 3px 0 rgba(199,163,74,.4); }
+            .hero h1 { font-size:2.2rem; }
+        }
         </style>
         """,
         unsafe_allow_html=True,
