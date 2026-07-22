@@ -52,6 +52,23 @@
       "save_raw_outputs": false
     }
   },
+  "chunking_embedding": {
+    "chunker": "recursive",
+    "chunker_params": {
+      "target": 400
+    },
+    "max_rows_per_chunk": 20,
+    "embedder": "openrouter_te3s",
+    "embedder_params": {
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "api_key_env": "OPENROUTER_API_KEY",
+      "batch_size": 64,
+      "cache_dir": "data/work/embedding_cache",
+      "app_title": "AXIOM_DE-RD"
+    },
+    "retrieval_profile": "hybrid_default"
+  },
   "indexing": {
     "embeddings": {
       "enabled": true,
