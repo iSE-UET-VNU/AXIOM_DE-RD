@@ -23,7 +23,18 @@
       ".pdf",
       ".png",
       ".jpg",
-      ".jpeg"
+      ".jpeg",
+      ".gif",
+      ".webp",
+      ".txt",
+      ".md",
+      ".csv",
+      ".json",
+      ".jsonl",
+      ".yaml",
+      ".yml",
+      ".xls",
+      ".xlsx"
     ],
     "max_files": null
   },
@@ -49,6 +60,7 @@
       "max_workers": 4,
       "max_output_tokens": 12384,
       "max_retries": 6,
+      "include_images": true,
       "include_headers_footers": false,
       "save_raw_outputs": true
     },
@@ -58,7 +70,7 @@
       "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
       "fallback_to_local": false,
       "extract_images": true,
-      "save_raw_outputs": false
+      "save_raw_outputs": true
     }
   },
   "chunking_embedding": {

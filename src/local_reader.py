@@ -22,8 +22,8 @@ DEFAULT_INCLUDE_EXTENSIONS = [
     ".jsonl",
     ".yaml",
     ".yml",
+    ".xls",
     ".xlsx",
-    ".parquet",
 ]
 
 

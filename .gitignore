@@ -16,6 +16,7 @@ data/cleaned/*
 data/enriched/*
 data/embedded/*
 data/output/*
+data/work/*
 
 !data/ingested/.gitkeep
 !data/cleaned/.gitkeep

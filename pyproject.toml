@@ -7,9 +7,11 @@ dependencies = [
     "datalab-python-sdk",
     "fastapi>=0.115.0",
     "openai>=1.0.0",
+    "openpyxl>=3.1.0",
     "python-dotenv>=1.0.0",
     "streamlit[pdf]>=1.49.0",
     "uvicorn[standard]>=0.30.0",
+    "xlrd>=2.0.1",
 ]
 
 [project.optional-dependencies]

@@ -101,16 +101,25 @@ def _build_document_parser(
 
 
 def _document_provider_name(parser_config: dict[str, Any]) -> str:
-    top_level_provider = _normalize_provider_name(
-        str(parser_config.get("provider", "router"))
+    top_level_value = parser_config.get("provider")
+    top_level_provider = (
+        _normalize_provider_name(str(top_level_value))
+        if top_level_value is not None
+        else ""
     )
     document_config = parser_config.get("document")
     document_config = document_config if isinstance(document_config, dict) else {}
-    provider_name = _normalize_provider_name(
-        str(document_config.get("provider") or "lift_api")
+    document_provider = _normalize_provider_name(
+        str(document_config.get("provider") or "")
     )
-    # The legacy top-level Lift mode applies only to the document route.
-    return "lift_api" if top_level_provider == "lift_api" else provider_name
+
+    # Routing is always enabled internally. The top-level provider remains the
+    # backwards-compatible switch for the visual/document backend.
+    if top_level_provider and top_level_provider != "router":
+        return top_level_provider
+    if document_provider:
+        return document_provider
+    return "lift_api"
 
 
 def _normalize_provider_name(value: str) -> str:

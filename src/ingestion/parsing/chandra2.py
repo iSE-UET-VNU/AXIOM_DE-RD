@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from html.parser import HTMLParser
 import json
 import os
 import re
@@ -27,6 +29,7 @@ class Chandra2Config:
     max_workers: int = 4
     max_output_tokens: int = 12384
     max_retries: int = 6
+    include_images: bool = True
     include_headers_footers: bool = False
     save_raw_outputs: bool = True
     output_dir: str | None = "data/work/chandra2"
@@ -46,6 +49,7 @@ class Chandra2Config:
             max_workers=_positive_int(config, "max_workers", 4),
             max_output_tokens=_positive_int(config, "max_output_tokens", 12384),
             max_retries=_non_negative_int(config, "max_retries", 6),
+            include_images=bool(config.get("include_images", True)),
             include_headers_footers=bool(
                 config.get("include_headers_footers", False)
             ),
@@ -100,7 +104,7 @@ class Chandra2Provider:
                 for image in page_batch
             ]
             generate_options: dict[str, Any] = {
-                "include_images": False,
+                "include_images": self.config.include_images,
                 "include_headers_footers": self.config.include_headers_footers,
                 "max_output_tokens": self.config.max_output_tokens,
             }
@@ -131,13 +135,54 @@ class Chandra2Provider:
         token_count = sum(
             int(getattr(result, "token_count", 0) or 0) for result in results
         )
-        raw_output_path, raw_metadata_path = _write_raw_outputs(
+        page_payloads, raw_block_count = _page_payloads(results)
+        source_blocks = _source_blocks_from_pages(page_payloads)
+        reading_order_complete = bool(source_blocks) and (
+            len(source_blocks) == raw_block_count
+            and all(page.get("blocks") for page in page_payloads)
+        )
+        extraction = _build_extraction(markdown, source_blocks)
+
+        bundle_dir = _output_bundle_dir(
             self.config,
+            file_path,
+            data_object,
+            results,
+        )
+        saved_images = _write_images(
+            self.config,
+            bundle_dir,
+            results,
+        )
+        image_files = _align_image_files(
+            extraction.get("figures", []),
+            source_blocks,
+            results,
+            saved_images,
+        )
+        for page_index, page in enumerate(page_payloads):
+            page["image_files"] = [
+                image["name"]
+                for image in saved_images
+                if image["page"] == page_index and image["status"] == "saved"
+            ]
+        raw_output_paths = _write_raw_outputs(
+            self.config,
+            bundle_dir,
             file_path,
             data_object,
             markdown,
             results,
+            page_payloads,
+            source_blocks,
+            extraction,
+            image_files,
+            reading_order_complete,
             latency_seconds,
+        )
+        label_counts = Counter(
+            str(block.get("raw_label") or block.get("type") or "Block")
+            for block in source_blocks
         )
 
         return ParsedData(
@@ -146,7 +191,16 @@ class Chandra2Provider:
             source_format=str(
                 data_object.metadata.get("format", file_path.suffix.lstrip("."))
             ),
-            rows=[{"text": markdown}],
+            rows=[
+                {
+                    "extraction": extraction,
+                    "text": extraction["main_text"],
+                    "source_blocks": source_blocks,
+                    "reading_order": [
+                        block["component_id"] for block in source_blocks
+                    ],
+                }
+            ],
             text=markdown,
             metadata={
                 "parser": "chandra2",
@@ -155,8 +209,22 @@ class Chandra2Provider:
                 "page_count": len(results),
                 "token_count": token_count,
                 "latency_seconds": latency_seconds,
-                "raw_output_path": raw_output_path,
-                "raw_metadata_path": raw_metadata_path,
+                "raw_output_path": raw_output_paths.get("result_markdown"),
+                "raw_metadata_path": raw_output_paths.get("metadata"),
+                "raw_chandra_outputs": raw_output_paths,
+                "label_counts": dict(sorted(label_counts.items())),
+                "source_block_count": len(source_blocks),
+                "table_count": len(extraction["tables"]),
+                "figure_count": len(extraction["figures"]),
+                "formula_count": len(extraction["formulas"]),
+                "image_count": sum(
+                    item.get("status") == "saved" for item in image_files
+                ),
+                "image_files": image_files,
+                "reading_order_source": (
+                    "chandra2_layout" if source_blocks else "unavailable"
+                ),
+                "reading_order_complete": reading_order_complete,
             },
         )
 
@@ -195,24 +263,84 @@ def _load_runtime() -> _ChandraRuntime:
 
 def _write_raw_outputs(
     config: Chandra2Config,
+    bundle_dir: Path | None,
     file_path: Path,
     data_object: DataObject,
     markdown: str,
     results: list[Any],
+    page_payloads: list[dict[str, Any]],
+    source_blocks: list[dict[str, Any]],
+    extraction: dict[str, Any],
+    image_files: list[dict[str, Any]],
+    reading_order_complete: bool,
     latency_seconds: float,
-) -> tuple[str | None, str | None]:
-    if not config.save_raw_outputs or not config.output_dir:
-        return None, None
+) -> dict[str, str]:
+    if not config.save_raw_outputs or bundle_dir is None:
+        return {}
 
-    bundle_dir = Path(config.output_dir) / (
-        f"{_safe_slug(file_path.stem)}--{data_object.object_id}"
-    )
-    bundle_dir.mkdir(parents=True, exist_ok=True)
+    pages_dir = bundle_dir / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
     markdown_path = bundle_dir / "result.md"
+    clean_html_path = bundle_dir / "result.html"
+    raw_html_path = bundle_dir / "raw.html"
+    chunks_path = bundle_dir / "chunks.json"
     metadata_path = bundle_dir / "metadata.json"
+
+    raw_sections: list[str] = []
+    clean_sections: list[str] = []
+    for page_index, (result, page_payload) in enumerate(
+        zip(results, page_payloads),
+        start=1,
+    ):
+        prefix = f"page_{page_index:04d}"
+        raw_html = str(getattr(result, "raw", "") or "")
+        clean_html = str(getattr(result, "html", "") or "")
+        raw_sections.append(
+            f'<section data-page-number="{page_index}">\n{raw_html}\n</section>'
+        )
+        clean_sections.append(
+            f'<section data-page-number="{page_index}">\n{clean_html}\n</section>'
+        )
+        (pages_dir / f"{prefix}.raw.html").write_text(
+            raw_html,
+            encoding="utf-8",
+        )
+        (pages_dir / f"{prefix}.clean.html").write_text(
+            clean_html,
+            encoding="utf-8",
+        )
+        (pages_dir / f"{prefix}.chunks.json").write_text(
+            _json_text(page_payload),
+            encoding="utf-8",
+        )
+
     markdown_path.write_text(markdown, encoding="utf-8")
+    clean_html_path.write_text("\n\n".join(clean_sections), encoding="utf-8")
+    raw_html_path.write_text("\n\n".join(raw_sections), encoding="utf-8")
+    chunks_path.write_text(
+        _json_text(
+            {
+                "source_object_id": data_object.object_id,
+                "input_path": str(file_path),
+                "pages": page_payloads,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    paths = {
+        "result_markdown": portable_path(markdown_path, config.project_root),
+        "result_html": portable_path(clean_html_path, config.project_root),
+        "raw_html": portable_path(raw_html_path, config.project_root),
+        "chunks": portable_path(chunks_path, config.project_root),
+        "pages": portable_path(pages_dir, config.project_root),
+    }
+    label_counts = Counter(
+        str(block.get("raw_label") or block.get("type") or "Block")
+        for block in source_blocks
+    )
     metadata_path.write_text(
-        json.dumps(
+        _json_text(
             {
                 "source_object_id": data_object.object_id,
                 "file_name": file_path.name,
@@ -224,25 +352,473 @@ def _write_raw_outputs(
                     for result in results
                 ),
                 "latency_seconds": latency_seconds,
-                "pages": [
-                    {
-                        "page_number": index + 1,
-                        "token_count": int(
-                            getattr(result, "token_count", 0) or 0
-                        ),
-                    }
-                    for index, result in enumerate(results)
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
+                "label_counts": dict(sorted(label_counts.items())),
+                "source_block_count": len(source_blocks),
+                "table_count": len(extraction.get("tables", [])),
+                "figure_count": len(extraction.get("figures", [])),
+                "formula_count": len(extraction.get("formulas", [])),
+                "image_files": image_files,
+                "reading_order_source": (
+                    "chandra2_layout" if source_blocks else "unavailable"
+                ),
+                "reading_order_complete": reading_order_complete,
+                "raw_chandra_outputs": paths,
+            }
         ),
         encoding="utf-8",
     )
-    return (
-        portable_path(markdown_path, config.project_root),
-        portable_path(metadata_path, config.project_root),
+    paths["metadata"] = portable_path(
+        metadata_path,
+        config.project_root,
+    )
+    return paths
+
+
+class _HTMLInspector(HTMLParser):
+    """Collect readable text, image references, and math from model HTML."""
+
+    _SEPARATORS = set(
+        "br caption div h1 h2 h3 h4 h5 li ol p pre table td th tr ul".split()
+    )
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.images: list[dict[str, str]] = []
+        self.math: list[str] = []
+        self._in_math = False
+        self._math_parts: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        tag = tag.casefold()
+        if tag in self._SEPARATORS:
+            self.parts.append(" ")
+        if tag == "img":
+            attributes = {key.casefold(): str(value or "") for key, value in attrs}
+            alt = attributes.get("alt", "").strip()
+            src = attributes.get("src", "").strip()
+            self.images.append({"alt": alt, "src": src})
+            if alt:
+                self.parts.append(f" {alt} ")
+        if tag == "math":
+            self._in_math = True
+            self._math_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() != "math" or not self._in_math:
+            return
+        value = _normalize_text("".join(self._math_parts))
+        if value:
+            self.math.append(value)
+        self._in_math = False
+        self._math_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if data:
+            self.parts.append(data)
+            if self._in_math:
+                self._math_parts.append(data)
+
+
+def _page_payloads(
+    results: list[Any],
+) -> tuple[list[dict[str, Any]], int]:
+    pages: list[dict[str, Any]] = []
+    raw_block_count = 0
+    for page_number, result in enumerate(results, start=1):
+        raw_blocks = list(getattr(result, "chunks", None) or [])
+        raw_block_count += len(raw_blocks)
+        blocks = [dict(block) for block in raw_blocks if isinstance(block, dict)]
+        pages.append(
+            {
+                "page_number": page_number,
+                "page_box": _numeric_box(getattr(result, "page_box", None)) or [],
+                "token_count": int(getattr(result, "token_count", 0) or 0),
+                "blocks": blocks,
+                "image_files": [],
+            }
+        )
+    return pages, raw_block_count
+
+
+def _source_blocks_from_pages(
+    pages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    source_blocks: list[dict[str, Any]] = []
+    for page in pages:
+        page_index = int(page["page_number"]) - 1
+        page_box = _numeric_box(page.get("page_box"))
+        blocks = page.get("blocks")
+        if not isinstance(blocks, list):
+            continue
+        for block_index, raw_block in enumerate(blocks):
+            if not isinstance(raw_block, dict):
+                continue
+            raw_label = str(raw_block.get("label") or "Block").strip() or "Block"
+            block_type = _normalize_label(raw_label)
+            html = str(raw_block.get("content") or "")
+            inspected = _inspect_html(html)
+            block: dict[str, Any] = {
+                "component_id": (
+                    f"/page/{page_index}/{block_type}/{block_index}"
+                ),
+                "page": page_index,
+                "block_index": block_index,
+                "type": block_type,
+                "raw_label": raw_label,
+                "text": _normalize_text("".join(inspected.parts)),
+                "source": "chandra2_layout",
+                "html": html,
+                "section_hierarchy": {},
+            }
+            bbox = _numeric_box(raw_block.get("bbox"))
+            if bbox:
+                block["bbox"] = bbox
+                block["polygon"] = _polygon_from_box(bbox)
+            if page_box:
+                block["page_box"] = page_box
+            source_blocks.append(block)
+    return source_blocks
+
+
+def _build_extraction(
+    markdown: str,
+    source_blocks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    title_block = next(
+        (
+            block
+            for block in source_blocks
+            if block.get("type") == "SectionHeader"
+            and str(block.get("text") or "").strip()
+        ),
+        None,
+    )
+    title = str(title_block.get("text")) if title_block else None
+    title_citations = [title_block["component_id"]] if title_block else []
+    text = markdown.strip() or "\n\n".join(
+        str(block.get("text") or "").strip()
+        for block in source_blocks
+        if str(block.get("text") or "").strip()
+    )
+    text_citations = [
+        block["component_id"]
+        for block in source_blocks
+        if str(block.get("text") or "").strip()
+    ]
+
+    tables: list[dict[str, Any]] = []
+    figures: list[dict[str, Any]] = []
+    formulas: list[str] = []
+    formula_citations: list[str] = []
+    used_caption_ids: set[str] = set()
+
+    for index, block in enumerate(source_blocks):
+        block_type = str(block.get("type") or "")
+        html = str(block.get("html") or "")
+        inspected = _inspect_html(html)
+        component_id = str(block["component_id"])
+
+        if block_type == "Table":
+            caption, caption_citations = _adjacent_caption(
+                source_blocks,
+                index,
+                prefer_next=False,
+                used_caption_ids=used_caption_ids,
+            )
+            tables.append(
+                {
+                    "caption": caption,
+                    "caption_citations": caption_citations,
+                    "content": html or str(block.get("text") or ""),
+                    "content_citations": [component_id],
+                    "content_format": "html" if html else "text",
+                }
+            )
+
+        is_figure = block_type in {"Image", "Figure", "Diagram"} or bool(
+            inspected.images
+        )
+        if is_figure:
+            caption, caption_citations = _adjacent_caption(
+                source_blocks,
+                index,
+                prefer_next=True,
+                used_caption_ids=used_caption_ids,
+            )
+            alt_text = " ".join(
+                dict.fromkeys(
+                    _normalize_text(image.get("alt", ""))
+                    for image in inspected.images
+                    if image.get("alt")
+                )
+            )
+            description = alt_text or str(block.get("text") or "").strip()
+            figures.append(
+                {
+                    "caption": caption,
+                    "caption_citations": caption_citations,
+                    "description": description,
+                    "description_citations": [component_id],
+                }
+            )
+
+        block_formulas = list(inspected.math)
+        if block_type == "EquationBlock" and not block_formulas:
+            formula_text = str(block.get("text") or "").strip()
+            if formula_text:
+                block_formulas.append(formula_text)
+        for formula in block_formulas:
+            if formula and formula not in formulas:
+                formulas.append(formula)
+                formula_citations.append(component_id)
+
+    return {
+        "document_type": None,
+        "language": None,
+        "title": title,
+        "title_citations": title_citations,
+        "main_text": text,
+        "main_text_citations": text_citations,
+        "tables": tables,
+        "figures": figures,
+        "formulas": formulas,
+        "formulas_citations": formula_citations,
+    }
+
+
+def _adjacent_caption(
+    blocks: list[dict[str, Any]],
+    index: int,
+    *,
+    prefer_next: bool,
+    used_caption_ids: set[str],
+) -> tuple[str, list[str]]:
+    candidates = (index + 1, index - 1) if prefer_next else (index - 1, index + 1)
+    page = blocks[index].get("page")
+    for candidate_index in candidates:
+        if not 0 <= candidate_index < len(blocks):
+            continue
+        candidate = blocks[candidate_index]
+        if candidate.get("page") != page or candidate.get("type") != "Caption":
+            continue
+        component_id = str(candidate.get("component_id") or "")
+        if component_id in used_caption_ids:
+            continue
+        caption = str(candidate.get("text") or "").strip()
+        if caption:
+            used_caption_ids.add(component_id)
+            return caption, [component_id]
+    return "", []
+
+
+def _output_bundle_dir(
+    config: Chandra2Config,
+    file_path: Path,
+    data_object: DataObject,
+    results: list[Any],
+) -> Path | None:
+    if not config.output_dir:
+        return None
+    has_images = config.include_images and any(
+        bool(getattr(result, "images", None)) for result in results
+    )
+    if not config.save_raw_outputs and not has_images:
+        return None
+    bundle_dir = Path(config.output_dir) / (
+        f"{_safe_slug(file_path.stem)}--{data_object.object_id}"
+    )
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    return bundle_dir
+
+
+def _write_images(
+    config: Chandra2Config,
+    bundle_dir: Path | None,
+    results: list[Any],
+) -> list[dict[str, Any]]:
+    if not config.include_images:
+        return []
+
+    records: list[dict[str, Any]] = []
+    used_names: set[str] = set()
+    image_dir = bundle_dir / "images" if bundle_dir else None
+    if image_dir:
+        image_dir.mkdir(parents=True, exist_ok=True)
+
+    for page_number, result in enumerate(results, start=1):
+        for image_index, (original_name, image) in enumerate(
+            dict(getattr(result, "images", None) or {}).items(),
+            start=1,
+        ):
+            file_name = Path(str(original_name)).name
+            if not file_name:
+                file_name = f"page-{page_number}-image-{image_index}.webp"
+            if file_name.casefold() in used_names:
+                file_name = f"page-{page_number}-{image_index}-{file_name}"
+            used_names.add(file_name.casefold())
+            record: dict[str, Any] = {
+                "page": page_number - 1,
+                "original_name": str(original_name),
+                "name": file_name,
+                "path": None,
+                "status": "not_saved",
+            }
+            if image_dir is not None:
+                output_path = image_dir / file_name
+                try:
+                    image.save(output_path)
+                except Exception as exc:
+                    record["status"] = "save_failed"
+                    record["error"] = f"{type(exc).__name__}: {exc}"
+                else:
+                    record["status"] = "saved"
+                    record["path"] = portable_path(
+                        output_path,
+                        config.project_root,
+                    )
+            records.append(record)
+    return records
+
+
+def _align_image_files(
+    figures: Any,
+    source_blocks: list[dict[str, Any]],
+    results: list[Any],
+    saved_images: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(figures, list):
+        return []
+    blocks_by_id = {block["component_id"]: block for block in source_blocks}
+    clean_refs_by_page = {
+        page: _inspect_html(str(getattr(result, "html", "") or "")).images
+        for page, result in enumerate(results)
+    }
+    image_names = {
+        index: {
+            Path(str(record.get("original_name") or "")).name.casefold(),
+            Path(str(record.get("name") or "")).name.casefold(),
+        }
+        for index, record in enumerate(saved_images)
+    }
+    used: set[int] = set()
+    aligned: list[dict[str, Any]] = []
+
+    for figure_index, figure in enumerate(figures):
+        citations = figure.get("description_citations", [])
+        component_id = str(citations[0]) if citations else ""
+        block = blocks_by_id.get(component_id, {})
+        page = int(block.get("page", 0))
+        raw_refs = _inspect_html(str(block.get("html") or "")).images
+        raw_alts = {
+            _normalize_text(ref["alt"]).casefold()
+            for ref in raw_refs
+            if ref["alt"]
+        }
+        candidates = {
+            Path(ref["src"]).name.casefold()
+            for ref in raw_refs
+            if ref["src"]
+        }
+        candidates.update(
+            Path(ref["src"]).name.casefold()
+            for ref in clean_refs_by_page.get(page, [])
+            if ref["src"]
+            and _normalize_text(ref["alt"]).casefold() in raw_alts
+        )
+        if not candidates and block.get("type") in {"Image", "Figure", "Diagram"}:
+            candidates.update(
+                Path(ref["src"]).name.casefold()
+                for ref in clean_refs_by_page.get(page, [])
+                if ref["src"]
+            )
+
+        match = next(
+            (
+                index
+                for index, record in enumerate(saved_images)
+                if index not in used
+                and record["page"] == page
+                and candidates & image_names[index]
+            ),
+            None,
+        )
+        if match is None:
+            aligned.append(
+                {
+                    "name": None,
+                    "path": None,
+                    "status": "unavailable",
+                    "source_ref": component_id or f"figure:{figure_index}",
+                }
+            )
+            continue
+
+        used.add(match)
+        record = saved_images[match]
+        aligned.append(
+            {
+                "name": record["name"],
+                "path": record["path"],
+                "status": record["status"],
+                "source_ref": component_id,
+            }
+        )
+
+    aligned.extend(
+        {
+            "name": record["name"],
+            "path": record["path"],
+            "status": record["status"],
+            "source_ref": None,
+        }
+        for index, record in enumerate(saved_images)
+        if index not in used
+    )
+    return aligned
+
+
+def _inspect_html(value: str) -> _HTMLInspector:
+    inspector = _HTMLInspector()
+    inspector.feed(value)
+    inspector.close()
+    return inspector
+
+
+def _normalize_label(value: str) -> str:
+    parts = re.findall(r"[A-Za-z0-9]+", value)
+    return "".join(part[:1].upper() + part[1:] for part in parts) or "Block"
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _numeric_box(value: Any) -> list[int | float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    if any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value):
+        return None
+    return list(value)
+
+
+def _polygon_from_box(
+    box: list[int | float],
+) -> list[list[int | float]]:
+    x0, y0, x1, y1 = box
+    return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
     )
 
 

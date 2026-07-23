@@ -6,8 +6,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..models import DataObject, InitialSchema, ParsedData, QuarantinedDocument, make_id
-from .parsing import infer_initial_schema, parse_raw_file
+from ..models import (
+    DataObject,
+    InitialSchema,
+    ParsedData,
+    ParseResult,
+    ParseStatus,
+    QuarantinedDocument,
+    make_id,
+)
+from .parsing import ParsingService, infer_initial_schema
 from .detector import detect_content_type, detect_format
 from .validation import validate_parsed_document
 from ..utils.paths import portable_path
@@ -59,7 +67,8 @@ def run(
             "size_bytes": path.stat().st_size,
         },
     )
-    parsed = parse_raw_file(path, data_object, parser_config)
+    parse_result = ParsingService.from_config(parser_config).parse(path, data_object)
+    parsed = _require_parsed_data(parse_result)
     quarantine_reasons = validate_parsed_document(parsed)
     if quarantine_reasons:
         output.quarantined_documents.append(
@@ -79,3 +88,27 @@ def run(
     output.initial_schemas.append(schema)
 
     return output
+
+
+_PARSER_ERROR_TYPES: dict[str, type[Exception]] = {
+    "ConnectionError": ConnectionError,
+    "FileNotFoundError": FileNotFoundError,
+    "PermissionError": PermissionError,
+    "TimeoutError": TimeoutError,
+    "ValueError": ValueError,
+}
+
+
+def _require_parsed_data(result: ParseResult) -> ParsedData:
+    """Unwrap a successful routed parse while retaining fail-fast behavior."""
+    if result.status is ParseStatus.SUCCESS and result.parsed_data is not None:
+        return result.parsed_data
+
+    message = str(
+        result.error.get("message")
+        or result.reason
+        or f"{result.backend} parser returned {result.status.value}"
+    )
+    error_type = str(result.error.get("type") or "")
+    exception_type = _PARSER_ERROR_TYPES.get(error_type, RuntimeError)
+    raise exception_type(message)

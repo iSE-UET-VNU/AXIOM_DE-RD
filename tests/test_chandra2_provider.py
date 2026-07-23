@@ -17,7 +17,9 @@ from src.ingestion.parsing.backends import DocumentParser
 from src.ingestion.parsing.chandra2 import _ChandraRuntime
 from src.ingestion.parsing.service import ParsingService
 from src.ingestion.runner import run as run_ingestion
+from src.ingestion.schema_inference import build_initial_schema
 from src.models import DataObject, ParseStatus
+from src.reading_order import reading_order_from_rows
 from src.utils.config import resolve_parser_config
 
 
@@ -49,6 +51,14 @@ class _FakeManager:
         return [self.results[item.image] for item in batch]
 
 
+class _FakeImage:
+    def __init__(self, payload: bytes = b"image") -> None:
+        self.payload = payload
+
+    def save(self, path: str | Path) -> None:
+        Path(path).write_bytes(self.payload)
+
+
 def _runtime(pages: list[object], manager: _FakeManager) -> _ChandraRuntime:
     return _ChandraRuntime(
         load_file=lambda path, config: pages,
@@ -57,11 +67,26 @@ def _runtime(pages: list[object], manager: _FakeManager) -> _ChandraRuntime:
     )
 
 
-def _result(markdown: str, token_count: int, *, error: bool = False) -> object:
+def _result(
+    markdown: str,
+    token_count: int,
+    *,
+    error: bool = False,
+    raw: str = "",
+    html: str = "",
+    chunks: list[dict[str, object]] | None = None,
+    page_box: list[int] | None = None,
+    images: dict[str, object] | None = None,
+) -> object:
     return SimpleNamespace(
         markdown=markdown,
         token_count=token_count,
         error=error,
+        raw=raw,
+        html=html,
+        chunks=chunks or [],
+        page_box=page_box or [],
+        images=images or {},
     )
 
 
@@ -168,7 +193,10 @@ class Chandra2ProviderTests(unittest.TestCase):
             )
 
         self.assertEqual(parsed.text, "First\n\nSecond\n\nThird")
-        self.assertEqual(parsed.rows, [{"text": parsed.text}])
+        self.assertEqual(parsed.rows[0]["text"], parsed.text)
+        self.assertEqual(parsed.rows[0]["extraction"]["main_text"], parsed.text)
+        self.assertEqual(parsed.rows[0]["source_blocks"], [])
+        self.assertEqual(parsed.rows[0]["reading_order"], [])
         self.assertEqual(parsed.metadata["page_count"], 3)
         self.assertEqual(parsed.metadata["token_count"], 12)
         self.assertEqual([len(batch) for batch, _ in manager.calls], [2, 1])
@@ -179,7 +207,7 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertEqual(
             manager.calls[0][1],
             {
-                "include_images": False,
+                "include_images": True,
                 "include_headers_footers": False,
                 "max_output_tokens": 12384,
                 "max_workers": 4,
@@ -190,6 +218,194 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertEqual(metadata["token_count"], 12)
         self.assertEqual(metadata["method"], "vllm")
         self.assertEqual(metadata["model_name"], "chandra-test")
+        self.assertFalse(parsed.metadata["reading_order_complete"])
+
+    def test_adapts_layout_blocks_components_and_images_to_ingestion_contract(
+        self,
+    ) -> None:
+        page_one_chunks = [
+            {
+                "bbox": [100, 50, 900, 120],
+                "label": "Section-Header",
+                "content": "<h1>Invoice 2026</h1>",
+            },
+            {
+                "bbox": [100, 150, 900, 450],
+                "label": "Table",
+                "content": (
+                    '<table><tr><th>Item</th><th>Value</th></tr>'
+                    '<tr><td rowspan="2">A</td><td>1</td></tr>'
+                    '<tr><td colspan="1">2</td></tr></table>'
+                ),
+            },
+            {
+                "bbox": [100, 455, 900, 490],
+                "label": "Caption",
+                "content": "<p>Table 1. Totals</p>",
+            },
+            {
+                "bbox": [100, 520, 500, 800],
+                "label": "Image",
+                "content": '<img alt="Revenue chart"/>',
+            },
+            {
+                "bbox": [100, 805, 500, 840],
+                "label": "Caption",
+                "content": "<p>Figure 1. Revenue</p>",
+            },
+            {
+                "bbox": [600, 700, 900, 850],
+                "label": "Text",
+                "content": '<img alt="Handwritten signature"/>',
+            },
+        ]
+        page_two_chunks = [
+            {
+                "bbox": [150, 200, 850, 300],
+                "label": "Equation-Block",
+                "content": "<math>E = mc^2</math>",
+            }
+        ]
+        manager = _FakeManager(
+            {
+                "page-1": _result(
+                    "# Invoice 2026\n\n| Item | Value |\n|---|---|",
+                    20,
+                    raw="<div>raw page 1</div>",
+                    html=(
+                        "<h1>Invoice 2026</h1>"
+                        '<img alt="Revenue chart" src="chart.webp"/>'
+                    ),
+                    chunks=page_one_chunks,
+                    page_box=[0, 0, 1000, 1400],
+                    images={"chart.webp": _FakeImage(b"chart")},
+                ),
+                "page-2": _result(
+                    "E = mc^2",
+                    5,
+                    raw="<div>raw page 2</div>",
+                    html="<math>E = mc^2</math>",
+                    chunks=page_two_chunks,
+                    page_box=[0, 0, 1000, 1400],
+                ),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "invoice.pdf"
+            path.write_bytes(b"%PDF-1.4\n")
+            provider = Chandra2Provider(
+                Chandra2Config(
+                    batch_size=1,
+                    output_dir=str(root / "outputs"),
+                    project_root=str(root),
+                ),
+                _runtime_loader=lambda: _runtime(
+                    ["page-1", "page-2"],
+                    manager,
+                ),
+            )
+
+            parsed = provider.parse_file(path, _data_object(path))
+            bundle = root / "outputs" / "invoice--document-1"
+            chunks_payload = json.loads(
+                (bundle / "chunks.json").read_text(encoding="utf-8")
+            )
+            raw_metadata = json.loads(
+                (bundle / "metadata.json").read_text(encoding="utf-8")
+            )
+            saved_chart = (bundle / "images" / "chart.webp").read_bytes()
+            artifact_names = {
+                item.relative_to(bundle).as_posix()
+                for item in bundle.rglob("*")
+                if item.is_file()
+            }
+
+        row = parsed.rows[0]
+        extraction = row["extraction"]
+        self.assertEqual(extraction["title"], "Invoice 2026")
+        self.assertIsNone(extraction["language"])
+        self.assertIsNone(extraction["document_type"])
+        self.assertEqual(len(extraction["tables"]), 1)
+        self.assertIn('rowspan="2"', extraction["tables"][0]["content"])
+        self.assertIn('colspan="1"', extraction["tables"][0]["content"])
+        self.assertEqual(
+            extraction["tables"][0]["caption"],
+            "Table 1. Totals",
+        )
+        self.assertEqual(len(extraction["figures"]), 2)
+        self.assertEqual(
+            extraction["figures"][0]["caption"],
+            "Figure 1. Revenue",
+        )
+        self.assertEqual(extraction["figures"][1]["caption"], "")
+        self.assertEqual(extraction["formulas"], ["E = mc^2"])
+        self.assertEqual(parsed.tables, [])
+        initial_schema = build_initial_schema(parsed)
+        self.assertEqual(
+            initial_schema.metadata["component_counts"]["tables"],
+            1,
+        )
+        self.assertEqual(
+            initial_schema.metadata["component_counts"]["figures"],
+            2,
+        )
+
+        self.assertEqual(len(row["source_blocks"]), 7)
+        first_block = row["source_blocks"][0]
+        self.assertEqual(
+            first_block["component_id"],
+            "/page/0/SectionHeader/0",
+        )
+        self.assertEqual(first_block["bbox"], [100, 50, 900, 120])
+        self.assertEqual(
+            first_block["polygon"],
+            [[100, 50], [900, 50], [900, 120], [100, 120]],
+        )
+        self.assertEqual(first_block["page_box"], [0, 0, 1000, 1400])
+        self.assertEqual(
+            row["reading_order"][-1],
+            "/page/1/EquationBlock/0",
+        )
+        final_blocks, final_order, final_order_meta = reading_order_from_rows(
+            parsed.rows
+        )
+        self.assertEqual(len(final_blocks), 7)
+        self.assertEqual(final_order, row["reading_order"])
+        self.assertEqual(final_order_meta["source"], "chandra2_layout")
+        self.assertTrue(final_order_meta["complete"])
+        self.assertTrue(parsed.metadata["reading_order_complete"])
+        self.assertEqual(parsed.metadata["reading_order_source"], "chandra2_layout")
+        self.assertEqual(parsed.metadata["table_count"], 1)
+        self.assertEqual(parsed.metadata["figure_count"], 2)
+        self.assertEqual(parsed.metadata["formula_count"], 1)
+        self.assertEqual(parsed.metadata["image_count"], 1)
+        self.assertEqual(parsed.metadata["image_files"][0]["status"], "saved")
+        self.assertEqual(
+            parsed.metadata["image_files"][1]["status"],
+            "unavailable",
+        )
+
+        self.assertEqual(saved_chart, b"chart")
+        self.assertEqual(len(chunks_payload["pages"]), 2)
+        self.assertEqual(raw_metadata["source_block_count"], 7)
+        self.assertTrue(
+            {
+                "result.md",
+                "result.html",
+                "raw.html",
+                "chunks.json",
+                "metadata.json",
+                "pages/page_0001.raw.html",
+                "pages/page_0001.clean.html",
+                "pages/page_0001.chunks.json",
+                "pages/page_0002.raw.html",
+                "pages/page_0002.clean.html",
+                "pages/page_0002.chunks.json",
+                "images/chart.webp",
+            }.issubset(artifact_names)
+        )
 
     def test_hf_method_runs_in_process_without_vllm_options(self) -> None:
         manager = _FakeManager({"page-1": _result("Local result", 2)})
@@ -203,7 +419,11 @@ class Chandra2ProviderTests(unittest.TestCase):
         )
         provider = Chandra2Provider(
             Chandra2Config.from_mapping(
-                {"method": "hf", "save_raw_outputs": False}
+                {
+                    "method": "hf",
+                    "include_images": False,
+                    "save_raw_outputs": False,
+                }
             ),
             _runtime_loader=lambda: runtime,
         )
@@ -222,6 +442,7 @@ class Chandra2ProviderTests(unittest.TestCase):
             parsed.metadata["model_name"], "datalab-to/chandra-ocr-2-test"
         )
         self.assertEqual(len(manager.calls), 1)
+        self.assertFalse(manager.calls[0][1]["include_images"])
         self.assertNotIn("max_workers", manager.calls[0][1])
         self.assertNotIn("max_retries", manager.calls[0][1])
 
@@ -254,6 +475,9 @@ class Chandra2ProviderTests(unittest.TestCase):
             Chandra2Config.from_mapping({"max_retries": -1})
         with self.assertRaisesRegex(ValueError, "method"):
             Chandra2Config.from_mapping({"method": "unknown"})
+        self.assertFalse(
+            Chandra2Config.from_mapping({"include_images": False}).include_images
+        )
 
     def test_parser_config_resolves_chandra_output_into_parser_assets_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

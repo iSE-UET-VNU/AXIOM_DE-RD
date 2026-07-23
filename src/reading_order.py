@@ -10,6 +10,7 @@ from typing import Any
 
 _COMPONENT_PATH = re.compile(r"^/page/(\d+)/([^/]+)/(\d+)$")
 _NON_CONTENT_BLOCK_TYPES = {"document", "page"}
+_NATIVE_BLOCK_SOURCES = {"parser_json", "chandra2_layout"}
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -163,6 +164,7 @@ def reading_order_from_rows(
     all_blocks: list[dict[str, Any]] = []
     native_rows = 0
     extraction_rows = 0
+    native_sources: set[str] = set()
 
     for row in rows:
         if not isinstance(row, dict):
@@ -174,8 +176,13 @@ def reading_order_from_rows(
             else []
         )
         if normalized_row_blocks:
-            if all(block.get("source") == "parser_json" for block in normalized_row_blocks):
+            row_sources = {
+                str(block.get("source") or "")
+                for block in normalized_row_blocks
+            }
+            if row_sources and row_sources <= _NATIVE_BLOCK_SOURCES:
                 native_rows += 1
+                native_sources.update(row_sources)
             else:
                 extraction_rows += 1
             all_blocks.extend(normalized_row_blocks)
@@ -192,7 +199,9 @@ def reading_order_from_rows(
     reading_order = [block["component_id"] for block in blocks]
     is_native = bool(blocks) and native_rows > 0 and extraction_rows == 0
     source = (
-        "parser_json"
+        next(iter(native_sources))
+        if is_native and len(native_sources) == 1
+        else "parser_native_mixed"
         if is_native
         else "structured_extraction_citations"
         if blocks
