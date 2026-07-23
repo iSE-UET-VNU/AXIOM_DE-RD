@@ -22,3 +22,5 @@ data/output/*
 !data/enriched/.gitkeep
 !data/embedded/.gitkeep
 !data/output/.gitkeep
+
+.vscode
