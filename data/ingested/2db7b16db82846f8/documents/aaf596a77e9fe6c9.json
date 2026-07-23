@@ -1,0 +1,437 @@
+{
+  "contract_version": "ingested-document-v2",
+  "stage": "ingested",
+  "status": "succeeded",
+  "document_id": "aaf596a77e9fe6c9",
+  "source": {
+    "object_id": "aaf596a77e9fe6c9",
+    "uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_093.png",
+    "content_type": "image/png",
+    "metadata": {
+      "input_provider": "presigned_s3_info",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_093.png",
+      "size_bytes": 4218421,
+      "sha256": "d3af8e3a8d7374806d888d0ea515e97b88192778464224c0de7abc4c6e98fde1",
+      "response_content_type": "image/png",
+      "s3_bucket": "datahub-document-service",
+      "s3_key": "magazine_TheEconomist.2023.11.25_page_093.png",
+      "s3_etag": "b932ecea3e0bc55e0337e168481a3753",
+      "s3_version_id": null,
+      "relative_uri": "magazine_TheEconomist.2023.11.25_page_093.png",
+      "format": "png"
+    }
+  },
+  "parsed": {
+    "object_id": "aaf596a77e9fe6c9",
+    "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_093.png",
+    "source_format": "png",
+    "rows": [
+      {
+        "extraction": {
+          "document_type": "report",
+          "document_type_citations": [
+            "/page/0/Text/3",
+            "/page/0/Text/21",
+            "/page/0/Text/28"
+          ],
+          "document_type_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/Text/3",
+              "/page/0/Text/21",
+              "/page/0/Text/28"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The document is a report/index summary page. The value 'report' is correct and supported by the text in /page/0/Text/3, /page/0/Text/21, and /page/0/Text/28.\n\nConclusion: report, which agrees with the extraction."
+            }
+          },
+          "language": "en",
+          "language_citations": [
+            "/page/0/Text/3",
+            "/page/0/Text/21"
+          ],
+          "language_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/Text/3",
+              "/page/0/Text/21"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The dominant language of the document is English ('en'), as seen throughout the text blocks on page 0.\n\nConclusion: en, which agrees with the extraction."
+            }
+          },
+          "title": "Resilient Cities Index",
+          "title_citations": [
+            "/page/0/SectionHeader/2"
+          ],
+          "title_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/SectionHeader/2"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The main title is 'Resilient Cities Index', which is clearly visible in /page/0/SectionHeader/2.\n\nConclusion: Resilient Cities Index, which agrees with the extraction."
+            }
+          },
+          "main_text": "ECONOMIST\nIMPACT\nResilient Cities Index\nA global benchmark of urban risk, response and recovery\n01.\nScan to reveal the most resilient city\n02.\nLos Angeles\n03.\nLondon\n04.\nSingapore\n05.\nParis\nTop five\nCities across America, Europe and Asia have successfully built infrastructural, environmental, social and economic resilience.\nResilient cities continue to adapt and grow amid uncertainty and change. They identify risks and create systems that enable businesses and residents to recover and thrive after unexpected events. The Resilient Cities Index 2023, devised by Economist Impact, examines the preparedness of 25 cities in four vital areas—critical infrastructure, environment, socio-institutional and economic.\nThe research highlights the following strategies to build resilience:\n• Incentivise businesses and residents to guard against future risks by using financial rewards for hitting targets.\n• Plan a cohesive response to shocks by integrating vulnerable groups and offering comprehensive social safety-nets.\n• Drive innovative, scalable and cost-effective solutions through a dynamic business ecosystem.\n• Promote community stewardship through education and collaboration.\n“A resilience strategy is not something developed at a desk by a city official. Cities need to bring a variety of stakeholders together, including community representation, the poor and the vulnerable.”\nKatrin Bruebach\nGlobal director of programmes and delivery\nResilient Cities Network\nWhat is stopping cities from building holistic resilience?\nRead the report to find out more about the risks, rankings and best practices at https://impact.economist.com/projects/resilient-cities/\nSponsored by\nTOKIO MARINE GROUP",
+          "main_text_citations": [
+            "/page/0/Text/1",
+            "/page/0/SectionHeader/2",
+            "/page/0/Text/3",
+            "/page/0/Text/4",
+            "/page/0/Text/6",
+            "/page/0/Text/7",
+            "/page/0/Text/9",
+            "/page/0/Text/10",
+            "/page/0/Text/12",
+            "/page/0/Text/13",
+            "/page/0/Text/15",
+            "/page/0/Text/16",
+            "/page/0/Text/18",
+            "/page/0/SectionHeader/19",
+            "/page/0/Text/20",
+            "/page/0/Text/21",
+            "/page/0/Text/22",
+            "/page/0/ListGroup/23",
+            "/page/0/Text/24",
+            "/page/0/Text/25",
+            "/page/0/Text/26",
+            "/page/0/Text/28",
+            "/page/0/Text/29",
+            "/page/0/Text/31"
+          ],
+          "main_text_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/Text/1",
+              "/page/0/SectionHeader/2",
+              "/page/0/Text/3",
+              "/page/0/Text/4",
+              "/page/0/Text/6",
+              "/page/0/Text/7",
+              "/page/0/Text/9",
+              "/page/0/Text/10",
+              "/page/0/Text/12",
+              "/page/0/Text/13",
+              "/page/0/Text/15",
+              "/page/0/Text/16",
+              "/page/0/Text/18",
+              "/page/0/SectionHeader/19",
+              "/page/0/Text/20",
+              "/page/0/Text/21",
+              "/page/0/Text/22",
+              "/page/0/ListGroup/23",
+              "/page/0/Text/24",
+              "/page/0/Text/25",
+              "/page/0/Text/26",
+              "/page/0/Text/28",
+              "/page/0/Text/29",
+              "/page/0/Text/31"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The extracted main text matches the natural reading order of the document, preserving headings, lists, and paragraphs from page 0.\n\nConclusion: ECONOMIST\nIMPACT\nResilient Cities Index\nA global benchmark of urban risk, response and recovery\n01.\nScan to reveal the most resilient city\n02.\nLos Angeles\n03.\nLondon\n04.\nSingapore\n05.\nParis\nTop five\nCities across America, Europe and Asia have successfully built infrastructural, environmental, social and economic resilience.\nResilient cities continue to adapt and grow amid uncertainty and change. They identify risks and create systems that enable businesses and residents to recover and thrive after unexpected events. The Resilient Cities Index 2023, devised by Economist Impact, examines the preparedness of 25 cities in four vital areas—critical infrastructure, environment, socio-institutional and economic.\nThe research highlights the following strategies to build resilience:\n• Incentivise businesses and residents to guard against future risks by using financial rewards for hitting targets.\n• Plan a cohesive response to shocks by integrating vulnerable groups and offering comprehensive social safety-nets.\n• Drive innovative, scalable and cost-effective solutions through a dynamic business ecosystem.\n• Promote community stewardship through education and collaboration.\n’’A resilience strategy is not something developed at a desk by a city official. Cities need to bring a variety of stakeholders together, including community representation, the poor and the vulnerable.’’\nKatrin Bruebach\nGlobal director of programmes and delivery\nResilient Cities Network\nWhat is stopping cities from building holistic resilience?\nRead the report to find out more about the risks, rankings and best practices at https://impact.economist.com/projects/resilient-cities/\nSponsored by\nTOKIO MARINE GROUP, which agrees with the extraction."
+            }
+          },
+          "tables": [],
+          "tables_meta": {
+            "verification": {
+              "status": "PASS",
+              "feedback": "There are no tables visible in the document. The extraction correctly contains 0 items.\n\nConclusion: [], which agrees with the extraction."
+            }
+          },
+          "figures": [
+            {
+              "caption": "01.",
+              "caption_citations": [
+                "/page/0/Text/4"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Text/4"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the first figure is '01.', which is supported by /page/0/Text/4.\n\nConclusion: 01., which agrees with the extraction."
+                }
+              },
+              "description": "QR code linking to the Resilient Cities Index report.",
+              "description_citations": [
+                "/page/0/Picture/5"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/5"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description 'QR code linking to the Resilient Cities Index report.' is correct and supported by /page/0/Picture/5.\n\nConclusion: QR code linking to the Resilient Cities Index report., which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "02.",
+              "caption_citations": [
+                "/page/0/Text/7"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Text/7"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the second figure is '02.', which is supported by /page/0/Text/7.\n\nConclusion: 02., which agrees with the extraction."
+                }
+              },
+              "description": "Illustration of Los Angeles skyline.",
+              "description_citations": [
+                "/page/0/Picture/8"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/8"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description 'Illustration of Los Angeles skyline.' is correct and supported by /page/0/Picture/8.\n\nConclusion: Illustration of Los Angeles skyline., which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "03.",
+              "caption_citations": [
+                "/page/0/Text/10"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Text/10"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the third figure is '03.', which is supported by /page/0/Text/10.\n\nConclusion: 03., which agrees with the extraction."
+                }
+              },
+              "description": "Illustration of London skyline with the London Eye.",
+              "description_citations": [
+                "/page/0/Picture/11"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/11"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description 'Illustration of London skyline with the London Eye.' is correct and supported by /page/0/Picture/11.\n\nConclusion: Illustration of London skyline with the London Eye., which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "04.",
+              "caption_citations": [
+                "/page/0/Text/13"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Text/13"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the fourth figure is '04.', which is supported by /page/0/Text/13.\n\nConclusion: 04., which agrees with the extraction."
+                }
+              },
+              "description": "Illustration of Singapore skyline with the Marina Bay Sands.",
+              "description_citations": [
+                "/page/0/Picture/14"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/14"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description 'Illustration of Singapore skyline with the Marina Bay Sands.' is correct and supported by /page/0/Picture/14.\n\nConclusion: Illustration of Singapore skyline with the Marina Bay Sands., which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "05.",
+              "caption_citations": [
+                "/page/0/Text/16"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Text/16"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the fifth figure is '05.', which is supported by /page/0/Text/16.\n\nConclusion: 05., which agrees with the extraction."
+                }
+              },
+              "description": "Illustration of Paris skyline with the Eiffel Tower.",
+              "description_citations": [
+                "/page/0/Picture/17"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/17"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description 'Illustration of Paris skyline with the Eiffel Tower.' is correct and supported by /page/0/Picture/17.\n\nConclusion: Illustration of Paris skyline with the Eiffel Tower., which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "",
+              "caption_citations": [],
+              "caption_meta": {
+                "extraction_status": "NOT_RESOLVABLE",
+                "reasoning": null,
+                "citations": [],
+                "verification": {
+                  "status": "FAIL_UNRESOLVABLE",
+                  "feedback": "The second QR code image (/page/0/Picture/27) does not have a numbered caption or nearby label. The extraction correctly marks this as NOT_RESOLVABLE.\n\nConclusion: the document does not support a value for this field."
+                }
+              },
+              "description": "QR code linking to the Resilient Cities Index report.",
+              "description_citations": [
+                "/page/0/Picture/27"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/27"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description 'QR code linking to the Resilient Cities Index report.' is correct and supported by /page/0/Picture/27.\n\nConclusion: QR code linking to the Resilient Cities Index report., which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "",
+              "caption_citations": [],
+              "caption_meta": {
+                "extraction_status": "NOT_RESOLVABLE",
+                "reasoning": null,
+                "citations": [],
+                "verification": {
+                  "status": "FAIL_UNRESOLVABLE",
+                  "feedback": "The Tokio Marine Group logo (/page/0/Picture/30) does not have a caption. The extraction correctly marks this as NOT_RESOLVABLE.\n\nConclusion: the document does not support a value for this field."
+                }
+              },
+              "description": "Tokio Marine Group logo.",
+              "description_citations": [
+                "/page/0/Picture/30"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/30"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description 'Tokio Marine Group logo.' is correct and supported by /page/0/Picture/30.\n\nConclusion: Tokio Marine Group logo., which agrees with the extraction."
+                }
+              }
+            }
+          ],
+          "figures_meta": {
+            "verification": {
+              "status": "PASS",
+              "feedback": "The extraction contains 7 items in this list, which correctly captures all the images/illustrations and logos on page 0 (the QR codes, the city skyline illustrations, and the Tokio Marine Group logo).\n\nConclusion: the list is complete, which agrees with the extraction."
+            }
+          },
+          "formulas": null,
+          "formulas_meta": {
+            "verification": {
+              "status": "PASS",
+              "feedback": "There are no mathematical formulas in the document. The extraction correctly contains 0 items.\n\nConclusion: [], which agrees with the extraction."
+            }
+          }
+        },
+        "text": "ECONOMIST\nIMPACT\nResilient Cities Index\nA global benchmark of urban risk, response and recovery\n01.\nScan to reveal the most resilient city\n02.\nLos Angeles\n03.\nLondon\n04.\nSingapore\n05.\nParis\nTop five\nCities across America, Europe and Asia have successfully built infrastructural, environmental, social and economic resilience.\nResilient cities continue to adapt and grow amid uncertainty and change. They identify risks and create systems that enable businesses and residents to recover and thrive after unexpected events. The Resilient Cities Index 2023, devised by Economist Impact, examines the preparedness of 25 cities in four vital areas—critical infrastructure, environment, socio-institutional and economic.\nThe research highlights the following strategies to build resilience:\n• Incentivise businesses and residents to guard against future risks by using financial rewards for hitting targets.\n• Plan a cohesive response to shocks by integrating vulnerable groups and offering comprehensive social safety-nets.\n• Drive innovative, scalable and cost-effective solutions through a dynamic business ecosystem.\n• Promote community stewardship through education and collaboration.\n“A resilience strategy is not something developed at a desk by a city official. Cities need to bring a variety of stakeholders together, including community representation, the poor and the vulnerable.”\nKatrin Bruebach\nGlobal director of programmes and delivery\nResilient Cities Network\nWhat is stopping cities from building holistic resilience?\nRead the report to find out more about the risks, rankings and best practices at https://impact.economist.com/projects/resilient-cities/\nSponsored by\nTOKIO MARINE GROUP"
+      }
+    ],
+    "text": "ECONOMIST\nIMPACT\nResilient Cities Index\nA global benchmark of urban risk, response and recovery\n01.\nScan to reveal the most resilient city\n02.\nLos Angeles\n03.\nLondon\n04.\nSingapore\n05.\nParis\nTop five\nCities across America, Europe and Asia have successfully built infrastructural, environmental, social and economic resilience.\nResilient cities continue to adapt and grow amid uncertainty and change. They identify risks and create systems that enable businesses and residents to recover and thrive after unexpected events. The Resilient Cities Index 2023, devised by Economist Impact, examines the preparedness of 25 cities in four vital areas—critical infrastructure, environment, socio-institutional and economic.\nThe research highlights the following strategies to build resilience:\n• Incentivise businesses and residents to guard against future risks by using financial rewards for hitting targets.\n• Plan a cohesive response to shocks by integrating vulnerable groups and offering comprehensive social safety-nets.\n• Drive innovative, scalable and cost-effective solutions through a dynamic business ecosystem.\n• Promote community stewardship through education and collaboration.\n“A resilience strategy is not something developed at a desk by a city official. Cities need to bring a variety of stakeholders together, including community representation, the poor and the vulnerable.”\nKatrin Bruebach\nGlobal director of programmes and delivery\nResilient Cities Network\nWhat is stopping cities from building holistic resilience?\nRead the report to find out more about the risks, rankings and best practices at https://impact.economist.com/projects/resilient-cities/\nSponsored by\nTOKIO MARINE GROUP",
+    "metadata": {
+      "parser": "lift-api",
+      "mode": "accurate",
+      "status": "complete",
+      "page_count": 1,
+      "latency_seconds": 40.25,
+      "raw_output_path": null,
+      "image_count": 7,
+      "image_files": [
+        {
+          "name": "390120de4fe440c42fea8154fcaad334_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/aaf596a77e9fe6c9/images/390120de4fe440c42fea8154fcaad334_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "4b6451a59338bba97433c43461a5c372_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/aaf596a77e9fe6c9/images/4b6451a59338bba97433c43461a5c372_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "550c2b8319d5a5f7c34f94769c42a6ab_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/aaf596a77e9fe6c9/images/550c2b8319d5a5f7c34f94769c42a6ab_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "6ed175c791b5e156d9c98a8dbcc3318c_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/aaf596a77e9fe6c9/images/6ed175c791b5e156d9c98a8dbcc3318c_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "6f6587acbc93336fd2131b3d9fc368ad_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/aaf596a77e9fe6c9/images/6f6587acbc93336fd2131b3d9fc368ad_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "718a6d07db33948007827df8b113c87e_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/aaf596a77e9fe6c9/images/718a6d07db33948007827df8b113c87e_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "d3294dc879b451b369c0b06f42e9b39f_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/aaf596a77e9fe6c9/images/d3294dc879b451b369c0b06f42e9b39f_img.jpg",
+          "status": "saved"
+        }
+      ],
+      "image_source": "convert",
+      "raw_lift_outputs": {}
+    }
+  },
+  "schema_id": "a6824fb5e3e4e4ed",
+  "failure": null
+}

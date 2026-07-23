@@ -1,0 +1,253 @@
+{
+  "contract_version": "stage-metadata-v1",
+  "run_id": "2db7b16db82846f8",
+  "stage": "embedded",
+  "created_at": "2026-07-18T10:42:51.217750+00:00",
+  "input_source": "s3://datahub-document-service",
+  "document_count": 19,
+  "documents": [
+    {
+      "document_id": "696866f4065cc880",
+      "source_uri": "s3://datahub-document-service/images.jpeg",
+      "content_type": "image/jpeg",
+      "file_name": "images.jpeg",
+      "size_bytes": 33061
+    },
+    {
+      "document_id": "b83f808d0c389470",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_030.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_030.png",
+      "size_bytes": 9026666
+    },
+    {
+      "document_id": "c6ce3de254f0b3c4",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_068.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_068.png",
+      "size_bytes": 4259300
+    },
+    {
+      "document_id": "3dcc6cdad47fca2a",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_071.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_071.png",
+      "size_bytes": 5397589
+    },
+    {
+      "document_id": "5aa1f1fa42bc013c",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_082.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_082.png",
+      "size_bytes": 4835536
+    },
+    {
+      "document_id": "d71eeb13163a4ac9",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_006.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_006.png",
+      "size_bytes": 2562497
+    },
+    {
+      "document_id": "ea221a4c77317025",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_068.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_068.png",
+      "size_bytes": 5244414
+    },
+    {
+      "document_id": "8c88d81b323d5b1d",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_069.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_069.png",
+      "size_bytes": 5801379
+    },
+    {
+      "document_id": "aaf596a77e9fe6c9",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_093.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_093.png",
+      "size_bytes": 4218421
+    },
+    {
+      "document_id": "26098a04fc080aa5",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_023.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_023.png",
+      "size_bytes": 5418755
+    },
+    {
+      "document_id": "24810660f0a86079",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_028.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_028.png",
+      "size_bytes": 5010827
+    },
+    {
+      "document_id": "ce8f91da5a6f611f",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_031.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_031.png",
+      "size_bytes": 4948757
+    },
+    {
+      "document_id": "42bca47212b0c83f",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_062.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_062.png",
+      "size_bytes": 5113883
+    },
+    {
+      "document_id": "e1afb17c546a888b",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_009.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_009.png",
+      "size_bytes": 769210
+    },
+    {
+      "document_id": "82d36d434c410b20",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_015.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_015.png",
+      "size_bytes": 1164223
+    },
+    {
+      "document_id": "464c9793df10cc89",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_045.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_045.png",
+      "size_bytes": 855610
+    },
+    {
+      "document_id": "3eab4cf879a79b0e",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_048.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_048.png",
+      "size_bytes": 767364
+    },
+    {
+      "document_id": "fad201dc8bcdf815",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_082.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_082.png",
+      "size_bytes": 811320
+    },
+    {
+      "document_id": "d8e3e81369c511b9",
+      "source_uri": "s3://datahub-document-service/test/uet.jpg",
+      "content_type": "image/jpeg",
+      "file_name": "uet.jpg",
+      "size_bytes": 76869
+    }
+  ],
+  "schema": {
+    "document_file": {
+      "contract_version": "string",
+      "stage": "embedded",
+      "document_id": "string",
+      "retrieval": {
+        "items": [
+          {
+            "item_id": "string; stable component id",
+            "type": "text|table|image",
+            "position": "source position",
+            "content": "consumer content without parser audit fields; may contain normalized source_refs",
+            "asset": "object; optional parsed image asset",
+            "embeddings": [
+              {
+                "model": "string",
+                "dimension": "integer",
+                "values": "number[]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "records": {
+      "retrieval": {
+        "items": [
+          {
+            "item_id": "string; stable component id",
+            "type": "text|table|image",
+            "position": "source position",
+            "content": "consumer content without parser audit fields; may contain normalized source_refs",
+            "asset": "object; optional parsed image asset",
+            "embeddings": [
+              {
+                "model": "string",
+                "dimension": "integer",
+                "values": "number[]"
+              }
+            ]
+          }
+        ]
+      },
+      "source_reference": {
+        "component_id": "string; parser component path",
+        "page": "integer; page index parsed from component_id when available",
+        "field": "string; semantic field supported by the reference"
+      },
+      "index_record_types": [
+        "catalog",
+        "document",
+        "image",
+        "text_chunk"
+      ],
+      "vector_dimension": 1536
+    }
+  },
+  "errors": [
+    {
+      "code": "document_quarantined",
+      "stage": "ingestion",
+      "status": "quarantined",
+      "document_id": "4b545a679f5c9ad0",
+      "source_uri": "s3://datahub-document-service/testbank (1).pdf",
+      "reasons": [
+        {
+          "code": "zero_page_count",
+          "field": "parsed.metadata.page_count",
+          "message": "Parser returned page_count=0."
+        },
+        {
+          "code": "null_extraction",
+          "field": "parsed.rows[].extraction",
+          "message": "Lift returned no extraction object."
+        },
+        {
+          "code": "empty_parsed_content",
+          "field": "parsed",
+          "message": "Parsed document has no text, structured row, or component."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "indexing": {
+      "status": "passed",
+      "record_count": 158,
+      "counts_by_type": {
+        "catalog": 19,
+        "document": 19,
+        "figure": 0,
+        "image": 33,
+        "table": 0,
+        "text_chunk": 87
+      }
+    },
+    "embedding": {
+      "status": "passed",
+      "provider": "openrouter",
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "generated_count": 120,
+      "skipped_count": 0
+    },
+    "integration": {
+      "schema_match_count": 0,
+      "entity_match_count": 0,
+      "relationship_count": 0
+    }
+  }
+}

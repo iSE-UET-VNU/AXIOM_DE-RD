@@ -1,0 +1,197 @@
+{
+  "contract_version": "ingested-document-v2",
+  "stage": "ingested",
+  "status": "succeeded",
+  "document_id": "fad201dc8bcdf815",
+  "source": {
+    "object_id": "fad201dc8bcdf815",
+    "uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_082.png",
+    "content_type": "image/png",
+    "metadata": {
+      "input_provider": "presigned_s3_info",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_082.png",
+      "size_bytes": 811320,
+      "sha256": "b35255d3b2c19e3c3b8ff991cb9eccdc9e9ea1d1f9cffe4a33bd102f0e8f91f5",
+      "response_content_type": "image/png",
+      "s3_bucket": "datahub-document-service",
+      "s3_key": "magazine_TheEconomist.2023.12.09_page_082.png",
+      "s3_etag": "efa8c704282fdfcbde8d50ff92b2eca8",
+      "s3_version_id": null,
+      "relative_uri": "magazine_TheEconomist.2023.12.09_page_082.png",
+      "format": "png"
+    }
+  },
+  "parsed": {
+    "object_id": "fad201dc8bcdf815",
+    "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_082.png",
+    "source_format": "png",
+    "rows": [
+      {
+        "extraction": {
+          "document_type": "newspaper",
+          "document_type_citations": [
+            "/page/0/Text/4"
+          ],
+          "document_type_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/Text/4"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The document is an obituary/article from a newspaper or magazine, which matches the extracted value of 'newspaper'. This is supported by the layout and content in block `/page/0/Text/4`.\n\nConclusion: newspaper, which agrees with the extraction."
+            }
+          },
+          "language": "en",
+          "language_citations": [
+            "/page/0/Text/4"
+          ],
+          "language_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/Text/4"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The dominant language of the document is English, which is correctly represented as 'en'. This is supported by all text blocks, such as `/page/0/Text/4`.\n\nConclusion: en, which agrees with the extraction."
+            }
+          },
+          "title": "A cowgirl on the bench",
+          "title_citations": [
+            "/page/0/SectionHeader/3"
+          ],
+          "title_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/SectionHeader/3"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The main visible title is 'A cowgirl on the bench', which is located in block `/page/0/SectionHeader/3`.\n\nConclusion: A cowgirl on the bench, which agrees with the extraction."
+            }
+          },
+          "main_text": "Sandra Day O'Connor, the first woman on America's Supreme Court, died on December 1st, aged 93\n\nTHAT ARIZONA SUN was hot, and Sandra Day, then a teenager, was in the high desert alone. She had taken the disreputable old Chevy pickup on a two-and-a-half-hour drive to where her father, and the cowboys of his 200,000-acre Lazy B ranch, were branding cattle. The chuck-wagon box held the lunch she had packed for them herself, coleslaw and potatoes and applesauce cake. But now the left rear tyre was totally flat.\n\nThe desert was an empty and dangerous place, so silent that you could sometimes hear an ant running on a leaf. Anything there could scratch or sting you. If something went wrong, you had to fix it yourself. So she climbed out, jacked up the truck, and struggled to get the lug nuts off. It took a while; they were on tight. After an hour she got the tyre changed, reached the men, made a brushwood fire for the coffee and spread out lunch. No one thanked her. This was her allotted job, and she was late.\n\nIt was probably for experiences like this, she thought later, that President Ronald Reagan had picked her in 1981 to be the first woman justice on the Supreme Court. He too was a westerner who loved the ranching life. And for all the law she had learned by then, it was the lessons of the desert that inspired her in her 24 years on the bench. Tackle the job in front of you. Overcome your own difficulties. Don't expect anyone else to assist. But in company, co-operate kindly. It was all good training for being a woman and a moderate on a court otherwise equally divided, most of the time, between four liberals and four conservatives.\n\nAll the same, her appointment was a shock. She had no aspiration that way. And it seemed just as well. She left Stanford Law in 1952, third in her class, to find no law firm would hire her. Only one would even interview a female; at the end, rejected again, she was asked how well she could type. But she was determined to practise law, no matter what. She took a first post without pay, became assistant to Arizona's attorney-general, and rose to be an appeals court judge. Not the deepest legal preparation, but enough.\n\nThough the tag was annoying, the role of swing vote was ideal for her. She had no ideology to speak of. As a longtime Republican, she approved of small government, remembering how her father had been driven mad by far-off paper-pushers in Washington. She also tolerated guns well. But no grand vision, save reverence for the Framers, coloured her decisions. Instead, as on the Lazy B, she was clear-eyed and practical. For her the most striking part of the justices' conference was the way, at the end, they all shook hands.\n\nThe first day was nerve-racking, but she soon steadied. For most of her tenure the chief justice was William Rehnquist, a fellow Arizonan, with whom she had played cards and had fun at Stanford Law. The work itself was fascinating. Her method was to stay close to the record, ignoring any dramatics from the lawyers. Not all \"crises\", she wrote, were real. Crises were when a ranch-hand was badly hurt, with no medical help for miles. Crises were when a windmill stopped pumping water. By contrast, her cases involved a potential injustice that needed long consideration.\n\nIn doing so, she sometimes had to adjust her own beliefs. Several cases involved affirmative action, which she instinctively disliked. She ruled against it in a gerrymandering case, because the equal-protection clause protected persons, not groups; she ruled for it in university admissions, because it encouraged diversity in work and civic life. She admitted to falling under the spell of Thurgood Marshall, the court's first black justice, and the stories of racial suffering he told, in his ringing voice, at the conference table. She had not heard that sort of talk in Arizona.\n\nHer opinions were written narrowly, because she always bore in mind the effect of her decisions on ordinary people. Unlike most other justices, she had been a politician, serving in the Arizona Senate. She therefore knew that, on the ground, legal rulings could prove intolerable. Abortion was the prime example. Eight years before she joined the court, Roe v Wade had become the law of the land. Twice, as the casting vote, she could have overturned it. But she did not. Personally, she found it repugnant; but at her age, 60 or so, she was not about to face an unwanted pregnancy. How could she cause distress to a young woman who was?\n\nStates had to be free, too, to run their own affairs. Her time in the Arizona Senate convinced her to trust their officers. But a notable exception came with the hair's-breadth presidential election of 2000, when her opinion that Florida's recount should stop put George Bush junior in the White House. As a Republican, she felt awkward; perhaps the court should have said \"We're not going to take it, goodbye!\" to that case. But then again, the recount was a shambles that contravened the equal-protection clause.\n\nThis was possibly the trickiest moment of her long legal career. She could think of others, though. Her failed attempt to run her own little law firm in the suburbs of Phoenix, while being a mother and a housewife. The time when the Arizona attorney-general, having no idea what to do with a woman, sent her to work in the state mental hospital. (Undeterred, she set up legal aid for the patients.) The time when, asking her first question from the Supreme Court bench, her light voice barely made itself heard.\n\nEventually, however, her questions rang out loud and clear. Lawyers quailed. Her presence also made a social difference to the court. She encouraged friendship, not just among her clerks, whom she mothered, but among the justices, whom she urged to lunch together after oral arguments. And in the wider world she chalked up one truly fine men's club conquered, though it was 12 years before Ruth Bader Ginsburg joined her there.\n\nThat bastion was not the first to fall. Before that, she had become the first woman majority leader of a state Senate. And before that she had been the first woman, or rather girl, to ride with a cattle drive at the Lazy B ranch. In that rugged, wonderful place, which surged through her mind and heart long after it was sold, she learned to show the men what women could do. Even if it made her late with their lunch.",
+          "main_text_citations": [
+            "/page/0/Text/4",
+            "/page/0/Text/5",
+            "/page/0/Text/6",
+            "/page/0/Text/7",
+            "/page/0/Text/8",
+            "/page/0/Text/9",
+            "/page/0/Text/10",
+            "/page/0/Text/11",
+            "/page/0/Text/12",
+            "/page/0/Text/13",
+            "/page/0/Text/14",
+            "/page/0/Text/15",
+            "/page/0/Text/16",
+            "/page/0/Text/17"
+          ],
+          "main_text_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/Text/4",
+              "/page/0/Text/5",
+              "/page/0/Text/6",
+              "/page/0/Text/7",
+              "/page/0/Text/8",
+              "/page/0/Text/9",
+              "/page/0/Text/10",
+              "/page/0/Text/11",
+              "/page/0/Text/12",
+              "/page/0/Text/13",
+              "/page/0/Text/14",
+              "/page/0/Text/15",
+              "/page/0/Text/16",
+              "/page/0/Text/17"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The extracted main text matches the natural reading order of the body text from block `/page/0/Text/4` to `/page/0/Text/17` exactly, preserving the content and structure.\n\nConclusion: Sandra Day O'Connor, the first woman on America's Supreme Court, died on December 1st, aged 93\n\nTHAT ARIZONA SUN was hot, and Sandra Day, then a teenager, was in the high desert alone. She had taken the disreputable old Chevy pickup on a two-and-a-half-hour drive to where her father, and the cowboys of his 200,000-acre Lazy B ranch, were branding cattle. The chuck-wagon box held the lunch she had packed for them herself, coleslaw and potatoes and applesauce cake. But now the left rear tyre was totally flat.\n\nThe desert was an empty and dangerous place, so silent that you could sometimes hear an ant running on a leaf. Anything there could scratch or sting you. If something went wrong, you had to fix it yourself. So she climbed out, jacked up the truck, and struggled to get the lug nuts off. It took a while; they were on tight. After an hour she got the tyre changed, reached the men, made a brushwood fire for the coffee and spread out lunch. No one thanked her. This was her allotted job, and she was late.\n\nIt was probably for experiences like this, she thought later, that President Ronald Reagan had picked her in 1981 to be the first woman justice on the Supreme Court. He too was a westerner who loved the ranching life. And for all the law she had learned by then, it was the lessons of the desert that inspired her in her 24 years on the bench. Tackle the job in front of you. Overcome your own difficulties. Don't expect anyone else to assist. But in company, co-operate kindly. It was all good training for being a woman and a moderate on a court otherwise equally divided, most of the time, between four liberals and four conservatives.\n\nAll the same, her appointment was a shock. She had no aspiration that way. And it seemed just as well. She left Stanford Law in 1952, third in her class, to find no law firm would hire her. Only one would even interview a female; at the end, rejected again, she was asked how well she could type. But she was determined to practise law, no matter what. She took a first post without pay, became assistant to Arizona's attorney-general, and rose to be an appeals court judge. Not the deepest legal preparation, but enough.\n\nThough the tag was annoying, the role of swing vote was ideal for her. She had no ideology to speak of. As a longtime Republican, she approved of small government, remembering how her father had been driven mad by far-off paper-pushers in Washington. She also tolerated guns well. But no grand vision, save reverence for the Framers, coloured her decisions. Instead, as on the Lazy B, she was clear-eyed and practical. For her the most striking part of the justices' conference was the way, at the end, they all shook hands.\n\nThe first day was nerve-racking, but she soon steadied. For most of her tenure the chief justice was William Rehnquist, a fellow Arizonan, with whom she had played cards and had fun at Stanford Law. The work itself was fascinating. Her method was to stay close to the record, ignoring any dramatics from the lawyers. Not all \"crises\", she wrote, were real. Crises were when a ranch-hand was badly hurt, with no medical help for miles. Crises were when a windmill stopped pumping water. By contrast, her cases involved a potential injustice that needed long consideration.\n\nIn doing so, she sometimes had to adjust her own beliefs. Several cases involved affirmative action, which she instinctively disliked. She ruled against it in a gerrymandering case, because the equal-protection clause protected persons, not groups; she ruled for it in university admissions, because it encouraged diversity in work and civic life. She admitted to falling under the spell of Thurgood Marshall, the court's first black justice, and the stories of racial suffering he told, in his ringing voice, at the conference table. She had not heard that sort of talk in Arizona.\n\nHer opinions were written narrowly, because she always bore in mind the effect of her decisions on ordinary people. Unlike most other justices, she had been a politician, serving in the Arizona Senate. She therefore knew that, on the ground, legal rulings could prove intolerable. Abortion was the prime example. Eight years before she joined the court, Roe v Wade had become the law of the land. Twice, as the casting vote, she could have overturned it. But she did not. Personally, she found it repugnant; but at her age, 60 or so, she was not about to face an unwanted pregnancy. How could she cause distress to a young woman who was?\n\nStates had to be free, too, to run their own affairs. Her time in the Arizona Senate convinced her to trust their officers. But a notable exception came with the hair's-breadth presidential election of 2000, when her opinion that Florida's recount should stop put George Bush junior in the White House. As a Republican, she felt awkward; perhaps the court should have said \"We're not going to take it, goodbye!\" to that case. But then again, the recount was a shambles that contravened the equal-protection clause.\n\nThis was possibly the trickiest moment of her long legal career. She could think of others, though. Her failed attempt to run her own little law firm in the suburbs of Phoenix, while being a mother and a housewife. The time when the Arizona attorney-general, having no idea what to do with a woman, sent her to work in the state mental hospital. (Undeterred, she set up legal aid for the patients.) The time when, asking her first question from the Supreme Court bench, her light voice barely made itself heard.\n\nEventually, however, her questions rang out loud and clear. Lawyers quailed. Her presence also made a social difference to the court. She encouraged friendship, not just among her clerks, whom she mothered, but among the justices, whom she urged to lunch together after oral arguments. And in the wider world she chalked up one truly fine men's club conquered, though it was 12 years before Ruth Bader Ginsburg joined her there.\n\nThat bastion was not the first to fall. Before that, she had become the first woman majority leader of a state Senate. And before that she had been the first woman, or rather girl, to ride with a cattle drive at the Lazy B ranch. In that rugged, wonderful place, which surged through her mind and heart long after it was sold, she learned to show the men what women could do. Even if it made her late with their lunch., which agrees with the extraction."
+            }
+          },
+          "tables": [],
+          "tables_meta": {
+            "verification": {
+              "status": "FAIL_UNRESOLVABLE",
+              "feedback": "There are no tables visible in the document. The extraction correctly contains 0 items.\n\nConclusion: the document does not support a value for this field."
+            }
+          },
+          "figures": [
+            {
+              "caption": "Portrait of Sandra Day O'Connor, the first woman on the U.S. Supreme Court.",
+              "caption_citations": [
+                "/page/0/Picture/2"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/2"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the figure is extracted from the image alt text in block `/page/0/Picture/2` ('Portrait of Sandra Day O'Connor, the first woman on the U.S. Supreme Court.'), which is correct.\n\nConclusion: Portrait of Sandra Day O'Connor, the first woman on the U.S. Supreme Court., which agrees with the extraction."
+                }
+              },
+              "description": "A color portrait photograph of Sandra Day O'Connor. She is a woman with short, wavy, light brown hair, looking directly at the camera with a slight smile. She is wearing a dark blue or black jacket over a patterned blouse. The background is a solid, deep red.",
+              "description_citations": [
+                "/page/0/Picture/2"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/2"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description of the figure matches the text in block `/page/0/Picture/2` exactly.\n\nConclusion: A color portrait photograph of Sandra Day O'Connor. She is a woman with short, wavy, light brown hair, looking directly at the camera with a slight smile. She is wearing a dark blue or black jacket over a patterned blouse. The background is a solid, deep red., which agrees with the extraction."
+                }
+              }
+            }
+          ],
+          "figures_meta": {
+            "verification": {
+              "status": "PASS",
+              "feedback": "There is 1 figure visible in the document, which is the portrait of Sandra Day O'Connor in block `/page/0/Picture/2`. The extraction correctly contains 1 item.\n\nConclusion: [{\"caption\": \"Portrait of Sandra Day O'Connor, the first woman on the U.S. Supreme Court.\", \"description\": \"A color portrait photograph of Sandra Day O'Connor. She is a woman with short, wavy, light brown hair, looking directly at the camera with a slight smile. She is wearing a dark blue or black jacket over a patterned blouse. The background is a solid, deep red.\"}], which agrees with the extraction."
+            }
+          },
+          "formulas": null,
+          "formulas_meta": {
+            "verification": {
+              "status": "FAIL_UNRESOLVABLE",
+              "feedback": "There are no mathematical formulas visible in the document. The extraction correctly contains 0 items.\n\nConclusion: the document does not support a value for this field."
+            }
+          }
+        },
+        "text": "Sandra Day O'Connor, the first woman on America's Supreme Court, died on December 1st, aged 93\n\nTHAT ARIZONA SUN was hot, and Sandra Day, then a teenager, was in the high desert alone. She had taken the disreputable old Chevy pickup on a two-and-a-half-hour drive to where her father, and the cowboys of his 200,000-acre Lazy B ranch, were branding cattle. The chuck-wagon box held the lunch she had packed for them herself, coleslaw and potatoes and applesauce cake. But now the left rear tyre was totally flat.\n\nThe desert was an empty and dangerous place, so silent that you could sometimes hear an ant running on a leaf. Anything there could scratch or sting you. If something went wrong, you had to fix it yourself. So she climbed out, jacked up the truck, and struggled to get the lug nuts off. It took a while; they were on tight. After an hour she got the tyre changed, reached the men, made a brushwood fire for the coffee and spread out lunch. No one thanked her. This was her allotted job, and she was late.\n\nIt was probably for experiences like this, she thought later, that President Ronald Reagan had picked her in 1981 to be the first woman justice on the Supreme Court. He too was a westerner who loved the ranching life. And for all the law she had learned by then, it was the lessons of the desert that inspired her in her 24 years on the bench. Tackle the job in front of you. Overcome your own difficulties. Don't expect anyone else to assist. But in company, co-operate kindly. It was all good training for being a woman and a moderate on a court otherwise equally divided, most of the time, between four liberals and four conservatives.\n\nAll the same, her appointment was a shock. She had no aspiration that way. And it seemed just as well. She left Stanford Law in 1952, third in her class, to find no law firm would hire her. Only one would even interview a female; at the end, rejected again, she was asked how well she could type. But she was determined to practise law, no matter what. She took a first post without pay, became assistant to Arizona's attorney-general, and rose to be an appeals court judge. Not the deepest legal preparation, but enough.\n\nThough the tag was annoying, the role of swing vote was ideal for her. She had no ideology to speak of. As a longtime Republican, she approved of small government, remembering how her father had been driven mad by far-off paper-pushers in Washington. She also tolerated guns well. But no grand vision, save reverence for the Framers, coloured her decisions. Instead, as on the Lazy B, she was clear-eyed and practical. For her the most striking part of the justices' conference was the way, at the end, they all shook hands.\n\nThe first day was nerve-racking, but she soon steadied. For most of her tenure the chief justice was William Rehnquist, a fellow Arizonan, with whom she had played cards and had fun at Stanford Law. The work itself was fascinating. Her method was to stay close to the record, ignoring any dramatics from the lawyers. Not all \"crises\", she wrote, were real. Crises were when a ranch-hand was badly hurt, with no medical help for miles. Crises were when a windmill stopped pumping water. By contrast, her cases involved a potential injustice that needed long consideration.\n\nIn doing so, she sometimes had to adjust her own beliefs. Several cases involved affirmative action, which she instinctively disliked. She ruled against it in a gerrymandering case, because the equal-protection clause protected persons, not groups; she ruled for it in university admissions, because it encouraged diversity in work and civic life. She admitted to falling under the spell of Thurgood Marshall, the court's first black justice, and the stories of racial suffering he told, in his ringing voice, at the conference table. She had not heard that sort of talk in Arizona.\n\nHer opinions were written narrowly, because she always bore in mind the effect of her decisions on ordinary people. Unlike most other justices, she had been a politician, serving in the Arizona Senate. She therefore knew that, on the ground, legal rulings could prove intolerable. Abortion was the prime example. Eight years before she joined the court, Roe v Wade had become the law of the land. Twice, as the casting vote, she could have overturned it. But she did not. Personally, she found it repugnant; but at her age, 60 or so, she was not about to face an unwanted pregnancy. How could she cause distress to a young woman who was?\n\nStates had to be free, too, to run their own affairs. Her time in the Arizona Senate convinced her to trust their officers. But a notable exception came with the hair's-breadth presidential election of 2000, when her opinion that Florida's recount should stop put George Bush junior in the White House. As a Republican, she felt awkward; perhaps the court should have said \"We're not going to take it, goodbye!\" to that case. But then again, the recount was a shambles that contravened the equal-protection clause.\n\nThis was possibly the trickiest moment of her long legal career. She could think of others, though. Her failed attempt to run her own little law firm in the suburbs of Phoenix, while being a mother and a housewife. The time when the Arizona attorney-general, having no idea what to do with a woman, sent her to work in the state mental hospital. (Undeterred, she set up legal aid for the patients.) The time when, asking her first question from the Supreme Court bench, her light voice barely made itself heard.\n\nEventually, however, her questions rang out loud and clear. Lawyers quailed. Her presence also made a social difference to the court. She encouraged friendship, not just among her clerks, whom she mothered, but among the justices, whom she urged to lunch together after oral arguments. And in the wider world she chalked up one truly fine men's club conquered, though it was 12 years before Ruth Bader Ginsburg joined her there.\n\nThat bastion was not the first to fall. Before that, she had become the first woman majority leader of a state Senate. And before that she had been the first woman, or rather girl, to ride with a cattle drive at the Lazy B ranch. In that rugged, wonderful place, which surged through her mind and heart long after it was sold, she learned to show the men what women could do. Even if it made her late with their lunch."
+      }
+    ],
+    "text": "Sandra Day O'Connor, the first woman on America's Supreme Court, died on December 1st, aged 93\n\nTHAT ARIZONA SUN was hot, and Sandra Day, then a teenager, was in the high desert alone. She had taken the disreputable old Chevy pickup on a two-and-a-half-hour drive to where her father, and the cowboys of his 200,000-acre Lazy B ranch, were branding cattle. The chuck-wagon box held the lunch she had packed for them herself, coleslaw and potatoes and applesauce cake. But now the left rear tyre was totally flat.\n\nThe desert was an empty and dangerous place, so silent that you could sometimes hear an ant running on a leaf. Anything there could scratch or sting you. If something went wrong, you had to fix it yourself. So she climbed out, jacked up the truck, and struggled to get the lug nuts off. It took a while; they were on tight. After an hour she got the tyre changed, reached the men, made a brushwood fire for the coffee and spread out lunch. No one thanked her. This was her allotted job, and she was late.\n\nIt was probably for experiences like this, she thought later, that President Ronald Reagan had picked her in 1981 to be the first woman justice on the Supreme Court. He too was a westerner who loved the ranching life. And for all the law she had learned by then, it was the lessons of the desert that inspired her in her 24 years on the bench. Tackle the job in front of you. Overcome your own difficulties. Don't expect anyone else to assist. But in company, co-operate kindly. It was all good training for being a woman and a moderate on a court otherwise equally divided, most of the time, between four liberals and four conservatives.\n\nAll the same, her appointment was a shock. She had no aspiration that way. And it seemed just as well. She left Stanford Law in 1952, third in her class, to find no law firm would hire her. Only one would even interview a female; at the end, rejected again, she was asked how well she could type. But she was determined to practise law, no matter what. She took a first post without pay, became assistant to Arizona's attorney-general, and rose to be an appeals court judge. Not the deepest legal preparation, but enough.\n\nThough the tag was annoying, the role of swing vote was ideal for her. She had no ideology to speak of. As a longtime Republican, she approved of small government, remembering how her father had been driven mad by far-off paper-pushers in Washington. She also tolerated guns well. But no grand vision, save reverence for the Framers, coloured her decisions. Instead, as on the Lazy B, she was clear-eyed and practical. For her the most striking part of the justices' conference was the way, at the end, they all shook hands.\n\nThe first day was nerve-racking, but she soon steadied. For most of her tenure the chief justice was William Rehnquist, a fellow Arizonan, with whom she had played cards and had fun at Stanford Law. The work itself was fascinating. Her method was to stay close to the record, ignoring any dramatics from the lawyers. Not all \"crises\", she wrote, were real. Crises were when a ranch-hand was badly hurt, with no medical help for miles. Crises were when a windmill stopped pumping water. By contrast, her cases involved a potential injustice that needed long consideration.\n\nIn doing so, she sometimes had to adjust her own beliefs. Several cases involved affirmative action, which she instinctively disliked. She ruled against it in a gerrymandering case, because the equal-protection clause protected persons, not groups; she ruled for it in university admissions, because it encouraged diversity in work and civic life. She admitted to falling under the spell of Thurgood Marshall, the court's first black justice, and the stories of racial suffering he told, in his ringing voice, at the conference table. She had not heard that sort of talk in Arizona.\n\nHer opinions were written narrowly, because she always bore in mind the effect of her decisions on ordinary people. Unlike most other justices, she had been a politician, serving in the Arizona Senate. She therefore knew that, on the ground, legal rulings could prove intolerable. Abortion was the prime example. Eight years before she joined the court, Roe v Wade had become the law of the land. Twice, as the casting vote, she could have overturned it. But she did not. Personally, she found it repugnant; but at her age, 60 or so, she was not about to face an unwanted pregnancy. How could she cause distress to a young woman who was?\n\nStates had to be free, too, to run their own affairs. Her time in the Arizona Senate convinced her to trust their officers. But a notable exception came with the hair's-breadth presidential election of 2000, when her opinion that Florida's recount should stop put George Bush junior in the White House. As a Republican, she felt awkward; perhaps the court should have said \"We're not going to take it, goodbye!\" to that case. But then again, the recount was a shambles that contravened the equal-protection clause.\n\nThis was possibly the trickiest moment of her long legal career. She could think of others, though. Her failed attempt to run her own little law firm in the suburbs of Phoenix, while being a mother and a housewife. The time when the Arizona attorney-general, having no idea what to do with a woman, sent her to work in the state mental hospital. (Undeterred, she set up legal aid for the patients.) The time when, asking her first question from the Supreme Court bench, her light voice barely made itself heard.\n\nEventually, however, her questions rang out loud and clear. Lawyers quailed. Her presence also made a social difference to the court. She encouraged friendship, not just among her clerks, whom she mothered, but among the justices, whom she urged to lunch together after oral arguments. And in the wider world she chalked up one truly fine men's club conquered, though it was 12 years before Ruth Bader Ginsburg joined her there.\n\nThat bastion was not the first to fall. Before that, she had become the first woman majority leader of a state Senate. And before that she had been the first woman, or rather girl, to ride with a cattle drive at the Lazy B ranch. In that rugged, wonderful place, which surged through her mind and heart long after it was sold, she learned to show the men what women could do. Even if it made her late with their lunch.",
+    "metadata": {
+      "parser": "lift-api",
+      "mode": "accurate",
+      "status": "complete",
+      "page_count": 1,
+      "latency_seconds": 45.359,
+      "raw_output_path": null,
+      "image_count": 1,
+      "image_files": [
+        {
+          "name": "30a26f2d17ca95672702bf50fb4f0242_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/fad201dc8bcdf815/images/30a26f2d17ca95672702bf50fb4f0242_img.jpg",
+          "status": "saved"
+        }
+      ],
+      "image_source": "convert",
+      "raw_lift_outputs": {}
+    }
+  },
+  "schema_id": "eb2ff91d09528221",
+  "failure": null
+}

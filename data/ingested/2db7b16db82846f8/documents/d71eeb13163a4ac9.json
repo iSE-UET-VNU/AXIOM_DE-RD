@@ -1,0 +1,257 @@
+{
+  "contract_version": "ingested-document-v2",
+  "stage": "ingested",
+  "status": "succeeded",
+  "document_id": "d71eeb13163a4ac9",
+  "source": {
+    "object_id": "d71eeb13163a4ac9",
+    "uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_006.png",
+    "content_type": "image/png",
+    "metadata": {
+      "input_provider": "presigned_s3_info",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_006.png",
+      "size_bytes": 2562497,
+      "sha256": "4b07bb93eeaa79ab72490308aaa38fe27a322c7db189c356c5a9b26f6e252f0e",
+      "response_content_type": "image/png",
+      "s3_bucket": "datahub-document-service",
+      "s3_key": "magazine_TheEconomist.2023.11.25_page_006.png",
+      "s3_etag": "decdce44af61df182f1158712637e16e",
+      "s3_version_id": null,
+      "relative_uri": "magazine_TheEconomist.2023.11.25_page_006.png",
+      "format": "png"
+    }
+  },
+  "parsed": {
+    "object_id": "d71eeb13163a4ac9",
+    "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_006.png",
+    "source_format": "png",
+    "rows": [
+      {
+        "extraction": {
+          "document_type": "advertisement",
+          "document_type_citations": [
+            "/page/0/SectionHeader/0",
+            "/page/0/Text/6",
+            "/page/0/Text/7"
+          ],
+          "document_type_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/SectionHeader/0",
+              "/page/0/Text/6",
+              "/page/0/Text/7"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The document is a promotional advertisement for the Hyundai IONIQ 5 robotaxi, as indicated by the headline, promotional text, and disclaimer that the vehicle is not available for purchase.\n\nConclusion: \"advertisement\", which agrees with the extraction."
+            }
+          },
+          "language": "en",
+          "language_citations": [
+            "/page/0/SectionHeader/0",
+            "/page/0/Text/6"
+          ],
+          "language_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/SectionHeader/0",
+              "/page/0/Text/6"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The dominant language of the document is English (\"en\").\n\nConclusion: \"en\", which agrees with the extraction."
+            }
+          },
+          "title": "From IONIQ 5 to robotaxi.\nExcellence goes autonomous.",
+          "title_citations": [
+            "/page/0/SectionHeader/0"
+          ],
+          "title_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/SectionHeader/0"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The main title is \"From IONIQ 5 to robotaxi.\\nExcellence goes autonomous.\" found at /page/0/SectionHeader/0.\n\nConclusion: \"From IONIQ 5 to robotaxi.\\nExcellence goes autonomous.\", which agrees with the extraction."
+            }
+          },
+          "main_text": "From IONIQ 5 to robotaxi.\nExcellence goes autonomous.\n\nIONIQ 5 robotaxi\n\nIONIQ 5, 2022 World Car of the Year\n\nHyundai introduces the IONIQ 5 robotaxi.\n\nThe IONIQ 5 is proven worldwide for its prowess in electrification and sustainability. With its global award-winning DNA, Hyundai now begins a pivotal journey with the IONIQ 5 robotaxi, a level 4 autonomous vehicle that can drive without a driver. More than 30 sensors including LiDAR, and a computing system allows the robotaxi to detect 360° and make optimal decisions. Hyundai is beginning production of the IONIQ 5 robotaxi, which is set to launch in Las Vegas during the first half of 2024.\n\nComputer generated images shown, and actual production model may vary.\nThe vehicle is not available for purchase.",
+          "main_text_citations": [
+            "/page/0/SectionHeader/0",
+            "/page/0/Caption/2",
+            "/page/0/Caption/4",
+            "/page/0/SectionHeader/5",
+            "/page/0/Text/6",
+            "/page/0/Text/7"
+          ],
+          "main_text_meta": {
+            "extraction_status": "EXTRACTED",
+            "reasoning": null,
+            "citations": [
+              "/page/0/SectionHeader/0",
+              "/page/0/Caption/2",
+              "/page/0/Caption/4",
+              "/page/0/SectionHeader/5",
+              "/page/0/Text/6",
+              "/page/0/Text/7"
+            ],
+            "verification": {
+              "status": "PASS",
+              "feedback": "The main text matches the readable body text in natural reading order.\n\nConclusion: \"From IONIQ 5 to robotaxi.\\nExcellence goes autonomous.\\n\\nIONIQ 5 robotaxi\\n\\nIONIQ 5, 2022 World Car of the Year\\n\\nHyundai introduces the IONIQ 5 robotaxi.\\n\\nThe IONIQ 5 is proven worldwide for its prowess in electrification and sustainability. With its global award-winning DNA, Hyundai now begins a pivotal journey with the IONIQ 5 robotaxi, a level 4 autonomous vehicle that can drive without a driver. More than 30 sensors including LiDAR, and a computing system allows the robotaxi to detect 360° and make optimal decisions. Hyundai is beginning production of the IONIQ 5 robotaxi, which is set to launch in Las Vegas during the first half of 2024.\\n\\nComputer generated images shown, and actual production model may vary.\\nThe vehicle is not available for purchase.\", which agrees with the extraction."
+            }
+          },
+          "tables": [],
+          "tables_meta": {
+            "verification": {
+              "status": "PASS",
+              "feedback": "There are no tables in the document.\n\nConclusion: [], which agrees with the extraction."
+            }
+          },
+          "figures": [
+            {
+              "caption": "IONIQ 5 robotaxi",
+              "caption_citations": [
+                "/page/0/Caption/2"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Caption/2"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the first figure is \"IONIQ 5 robotaxi\" at /page/0/Caption/2.\n\nConclusion: \"IONIQ 5 robotaxi\", which agrees with the extraction."
+                }
+              },
+              "description": "A silver Hyundai IONIQ 5 robotaxi with a blue light on its roof, parked in front of a modern building with large glass windows. The license plate reads 'NER 2023'.",
+              "description_citations": [
+                "/page/0/Picture/1"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/1"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description matches the image alt text at /page/0/Picture/1.\n\nConclusion: \"A silver Hyundai IONIQ 5 robotaxi with a blue light on its roof, parked in front of a modern building with large glass windows. The license plate reads 'NER 2023'.\", which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "IONIQ 5, 2022 World Car of the Year",
+              "caption_citations": [
+                "/page/0/Caption/4"
+              ],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Caption/4"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The caption for the second figure is \"IONIQ 5, 2022 World Car of the Year\" at /page/0/Caption/4.\n\nConclusion: \"IONIQ 5, 2022 World Car of the Year\", which agrees with the extraction."
+                }
+              },
+              "description": "A silver Hyundai IONIQ 5 parked in front of a concrete wall with a grid of small holes. The license plate reads 'NER 2023'.",
+              "description_citations": [
+                "/page/0/Picture/3"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/3"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description matches the image alt text at /page/0/Picture/3.\n\nConclusion: \"A silver Hyundai IONIQ 5 parked in front of a concrete wall with a grid of small holes. The license plate reads 'NER 2023'.\", which agrees with the extraction."
+                }
+              }
+            },
+            {
+              "caption": "",
+              "caption_citations": [],
+              "caption_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The third figure (Hyundai logo) has no visible caption in the document.\n\nConclusion: \"\", which agrees with the extraction."
+                }
+              },
+              "description": "Hyundai logo.",
+              "description_citations": [
+                "/page/0/Picture/8"
+              ],
+              "description_meta": {
+                "extraction_status": "EXTRACTED",
+                "reasoning": null,
+                "citations": [
+                  "/page/0/Picture/8"
+                ],
+                "verification": {
+                  "status": "PASS",
+                  "feedback": "The description matches the image alt text at /page/0/Picture/8.\n\nConclusion: \"Hyundai logo.\", which agrees with the extraction."
+                }
+              }
+            }
+          ],
+          "figures_meta": {
+            "verification": {
+              "status": "PASS",
+              "feedback": "The document contains 3 figures, which matches the extraction.\n\nConclusion: the list is complete with 3 items."
+            }
+          },
+          "formulas": null,
+          "formulas_meta": {
+            "verification": {
+              "status": "PASS",
+              "feedback": "There are no mathematical formulas in the document.\n\nConclusion: [], which agrees with the extraction."
+            }
+          }
+        },
+        "text": "From IONIQ 5 to robotaxi.\nExcellence goes autonomous.\n\nIONIQ 5 robotaxi\n\nIONIQ 5, 2022 World Car of the Year\n\nHyundai introduces the IONIQ 5 robotaxi.\n\nThe IONIQ 5 is proven worldwide for its prowess in electrification and sustainability. With its global award-winning DNA, Hyundai now begins a pivotal journey with the IONIQ 5 robotaxi, a level 4 autonomous vehicle that can drive without a driver. More than 30 sensors including LiDAR, and a computing system allows the robotaxi to detect 360° and make optimal decisions. Hyundai is beginning production of the IONIQ 5 robotaxi, which is set to launch in Las Vegas during the first half of 2024.\n\nComputer generated images shown, and actual production model may vary.\nThe vehicle is not available for purchase."
+      }
+    ],
+    "text": "From IONIQ 5 to robotaxi.\nExcellence goes autonomous.\n\nIONIQ 5 robotaxi\n\nIONIQ 5, 2022 World Car of the Year\n\nHyundai introduces the IONIQ 5 robotaxi.\n\nThe IONIQ 5 is proven worldwide for its prowess in electrification and sustainability. With its global award-winning DNA, Hyundai now begins a pivotal journey with the IONIQ 5 robotaxi, a level 4 autonomous vehicle that can drive without a driver. More than 30 sensors including LiDAR, and a computing system allows the robotaxi to detect 360° and make optimal decisions. Hyundai is beginning production of the IONIQ 5 robotaxi, which is set to launch in Las Vegas during the first half of 2024.\n\nComputer generated images shown, and actual production model may vary.\nThe vehicle is not available for purchase.",
+    "metadata": {
+      "parser": "lift-api",
+      "mode": "accurate",
+      "status": "complete",
+      "page_count": 1,
+      "latency_seconds": 38.515,
+      "raw_output_path": null,
+      "image_count": 3,
+      "image_files": [
+        {
+          "name": "64662465bba247703fdec49c8f3309f9_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/d71eeb13163a4ac9/images/64662465bba247703fdec49c8f3309f9_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "6ed175c791b5e156d9c98a8dbcc3318c_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/d71eeb13163a4ac9/images/6ed175c791b5e156d9c98a8dbcc3318c_img.jpg",
+          "status": "saved"
+        },
+        {
+          "name": "935eed7aa61f7777f62cfc032e11bee9_img.jpg",
+          "path": "data/ingested/2db7b16db82846f8/assets/d71eeb13163a4ac9/images/935eed7aa61f7777f62cfc032e11bee9_img.jpg",
+          "status": "saved"
+        }
+      ],
+      "image_source": "convert",
+      "raw_lift_outputs": {}
+    }
+  },
+  "schema_id": "d651c2c4d90d42e8",
+  "failure": null
+}

@@ -1,0 +1,2280 @@
+{
+  "contract_version": "stage-metadata-v1",
+  "run_id": "2db7b16db82846f8",
+  "stage": "ingested",
+  "created_at": "2026-07-18T10:42:40.010863+00:00",
+  "input_source": "s3://datahub-document-service",
+  "document_count": 20,
+  "documents": [
+    {
+      "document_id": "696866f4065cc880",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/images.jpeg",
+      "content_type": "image/jpeg",
+      "file_name": "images.jpeg",
+      "size_bytes": 33061
+    },
+    {
+      "document_id": "b83f808d0c389470",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_030.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_030.png",
+      "size_bytes": 9026666
+    },
+    {
+      "document_id": "c6ce3de254f0b3c4",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_068.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_068.png",
+      "size_bytes": 4259300
+    },
+    {
+      "document_id": "3dcc6cdad47fca2a",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_071.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_071.png",
+      "size_bytes": 5397589
+    },
+    {
+      "document_id": "5aa1f1fa42bc013c",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_082.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.18_page_082.png",
+      "size_bytes": 4835536
+    },
+    {
+      "document_id": "d71eeb13163a4ac9",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_006.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_006.png",
+      "size_bytes": 2562497
+    },
+    {
+      "document_id": "ea221a4c77317025",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_068.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_068.png",
+      "size_bytes": 5244414
+    },
+    {
+      "document_id": "8c88d81b323d5b1d",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_069.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_069.png",
+      "size_bytes": 5801379
+    },
+    {
+      "document_id": "aaf596a77e9fe6c9",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_093.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.11.25_page_093.png",
+      "size_bytes": 4218421
+    },
+    {
+      "document_id": "26098a04fc080aa5",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_023.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_023.png",
+      "size_bytes": 5418755
+    },
+    {
+      "document_id": "24810660f0a86079",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_028.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_028.png",
+      "size_bytes": 5010827
+    },
+    {
+      "document_id": "ce8f91da5a6f611f",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_031.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_031.png",
+      "size_bytes": 4948757
+    },
+    {
+      "document_id": "42bca47212b0c83f",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_062.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.02_page_062.png",
+      "size_bytes": 5113883
+    },
+    {
+      "document_id": "e1afb17c546a888b",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_009.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_009.png",
+      "size_bytes": 769210
+    },
+    {
+      "document_id": "82d36d434c410b20",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_015.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_015.png",
+      "size_bytes": 1164223
+    },
+    {
+      "document_id": "464c9793df10cc89",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_045.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_045.png",
+      "size_bytes": 855610
+    },
+    {
+      "document_id": "3eab4cf879a79b0e",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_048.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_048.png",
+      "size_bytes": 767364
+    },
+    {
+      "document_id": "fad201dc8bcdf815",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_082.png",
+      "content_type": "image/png",
+      "file_name": "magazine_TheEconomist.2023.12.09_page_082.png",
+      "size_bytes": 811320
+    },
+    {
+      "document_id": "d8e3e81369c511b9",
+      "status": "succeeded",
+      "source_uri": "s3://datahub-document-service/test/uet.jpg",
+      "content_type": "image/jpeg",
+      "file_name": "uet.jpg",
+      "size_bytes": 76869
+    },
+    {
+      "document_id": "4b545a679f5c9ad0",
+      "status": "quarantined",
+      "source_uri": "s3://datahub-document-service/testbank (1).pdf",
+      "content_type": "application/pdf",
+      "file_name": "testbank-1-.pdf",
+      "size_bytes": 900992,
+      "failure_codes": [
+        "zero_page_count",
+        "null_extraction",
+        "empty_parsed_content"
+      ]
+    }
+  ],
+  "schema": {
+    "document_file": {
+      "contract_version": "string",
+      "stage": "ingested",
+      "status": "succeeded|quarantined",
+      "document_id": "string",
+      "source": "DataObject",
+      "parsed": "ParsedData|null",
+      "schema_id": "string|null",
+      "failure": "object|null"
+    },
+    "records": [
+      {
+        "schema_id": "4b92b9f9ca55647b",
+        "source_object_id": "696866f4065cc880",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "jpeg",
+          "source_uri": "s3://datahub-document-service/images.jpeg",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "6357b7c6055f6947",
+        "source_object_id": "b83f808d0c389470",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_030.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "28483fe25451397b",
+        "source_object_id": "c6ce3de254f0b3c4",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 2,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_068.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 2,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "311718e14a0b890d",
+        "source_object_id": "3dcc6cdad47fca2a",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_071.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "0084f0fd3dbe8390",
+        "source_object_id": "5aa1f1fa42bc013c",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.18_page_082.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "d651c2c4d90d42e8",
+        "source_object_id": "d71eeb13163a4ac9",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 3,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_006.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 3,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "640043cecf2c28aa",
+        "source_object_id": "ea221a4c77317025",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_068.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "7c80e7ff42232578",
+        "source_object_id": "8c88d81b323d5b1d",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_069.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "a6824fb5e3e4e4ed",
+        "source_object_id": "aaf596a77e9fe6c9",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 7,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.11.25_page_093.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 7,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "ffd7435b6456c765",
+        "source_object_id": "26098a04fc080aa5",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_023.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "9f3a0a784b14461f",
+        "source_object_id": "24810660f0a86079",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_028.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "934a96f0b7b7d29e",
+        "source_object_id": "ce8f91da5a6f611f",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 2,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_031.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 2,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "7e8432610d0f78c2",
+        "source_object_id": "42bca47212b0c83f",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.02_page_062.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "ae807fe77ba80844",
+        "source_object_id": "e1afb17c546a888b",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 2,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_009.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 2,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "6a98f335a1c072f8",
+        "source_object_id": "82d36d434c410b20",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 4,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_015.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 4,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "7ca971197397dd0e",
+        "source_object_id": "464c9793df10cc89",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_045.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "8e383a1c5d05915e",
+        "source_object_id": "3eab4cf879a79b0e",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_048.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "eb2ff91d09528221",
+        "source_object_id": "fad201dc8bcdf815",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "png",
+          "source_uri": "s3://datahub-document-service/magazine_TheEconomist.2023.12.09_page_082.png",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      },
+      {
+        "schema_id": "a99759df2ba7190c",
+        "source_object_id": "d8e3e81369c511b9",
+        "fields": {
+          "document.document_id": "string",
+          "document.source_uri": "string",
+          "document.source_format": "string",
+          "document.document_type": "string|null",
+          "document.language": "string|null",
+          "document.title": "string|null",
+          "document.main_text": "string",
+          "table.document_id": "string",
+          "table.table_id": "string",
+          "table.table_index": "integer",
+          "table.caption": "string",
+          "table.content": "string",
+          "figure.document_id": "string",
+          "figure.figure_id": "string",
+          "figure.figure_index": "integer",
+          "figure.caption": "string",
+          "figure.description": "string",
+          "formula.document_id": "string",
+          "formula.formula_id": "string",
+          "formula.formula_index": "integer",
+          "formula.text": "string"
+        },
+        "entities": [
+          {
+            "entity_type": "document",
+            "primary_key": "document_id",
+            "count": 1,
+            "fields": {
+              "document.document_id": "string",
+              "document.source_uri": "string",
+              "document.source_format": "string",
+              "document.document_type": "string|null",
+              "document.language": "string|null",
+              "document.title": "string|null",
+              "document.main_text": "string"
+            }
+          },
+          {
+            "entity_type": "table",
+            "primary_key": "table_id",
+            "count": 0,
+            "fields": {
+              "table.document_id": "string",
+              "table.table_id": "string",
+              "table.table_index": "integer",
+              "table.caption": "string",
+              "table.content": "string"
+            }
+          },
+          {
+            "entity_type": "figure",
+            "primary_key": "figure_id",
+            "count": 1,
+            "fields": {
+              "figure.document_id": "string",
+              "figure.figure_id": "string",
+              "figure.figure_index": "integer",
+              "figure.caption": "string",
+              "figure.description": "string"
+            }
+          },
+          {
+            "entity_type": "formula",
+            "primary_key": "formula_id",
+            "count": 0,
+            "fields": {
+              "formula.document_id": "string",
+              "formula.formula_id": "string",
+              "formula.formula_index": "integer",
+              "formula.text": "string"
+            }
+          }
+        ],
+        "relationships": [
+          {
+            "source_entity": "document",
+            "target_entity": "figure",
+            "relationship_type": "has_figure"
+          }
+        ],
+        "metadata": {
+          "contract_version": "initial-document-schema-v1",
+          "schema_type": "document",
+          "schema_source": "format_parsing",
+          "parser": "lift-api",
+          "source_format": "jpg",
+          "source_uri": "s3://datahub-document-service/test/uet.jpg",
+          "row_count": 1,
+          "component_counts": {
+            "rows": 1,
+            "tables": 0,
+            "figures": 1,
+            "formulas": 0
+          },
+          "observed_document_fields": [
+            "document.document_type",
+            "document.language",
+            "document.title",
+            "document.main_text",
+            "figures"
+          ],
+          "raw_parser_output": "parsed_data"
+        }
+      }
+    ]
+  },
+  "errors": [
+    {
+      "code": "document_quarantined",
+      "stage": "ingestion",
+      "status": "quarantined",
+      "document_id": "4b545a679f5c9ad0",
+      "source_uri": "s3://datahub-document-service/testbank (1).pdf",
+      "reasons": [
+        {
+          "code": "zero_page_count",
+          "field": "parsed.metadata.page_count",
+          "message": "Parser returned page_count=0."
+        },
+        {
+          "code": "null_extraction",
+          "field": "parsed.rows[].extraction",
+          "message": "Lift returned no extraction object."
+        },
+        {
+          "code": "empty_parsed_content",
+          "field": "parsed",
+          "message": "Parsed document has no text, structured row, or component."
+        }
+      ]
+    }
+  ],
+  "progress": {
+    "status": "completed_with_errors",
+    "processed_document_count": 20,
+    "expected_document_count": 20,
+    "succeeded_document_count": 19,
+    "quarantined_document_count": 1
+  },
+  "parser": {
+    "provider": "lift_api",
+    "mode": "accurate",
+    "extract_images": true,
+    "save_raw_outputs": false
+  }
+}
