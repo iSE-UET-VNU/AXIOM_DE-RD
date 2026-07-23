@@ -65,16 +65,28 @@ def source_blocks_from_parser_json(
     }
     collected: list[dict[str, Any]] = []
 
-    def visit(value: Any) -> None:
+    def visit(
+        value: Any,
+        inherited_page_bbox: list[float] | None = None,
+    ) -> None:
         if isinstance(value, list):
             for item in value:
-                visit(item)
+                visit(item, inherited_page_bbox)
             return
         if not isinstance(value, dict):
             return
 
         component_id = value.get("id") or value.get("component_id")
         parts = component_path_parts(component_id) if isinstance(component_id, str) else None
+        block_type = str(
+            value.get("block_type")
+            or value.get("type")
+            or (parts[2] if parts is not None else "")
+        )
+        page_bbox = inherited_page_bbox
+        if block_type.casefold() == "page":
+            page_bbox = _page_bbox(value) or inherited_page_bbox
+
         if parts is not None:
             page, block_index, path_type = parts
             block_type = str(value.get("block_type") or value.get("type") or path_type)
@@ -95,13 +107,15 @@ def source_blocks_from_parser_json(
                 for field in ("bbox", "polygon", "section_hierarchy"):
                     if value.get(field) is not None:
                         block[field] = value[field]
+                if page_bbox is not None:
+                    block["page_bbox"] = page_bbox
                 if isinstance(value.get("html"), str) and value["html"]:
                     block["html"] = value["html"]
                 collected.append(block)
 
         for child in value.values():
             if isinstance(child, (dict, list)):
-                visit(child)
+                visit(child, page_bbox)
 
     visit(document)
     parser_ids = {
@@ -269,6 +283,49 @@ def _block_text(block: dict[str, Any]) -> str:
     parser = _HTMLTextExtractor()
     parser.feed(html)
     return " ".join(parser.parts)
+
+
+def _page_bbox(block: dict[str, Any]) -> list[float] | None:
+    """Return the parser page bounds used by all child block coordinates."""
+    bbox = block.get("bbox")
+    if _is_numeric_bbox(bbox):
+        left, top, right, bottom = (float(item) for item in bbox)
+        if right > left and bottom > top:
+            return [left, top, right, bottom]
+
+    polygon = block.get("polygon")
+    if not isinstance(polygon, (list, tuple)) or len(polygon) < 3:
+        return None
+    points: list[tuple[float, float]] = []
+    for point in polygon:
+        if (
+            not isinstance(point, (list, tuple))
+            or len(point) != 2
+            or any(
+                isinstance(item, bool) or not isinstance(item, (int, float))
+                for item in point
+            )
+        ):
+            return None
+        points.append((float(point[0]), float(point[1])))
+    left = min(point[0] for point in points)
+    top = min(point[1] for point in points)
+    right = max(point[0] for point in points)
+    bottom = max(point[1] for point in points)
+    if right <= left or bottom <= top:
+        return None
+    return [left, top, right, bottom]
+
+
+def _is_numeric_bbox(value: Any) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(
+            not isinstance(item, bool) and isinstance(item, (int, float))
+            for item in value
+        )
+    )
 
 
 def _deduplicate_and_sort(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:

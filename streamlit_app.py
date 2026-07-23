@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 from importlib.util import find_spec
 import json
 import logging
+import math
 import mimetypes
 import os
 from pathlib import Path
@@ -833,23 +834,52 @@ def _bbox_canvas_size(
     image_width: int,
     image_height: int,
 ) -> tuple[float, float]:
-    """Infer parser coordinates without assuming they match raw image pixels."""
-    right_edges = [float(image_width)]
-    bottom_edges = [float(image_height)]
+    """Resolve the parser canvas while preserving the source image aspect ratio."""
+    for block in blocks:
+        page_bbox = block.get("page_bbox")
+        if not _is_numeric_bbox(page_bbox):
+            continue
+        left, top, right, bottom = (float(item) for item in page_bbox)
+        if right > left and bottom > top:
+            return right - left, bottom - top
+
+    # Legacy artifacts did not retain the Page polygon. Datalab image canvases
+    # are bucketed in 128 px steps, so find the smallest bucket that contains
+    # every box on both axes. Deriving height from the source aspect ratio is
+    # important: using the last detected box independently on each axis warps
+    # the overlay and makes the error grow toward the bottom/right of the page.
+    right_edges: list[float] = []
+    bottom_edges: list[float] = []
     for block in blocks:
         value = block.get("bbox")
-        if not isinstance(value, (list, tuple)) or len(value) != 4:
-            continue
-        if any(
-            isinstance(item, bool) or not isinstance(item, (int, float))
-            for item in value
-        ):
+        if not _is_numeric_bbox(value):
             continue
         left, top, right, bottom = (float(item) for item in value)
         if right > left and bottom > top:
             right_edges.append(right)
             bottom_edges.append(bottom)
-    return max(right_edges), max(bottom_edges)
+    if not right_edges:
+        return float(image_width), float(image_height)
+
+    required_width = max(
+        max(right_edges),
+        max(bottom_edges) * image_width / image_height,
+        1536.0,
+    )
+    canvas_width = math.ceil(required_width / 128.0) * 128.0
+    canvas_height = canvas_width * image_height / image_width
+    return canvas_width, canvas_height
+
+
+def _is_numeric_bbox(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(
+            not isinstance(item, bool) and isinstance(item, (int, float))
+            for item in value
+        )
+    )
 
 
 def _render_parsed_content(parsed_payload: object) -> None:
