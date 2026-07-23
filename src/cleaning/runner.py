@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
 from ..models import CleanedData, CleanedSchema, InitialSchema, ParsedData, make_id
 
 
@@ -13,8 +12,11 @@ class CleaningOutput:
     cleaned_schemas: list[CleanedSchema] = field(default_factory=list)
 
 
-def run(parsed_data: list[ParsedData], initial_schemas: list[InitialSchema]) -> CleaningOutput:
-    """Pass parsed data through until the cleaning module is implemented."""
+def run(
+    parsed_data: list[ParsedData],
+    initial_schemas: list[InitialSchema],
+) -> CleaningOutput:
+    """Pass parsed data through until cleaning is implemented."""
     output = CleaningOutput()
     schema_by_object = {schema.source_object_id: schema for schema in initial_schemas}
 

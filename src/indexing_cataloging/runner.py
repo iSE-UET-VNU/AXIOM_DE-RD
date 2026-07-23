@@ -25,10 +25,6 @@ def run(
     enriched_data: list[EnrichedData],
     enriched_schemas: list[EnrichedSchema],
     indexing_config: dict[str, Any] | None = None,
-    normalized_texts: list[dict[str, Any]] | None = None,
-    normalized_images: list[dict[str, Any]] | None = None,
-    normalized_tables: list[dict[str, Any]] | None = None,
-    normalized_documents: list[dict[str, Any]] | None = None,
 ) -> CatalogingOutput:
     """Build metadata catalog records and component index records."""
     indexing_config = indexing_config or {}
@@ -36,10 +32,6 @@ def run(
     index_records = build_index_records(
         enriched_data,
         metadata_records,
-        normalized_texts=normalized_texts,
-        normalized_images=normalized_images,
-        normalized_tables=normalized_tables,
-        normalized_documents=normalized_documents,
     )
     index_quality_report = build_index_quality_report(index_records)
     assert_index_quality(index_quality_report)

@@ -1,238 +1,264 @@
 # AXIOM_DE-RD
 
-AXIOM_DE-RD is an early-stage data pipeline for document ingestion and indexing.
-The current workflow focuses on stable artifacts for downstream retrieval and
-analytics systems.
+AXIOM_DE-RD is a document-processing pipeline that converts documents from S3
+or a local raw path into parsed records, index records, and vector embeddings.
 
-## Current Pipeline
 
-```text
-raw document
--> ingestion: route by file type
-   - TextParserBackend: local text parsing for TXT, Markdown, CSV, JSON,
-     JSONL, YAML, and YML; CSV is emitted as a canonical table
-   - TableParser: local XLS/XLSX parsing, one table per non-empty sheet
-   - DocumentParser: PDF and supported image formats use Lift API by default;
-     deferred mode and self-hosted Chandra2 remain configurable options
--> cleaning: pass-through
--> enrichment: pass-through
--> indexing_cataloging:
-   - metadata catalog
-   - document index records
-   - text chunk index records
-   - table index records
-   - figure index records
-   - catalog index records
-   - index quality report
-   - OpenRouter text chunk embeddings
--> integration: pass-through
--> storage:
-   - local JSON artifacts
-   - Milvus vector collection for text chunks
-```
-
-The main config is:
+## Project Structure
 
 ```text
-configs/pipeline.yaml
+AXIOM_DE-RD/
+├── configs/
+│   └── pipeline.yaml                 # Pipeline and provider configuration
+├── data/
+│   ├── raw/                          # Local inputs, S3 inventories, downloaded S3 files
+│   ├── ingested/                     # Provider output and parsed records
+│   ├── cleaned/                      # Cleaning-stage snapshot
+│   ├── enriched/                     # Enrichment-stage snapshot
+│   ├── embedded/                     # Per-document indexes and vectors
+│   └── output/                       # Consolidated end-to-end documents
+├── scripts/
+│   └── run_pipeline.py               # Main pipeline entrypoint
+├── src/
+│   ├── s3_reader.py                  # S3 URI and presigned inventory reader
+│   ├── local_reader.py               # Local file and directory discovery
+│   ├── ingestion/                    # Local-file parsing and schema inference
+│   ├── cleaning/                     # Cleaning stage
+│   ├── enrichment/                   # Enrichment stage
+│   ├── indexing_cataloging/          # Chunking, indexing, quality, embeddings
+│   ├── integration/                  # Integration stage
+│   ├── artifacts/                    # Per-document artifact writers
+│   ├── models.py                     # Shared pipeline data contracts
+│   └── pipeline.py                   # Pipeline orchestration
+├── .env.example
+├── environment.yml
+└── pyproject.toml
 ```
 
-Parser routing is the default. Text and table inputs are parsed locally without
-network calls. Document inputs (`.pdf`, `.pptx`, and supported image formats)
-are routed to Lift API by default. Use `document.provider="deferred"` to disable
-document extraction, or select Chandra2 explicitly to use a self-hosted vLLM
-server that emits page-ordered Markdown. If
-`document.fallback_to_deferred` is enabled, a provider failure becomes
-`deferred`; otherwise it is recorded as a file-scoped parsing failure.
+The cleaning, enrichment, and integration stages currently provide scaffolded
+pass-through behavior for future domain-specific processing.
 
-It is configured for a small final-test input:
+## Requirements
 
-```text
-data/raw/final_test
-```
+Python 3.11 or newer is required.
 
-## Environment
+## Installation
 
-Python 3.11 or newer is required. Choose one of the following setup options.
-
-### Conda
+### Option1: Conda
 
 ```bash
 conda env create -f environment.yml
 conda activate axiom-de-rd
 ```
 
-### Python venv and pip
-
-Create a virtual environment:
+### Option2: Python virtual environment
 
 ```bash
 python -m venv .venv
-```
-
-Activate it on Windows PowerShell:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Or on macOS/Linux:
-
-```bash
 source .venv/bin/activate
-```
-
-Then install the project and its dependencies:
-
-```bash
 python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-Install only the optional document provider you use:
+## Environment Variables
+
+Copy the example environment file and provide the required credentials:
 
 ```bash
-python -m pip install -e ".[lift]"
-# Chandra2 through a vLLM server
-python -m pip install -e ".[chandra2]"
-# Chandra2 loaded directly with HuggingFace on the local machine
-python -m pip install -e ".[chandra2-local]"
+cp .env.example .env
 ```
 
-The pipeline loads `.env` from the project root automatically. Text/table-only
-runs do not require `DATALAB_API_KEY`, but the default Lift document route does.
-Chandra2 reads the vLLM connection settings used by its official package. The
-indexing and vector storage stages may still require their provider credentials:
+## Configuration
 
-```dotenv
-DATALAB_API_KEY=
-VLLM_API_BASE=http://localhost:8000/v1
-VLLM_MODEL_NAME=chandra
-VLLM_API_KEY=EMPTY
-MODEL_CHECKPOINT=datalab-to/chandra-ocr-2
-# Empty uses device_map="auto"; use cuda to require full-GPU placement.
-TORCH_DEVICE=
-OPENROUTER_API_KEY=
-MILVUS_URI=
-MILVUS_TOKEN=
-```
+The main configuration file is `configs/pipeline.yaml`. It is intentionally
+JSON-compatible so it can be loaded even when PyYAML is unavailable.
 
-Chandra2 supports two inference methods through the same document provider. The
-default `vllm` method calls a separately running vLLM server. The `hf` method
-(also accepted as `local`) loads the HuggingFace model directly in the pipeline
-process and uses `TORCH_DEVICE` when it is set:
+Important settings include:
 
-```json
-{
-  "parsing": {
-    "provider": "router",
-    "document": {"provider": "chandra2"},
-    "chandra2": {
-      "method": "hf",
-      "batch_size": 1,
-      "save_raw_outputs": true
-    }
-  }
-}
-```
+| Setting | Purpose |
+|---|---|
+| `input.mode` | Selects `s3_uri`, `presigned_info`, or `local_raw` |
+| `s3_input` | S3 URI and presigned-inventory settings |
+| `local_input` | Local path, recursion, extension filters, and file limit |
+| `raw_dir` | Root for downloaded S3 objects; local raw inputs remain in place |
+| `ingested_dir` | Provider output plus parsed ingestion artifacts |
+| `cleaned_dir` | Cleaning-stage artifacts |
+| `enriched_dir` | Enrichment-stage artifacts |
+| `embedded_dir` | Index, embedding, schema, and report artifacts |
+| `output_dir` | Final consolidated document artifacts |
+| `enabled_modules` | Pipeline stages to enable; execution follows the order defined by the orchestrator |
+| `parsing` | Parser provider and Lift options |
+| `indexing.embeddings` | Embedding provider, model, dimensions, and targets |
 
-When `batch_size` is omitted, it defaults to `28` for `vllm` and `1` for `hf`.
-Local inference downloads `MODEL_CHECKPOINT` on first use unless it is already
-present in the HuggingFace cache. It does not require `VLLM_API_BASE`. Leave
-`TORCH_DEVICE` empty to let Accelerate choose GPU/CPU placement, or set it to
-`cuda` only when the complete model fits in GPU memory.
-
-The Chandra code package and model weights use different licenses. Review the
-[model's commercial-use terms](https://github.com/datalab-to/chandra#commercial-usage)
-before deploying Chandra2 in production.
-
-## Run
+## Running the Pipeline
 
 ```bash
 python scripts/run_pipeline.py --config configs/pipeline.yaml
 ```
 
-Outputs are written to:
+#### Use the existing `s3://bucket/key` CLI option:
 
-```text
-data/work/final_test/<run_id>
-data/processed/final_test
-data/cleaned/final_test
-data/enriched/final_test
-data/output/final_test
+```bash
+python scripts/run_pipeline.py \
+  --config configs/pipeline.yaml \
+  --s3-uri 's3://bucket/path/to/document.pdf'
 ```
 
-Important artifact directories:
+#### Or select a presigned URL from a local S3 inventory:
 
-```text
-data/work/final_test/<run_id>/
-data/work/final_test/<run_id>/datalab/ (Lift mode only)
-data/work/final_test/<run_id>/chandra2/ (Chandra2 mode only)
-data/processed/final_test/
-data/processed/final_test/normalization/
-data/output/final_test/data/
-data/output/final_test/reports/
+```bash
+python scripts/run_pipeline.py \
+  --config configs/pipeline.yaml \
+  --s3-info-file data/raw/s3.info.txt \
+  --s3-object-key 'path/to/document.pdf'
 ```
 
-Provider debug outputs are retained in run-scoped document bundles under
-`data/work`. Lift stores its response payloads and decoded assets; Chandra2
-stores merged `result.md` and page-level `metadata.json`. Canonical ingestion
-records are JSONL under `data/processed`; large in-memory parsing intermediates
-are not persisted.
+#### Process every presigned object from the inventory in one pipeline run:
 
-Routing outcomes for every inventoried input are stored in
-`data/processed/final_test/parsing_results.jsonl`. Each record includes the
-selected route, concrete backend/provider, parse status, and reason where
-applicable. The processed manifest uses `processed-manifest-v2`, summarizes
-counts by backend and status, and lists deferred, unsupported, and failed source
-IDs. A dataset is `complete` only when every input parses successfully and
-contains content; otherwise it is `partial`.
-
-The provider extraction contract and stage-specific schemas remain at their
-source or stage paths:
-
-```text
-src/ingestion/parsing/lift/schemas/document_components.json (Lift mode only)
-data/processed/final_test/parsing_results.jsonl
-data/processed/final_test/manifest.json
-data/cleaned/final_test/cleaned_schemas.json
-data/enriched/final_test/enriched_schemas.json
+```bash
+python scripts/run_pipeline.py \
+  --config configs/pipeline.yaml \
+  --s3-info-file data/raw/s3.info.txt \
+  --s3-all-objects
 ```
 
-`data/output/final_test/data/schemas.json` is a self-contained JSON Schema for
-one logical document. Its document metadata maps to `documents.jsonl`; its
-`texts`, `tables`, `images`, and `formulas` arrays map to the normalized JSONL
-files through `document_id`. The schema includes storage mappings, checksums,
-record counts, observed types, and dataset-level values without duplicating
-document content. `document_components.json` remains only the optional
-extraction schema sent to Datalab when Lift is selected explicitly.
+The equivalent configuration is:
 
-`pipeline_state.json` is a lightweight manifest with run metadata, artifact
-paths, counts, and report statuses; it does not duplicate records or embeddings.
-
-`documents.jsonl` is a document registry containing source/parser metadata and
-component counts. Component content lives only in the three normalization JSONL
-files. `index_records.json` remains the downstream indexing contract.
-
-The configured Milvus collection is:
-
-```text
-axiom_text_chunks_openrouter_text_embedding_3_small_1536
+```json
+{
+  "input": {
+    "mode": "presigned_info"
+  },
+  "s3_input": {
+    "info_file": "data/raw/s3.info.txt",
+    "all_objects": true,
+    "object_key": null
+  }
+}
 ```
 
-## Contracts
+#### Or override the config with a local raw file or directory:
 
-`IndexRecord.index_type` currently supports:
-
-```text
-document
-text_chunk
-table
-image
-figure
-catalog
+```bash
+python scripts/run_pipeline.py \
+  --config configs/pipeline.yaml \
+  --local-raw data/raw/omnidocbench_subset
 ```
 
-The sample config targets `text_chunk`, `table`, and `image` records for
-embedding. Embeddings use OpenRouter with `openai/text-embedding-3-small` and
-dimension `1536`.
+## REST API
+
+Start the synchronous REST service with:
+
+```bash
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+```
+
+Submit a batch of presigned S3 objects:
+
+```bash
+curl -X POST http://localhost:8000/v1/dataeng \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "bucket": "example-bucket",
+    "files": [
+      {
+        "key": "document.pdf",
+        "presigned_url": "https://example.invalid/presigned-document-url"
+      }
+    ]
+  }'
+```
+
+The response groups the existing final artifacts without changing their
+contracts: `metadata` contains `data/output/<run_id>/metadata.json`, and
+`documents` contains the corresponding `output-document-v4` JSON objects.
+The existing CLI and all other input modes remain available.
+
+Health checks are exposed at `/health/live` and `/health/ready`. Interactive
+OpenAPI documentation is available at `/docs`.
+
+## Streamlit Demo
+
+Start the interactive demo from the repository root:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+The app opens existing persisted runs immediately, so it can be demonstrated
+without calling external services. The **Run pipeline** page accepts a batch of
+PDF, PNG, or JPEG files. Parsing new files uses `DATALAB_API_KEY`; the demo uses
+local hash embeddings and does not require `OPENROUTER_API_KEY`.
+
+The demo includes:
+
+- multi-document upload and synchronous pipeline execution;
+- exploration of both current `output-document-v4` and legacy artifacts;
+- side-by-side raw document and reading-order parsing content comparison;
+- chunking, embeddings, lineage, and raw JSON views;
+- per-document JSON and full-run ZIP downloads.
+
+
+## Output Artifacts
+
+Each parsed document is persisted immediately before ingestion continues with
+the next input. A document is quarantined when the parser returns
+`page_count=0`, a null Lift extraction, or no usable text/structured component.
+Quarantined documents remain under `data/ingested` with failure reasons but do
+not continue into cleaning, enrichment, indexing, embedding, or final output.
+`metadata.json` reports `in_progress` during a batch and changes to `completed`
+or `completed_with_errors` after all expected documents are parsed. With the
+default configuration, one run is organized as follows:
+
+```text
+data/raw/<run_id>/objects/              # S3 and presigned input only
+
+data/ingested/<run_id>/
+├── assets/
+│   └── <document_id>/
+│       ├── images/                     # Images extracted during parsing
+│       └── debug/                      # Optional raw Lift outputs
+├── documents/
+│   └── <document_id>.json              # Parsed result or quarantine record
+└── metadata.json                       # Progress, common info, and initial schemas
+
+data/cleaned/<run_id>/
+├── documents/
+│   └── <document_id>.json              # Cleaned data for one document
+└── metadata.json                       # Common info and cleaned schemas
+
+data/enriched/<run_id>/
+├── documents/
+│   └── <document_id>.json              # Enriched data for one document
+└── metadata.json                       # Common info and enriched schemas
+
+data/embedded/<run_id>/
+├── documents/
+│   └── <document_id>.json              # Compact retrieval items with nested vectors
+└── metadata.json                       # Retrieval schema and compact run summary
+
+data/output/<run_id>/
+├── documents/
+│   └── <document_id>.json              # Semantic content, source blocks, reading order, retrieval
+└── metadata.json                       # Common document schema and compact run summary
+```
+
+`output-document-v4` stores parser-native source components in
+`content.blocks`, their ordered component IDs in `content.reading_order`, and
+provenance/completeness in `content.reading_order_meta`. New Lift runs use JSON
+output so the order includes text, headings, equations, figures, captions, and
+tables. Older artifacts can be reconstructed from structured-extraction
+citations, with `reading_order_meta.complete` set to `false`.
+
+An ingested quarantine record uses `status: "quarantined"`, has no `schema_id`,
+and includes machine-readable failure reasons such as `zero_page_count`,
+`null_extraction`, and `empty_parsed_content`. The CLI reports
+`completed_with_errors` and the number of quarantined documents while allowing
+the valid documents in the same batch to finish.
+
+For `--local-raw`, source files are read in place and are not copied into a new
+`raw/<run_id>` directory.
+
+By default, `parsing.lift_api.save_raw_outputs` is `false`. Set it to `true`
+only when full Lift responses and rendered JSON/Markdown are needed under each document's
+`assets/<document_id>/debug/` directory.

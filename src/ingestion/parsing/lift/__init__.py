@@ -1,5 +1,5 @@
 """Lift/Datalab API parsing adapter."""
 
-from .client import LiftAPIConfig, LiftAPIParserClient
+from .client import LiftAPIConfig, LiftAPIParserClient, LiftAPIRequestError
 
-__all__ = ["LiftAPIConfig", "LiftAPIParserClient"]
+__all__ = ["LiftAPIConfig", "LiftAPIParserClient", "LiftAPIRequestError"]

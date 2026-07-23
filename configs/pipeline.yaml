@@ -1,24 +1,48 @@
 {
-  "input_dir": "data/raw/final_test",
-  "processed_dir": "data/processed/final_test",
-  "work_dir": "data/work/final_test",
-  "cleaned_dir": "data/cleaned/final_test",
-  "enriched_dir": "data/enriched/final_test",
-  "output_dir": "data/output/final_test",
+  "input": {
+    "mode": "s3_uri"
+  },
+  "s3_input": {
+    "uri_env": "S3_URI",
+    "profile_env": "AWS_PROFILE",
+    "region_env": "AWS_REGION",
+    "endpoint_url_env": "S3_ENDPOINT_URL",
+    "info_file": "data/raw/s3.info.txt",
+    "all_objects": false,
+    "object_key": null,
+    "object_key_env": "S3_OBJECT_KEY",
+    "file_name": null,
+    "max_size_bytes": 536870912,
+    "request_timeout_seconds": 60
+  },
+  "local_input": {
+    "path": "data/raw/omnidocbench_subset",
+    "recursive": true,
+    "include_hidden": false,
+    "include_extensions": [
+      ".pdf",
+      ".png",
+      ".jpg",
+      ".jpeg"
+    ],
+    "max_files": null
+  },
+  "raw_dir": "data/raw",
+  "ingested_dir": "data/ingested",
+  "cleaned_dir": "data/cleaned",
+  "enriched_dir": "data/enriched",
+  "embedded_dir": "data/embedded",
+  "output_dir": "data/output",
   "enabled_modules": [
     "ingestion",
     "cleaning",
     "enrichment",
     "indexing_cataloging",
     "integration",
-    "storage"
+    "artifacts"
   ],
   "parsing": {
-    "provider": "router",
-    "document": {
-      "provider": "lift_api",
-      "fallback_to_deferred": false
-    },
+    "provider": "lift_api",
     "chandra2": {
       "method": "vllm",
       "batch_size": 28,
@@ -32,9 +56,27 @@
       "api_key_env": "DATALAB_API_KEY",
       "mode": "accurate",
       "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
+      "fallback_to_local": false,
       "extract_images": true,
-      "save_raw_outputs": true
+      "save_raw_outputs": false
     }
+  },
+  "chunking_embedding": {
+    "chunker": "recursive",
+    "chunker_params": {
+      "target": 400
+    },
+    "max_rows_per_chunk": 20,
+    "embedder": "openrouter_te3s",
+    "embedder_params": {
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "api_key_env": "OPENROUTER_API_KEY",
+      "batch_size": 64,
+      "cache_dir": "data/work/embedding_cache",
+      "app_title": "AXIOM_DE-RD"
+    },
+    "retrieval_profile": "hybrid_default"
   },
   "indexing": {
     "embeddings": {
@@ -51,20 +93,6 @@
       "fail_on_error": true,
       "api_key_env": "OPENROUTER_API_KEY",
       "app_title": "AXIOM_DE-RD"
-    }
-  },
-  "storage": {
-    "mode": "local",
-    "local": {
-      "artifacts_dir": "data/output/final_test"
-    },
-    "vector_db": {
-      "provider": "milvus",
-      "uri": "",
-      "token_env": "MILVUS_TOKEN",
-      "collection_name": "axiom_text_chunks_openrouter_text_embedding_3_small_1536",
-      "drop_collection": false,
-      "metric_type": "COSINE"
     }
   },
   "logging": {

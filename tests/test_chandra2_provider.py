@@ -12,13 +12,12 @@ from src import cleaning, enrichment, indexing_cataloging
 from src.ingestion.parsing import (
     Chandra2Config,
     Chandra2Provider,
-    DocumentParser,
-    ParseStatus,
-    ParsingService,
 )
+from src.ingestion.parsing.backends import DocumentParser
 from src.ingestion.parsing.chandra2 import _ChandraRuntime
+from src.ingestion.parsing.service import ParsingService
 from src.ingestion.runner import run as run_ingestion
-from src.models import DataObject
+from src.models import DataObject, ParseStatus
 from src.utils.config import resolve_parser_config
 
 
@@ -256,19 +255,19 @@ class Chandra2ProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "method"):
             Chandra2Config.from_mapping({"method": "unknown"})
 
-    def test_parser_config_resolves_chandra_output_into_run_work_dir(self) -> None:
+    def test_parser_config_resolves_chandra_output_into_parser_assets_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            parser_assets_dir = root / "ingested" / "run-1" / "assets"
             resolved = resolve_parser_config(
                 root,
-                {"document": {"provider": "chandra2"}},
-                root / "work",
-                "run-1",
+                {"provider": "chandra2", "chandra2": {"method": "hf"}},
+                parser_assets_dir,
             )
 
         self.assertEqual(
             Path(resolved["chandra2"]["output_dir"]),
-            root / "work" / "run-1" / "chandra2",
+            parser_assets_dir,
         )
         self.assertEqual(Path(resolved["chandra2"]["project_root"]), root)
 
@@ -289,7 +288,7 @@ class Chandra2EndToEndTests(unittest.TestCase):
             raw.mkdir()
             (raw / "invoice.pdf").write_bytes(b"%PDF-1.4\n")
             parser_config = {
-                "document": {"provider": "chandra2"},
+                "provider": "chandra2",
                 "chandra2": {
                     "output_dir": str(root / "work"),
                     "project_root": str(root),
@@ -300,7 +299,7 @@ class Chandra2EndToEndTests(unittest.TestCase):
                 return_value=runtime,
             ):
                 ingested = run_ingestion(
-                    raw,
+                    raw / "invoice.pdf",
                     parser_config=parser_config,
                     project_root=root,
                 )
@@ -310,53 +309,39 @@ class Chandra2EndToEndTests(unittest.TestCase):
                 enriched.enriched_data,
                 enriched.enriched_schemas,
                 indexing_config={"embeddings": {"enabled": False}},
-                normalized_texts=ingested.normalized_texts,
-                normalized_documents=ingested.documents,
             )
 
-        self.assertEqual(ingested.parse_results[0].status, ParseStatus.SUCCESS)
-        self.assertEqual(ingested.parse_results[0].backend, "chandra2")
+        self.assertEqual(len(ingested.data_objects), 1)
         self.assertEqual(ingested.parsed_data[0].text, "# Invoice\n\nTotal: 100")
-        self.assertEqual(len(ingested.normalized_texts), 1)
-        self.assertEqual(len(ingested.documents), 1)
+        self.assertEqual(ingested.parsed_data[0].metadata["parser"], "chandra2")
         self.assertEqual(
             Counter(record.index_type for record in indexed.index_records),
             Counter({"document": 1, "text_chunk": 1, "catalog": 1}),
         )
 
-    def test_chandra_failure_is_file_scoped(self) -> None:
+    def test_chandra_failure_propagates_from_main_file_runner(self) -> None:
         manager = _FakeManager({}, error=ConnectionError("vLLM unavailable"))
         runtime = _runtime(["page-1"], manager)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            (root / "a.pdf").write_bytes(b"%PDF-1.4\n")
-            (root / "b.txt").write_text("still parsed", encoding="utf-8")
+            path = root / "a.pdf"
+            path.write_bytes(b"%PDF-1.4\n")
             with patch(
                 "src.ingestion.parsing.chandra2._load_runtime",
                 return_value=runtime,
             ):
-                output = run_ingestion(
-                    root,
-                    parser_config={
-                        "document": {"provider": "chandra2"},
-                        "chandra2": {"save_raw_outputs": False},
-                    },
-                )
-
-        result_by_name = {
-            data_object.metadata["relative_uri"]: result
-            for data_object, result in zip(
-                output.data_objects,
-                output.parse_results,
-                strict=True,
-            )
-        }
-        self.assertEqual(result_by_name["a.pdf"].status, ParseStatus.FAILED)
-        self.assertEqual(result_by_name["a.pdf"].backend, "chandra2")
-        self.assertEqual(result_by_name["b.txt"].status, ParseStatus.SUCCESS)
-        self.assertEqual(len(output.parsed_data), 1)
-        self.assertEqual(len(output.errors), 1)
+                with self.assertRaisesRegex(
+                    ConnectionError,
+                    "vLLM unavailable",
+                ):
+                    run_ingestion(
+                        path,
+                        parser_config={
+                            "provider": "chandra2",
+                            "chandra2": {"save_raw_outputs": False},
+                        },
+                    )
 
 
 if __name__ == "__main__":

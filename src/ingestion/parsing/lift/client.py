@@ -14,6 +14,10 @@ import os
 import time
 
 from ....models import DataObject, ParsedData
+from ....reading_order import (
+    parse_document_json,
+    source_blocks_from_parser_json,
+)
 from ....utils.paths import portable_path_value
 
 SUPPORTED_EXTENSIONS = frozenset(
@@ -22,14 +26,24 @@ SUPPORTED_EXTENSIONS = frozenset(
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas/document_components.json"
 
 
+class LiftAPIRequestError(RuntimeError):
+    """Actionable Lift provider failure safe to surface to API/UI consumers."""
+
+    def __init__(self, message: str, *, status_code: int, operation: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.operation = operation
+
+
 @dataclass
 class LiftAPIConfig:
     api_key_env: str = "DATALAB_API_KEY"
     mode: str = "balanced"
     schema_path: str | None = None
-    output_dir: str | None = "data/work/datalab"
+    output_dir: str | None = "data/ingested/assets"
+    fallback_to_local: bool = True
     extract_images: bool = True
-    save_raw_outputs: bool = True
+    save_raw_outputs: bool = False
     project_root: str | None = None
 
     @classmethod
@@ -39,9 +53,10 @@ class LiftAPIConfig:
             api_key_env=str(config.get("api_key_env", "DATALAB_API_KEY")),
             mode=str(config.get("mode", "balanced")),
             schema_path=_optional_str(config.get("schema_path")),
-            output_dir=_optional_str(config.get("output_dir", "data/work/datalab")),
+            output_dir=_optional_str(config.get("output_dir", "data/ingested/assets")),
+            fallback_to_local=bool(config.get("fallback_to_local", True)),
             extract_images=bool(config.get("extract_images", True)),
-            save_raw_outputs=bool(config.get("save_raw_outputs", True)),
+            save_raw_outputs=bool(config.get("save_raw_outputs", False)),
             project_root=_optional_str(config.get("project_root")),
         )
 
@@ -76,31 +91,58 @@ class LiftAPIParserClient:
 
         schema = _load_schema(self.config.schema_path)
         client = DatalabClient()
-        options = ExtractOptions(page_schema=json.dumps(schema), mode=self.config.mode)
+        options = ExtractOptions(
+            page_schema=json.dumps(schema),
+            mode=self.config.mode,
+            output_format="json",
+        )
 
         started = time.monotonic()
-        result = client.extract(str(file_path), options=options)
+        try:
+            result = client.extract(str(file_path), options=options)
+        except Exception as exc:
+            request_error = _lift_api_request_error(exc, operation="extract")
+            if request_error is not None:
+                raise request_error from None
+            raise
         raw_json = _get_attr(result, "extraction_schema_json")
         extraction = _parse_extraction(raw_json)
+        document_json = parse_document_json(_get_attr(result, "json", {}))
+        source_blocks = source_blocks_from_parser_json(
+            document_json,
+            extraction if isinstance(extraction, dict) else {},
+        )
+        reading_order_is_complete = bool(source_blocks) and all(
+            block.get("source") == "parser_json" for block in source_blocks
+        )
         images = _normalize_images(_get_attr(result, "images", {}))
         image_source = "extract"
         conversion = None
         if self.config.extract_images and not images:
-            conversion = client.convert(
-                str(file_path),
-                options=ConvertOptions(
-                    mode=self.config.mode,
-                    disable_image_extraction=False,
-                    output_format="markdown",
-                ),
-            )
+            try:
+                conversion = client.convert(
+                    str(file_path),
+                    options=ConvertOptions(
+                        mode=self.config.mode,
+                        disable_image_extraction=False,
+                        output_format="markdown",
+                    ),
+                )
+            except Exception as exc:
+                request_error = _lift_api_request_error(exc, operation="convert")
+                if request_error is not None:
+                    raise request_error from None
+                raise
             images = _normalize_images(_get_attr(conversion, "images", {}))
             image_source = "convert"
 
-        bundle_dir = _bundle_dir(
-            self.config.output_dir,
-            file_path,
-            data_object.object_id,
+        bundle_dir = (
+            _bundle_dir(
+                self.config.output_dir,
+                data_object.object_id,
+            )
+            if images or self.config.save_raw_outputs
+            else None
         )
         image_files = _write_images(bundle_dir, images)
         raw_output_paths = _write_lift_raw_outputs(
@@ -123,19 +165,37 @@ class LiftAPIParserClient:
             "page_count": _get_attr(result, "page_count"),
             "latency_seconds": round(time.monotonic() - started, 3),
             "extraction": extraction,
+            "source_block_count": len(source_blocks),
             "images": images,
             "image_files": image_files,
             "image_source": image_source,
             "raw_lift_outputs": raw_output_paths,
         }
-        output_path = _write_output(bundle_dir, payload, self.config.project_root)
+        output_path = (
+            _write_output(
+                bundle_dir / "debug" if bundle_dir else None,
+                payload,
+                self.config.project_root,
+            )
+            if self.config.save_raw_outputs
+            else None
+        )
 
         text = _extraction_text(extraction)
         return ParsedData(
             object_id=data_object.object_id,
             source_uri=data_object.uri,
             source_format=str(data_object.metadata.get("format", file_path.suffix.lstrip("."))),
-            rows=[{"extraction": extraction, "text": text}],
+            rows=[
+                {
+                    "extraction": extraction,
+                    "text": text,
+                    "source_blocks": source_blocks,
+                    "reading_order": [
+                        block["component_id"] for block in source_blocks
+                    ],
+                }
+            ],
             text=text,
             metadata={
                 "parser": "lift-api",
@@ -148,6 +208,15 @@ class LiftAPIParserClient:
                 "image_files": image_files,
                 "image_source": image_source,
                 "raw_lift_outputs": raw_output_paths,
+                "reading_order_source": (
+                    "parser_json"
+                    if reading_order_is_complete
+                    else "structured_extraction_citations"
+                    if source_blocks
+                    else "unavailable"
+                ),
+                "reading_order_complete": reading_order_is_complete,
+                "source_block_count": len(source_blocks),
             },
         )
 
@@ -161,11 +230,10 @@ def _load_schema(schema_path: str | None) -> dict[str, Any]:
     return schema
 
 
-def _bundle_dir(output_dir: str | None, file_path: Path, object_id: str) -> Path | None:
+def _bundle_dir(output_dir: str | None, object_id: str) -> Path | None:
     if not output_dir:
         return None
-    slug = _safe_slug(file_path.stem)
-    bundle_dir = Path(output_dir) / f"{slug}--{object_id}"
+    bundle_dir = Path(output_dir) / object_id
     bundle_dir.mkdir(parents=True, exist_ok=True)
     return bundle_dir
 
@@ -177,6 +245,7 @@ def _write_output(
 ) -> Path | None:
     if bundle_dir is None:
         return None
+    bundle_dir.mkdir(parents=True, exist_ok=True)
     output_path = bundle_dir / "result.json"
     output_path.write_text(
         json.dumps(portable_path_value(payload, project_root), indent=2, ensure_ascii=False),
@@ -230,11 +299,13 @@ def _write_lift_raw_outputs(
     if bundle_dir is None or not enabled:
         return {}
 
+    debug_dir = bundle_dir / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
     asset_map = _image_asset_map(image_files or [])
     paths: dict[str, str] = {}
-    paths.update(_write_result_artifacts(bundle_dir, "extract", extract_result, asset_map))
+    paths.update(_write_result_artifacts(debug_dir, "extract", extract_result, asset_map))
     if convert_result is not None:
-        paths.update(_write_result_artifacts(bundle_dir, "convert", convert_result, asset_map))
+        paths.update(_write_result_artifacts(debug_dir, "convert", convert_result, asset_map))
     return paths
 
 
@@ -331,11 +402,6 @@ def _deduplicate_image_name(candidate: str, original_name: str, used_names: set[
     path = Path(candidate)
     digest = hashlib.sha1(original_name.replace("\\", "/").encode("utf-8")).hexdigest()[:8]
     return f"{path.stem}--{digest}{path.suffix}"
-
-
-def _safe_slug(value: str, max_length: int = 80) -> str:
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._")
-    return (slug or "document")[:max_length].rstrip("-._") or "document"
 
 
 def _image_asset_map(image_files: list[dict[str, str]]) -> dict[str, str]:
@@ -441,3 +507,32 @@ def _optional_str(value: Any) -> str | None:
     if value in {None, ""}:
         return None
     return str(value)
+
+
+def _lift_api_request_error(
+    error: Exception,
+    *,
+    operation: str,
+) -> LiftAPIRequestError | None:
+    status_code = getattr(error, "status_code", None)
+    if not isinstance(status_code, int):
+        return None
+
+    messages = {
+        401: "Datalab API key không hợp lệ hoặc đã hết hiệu lực.",
+        402: (
+            "Datalab API trả về 402 Payment Required. Tài khoản/API key hiện không "
+            "còn credit; hãy nạp credit trên Datalab rồi chạy lại pipeline."
+        ),
+        403: "Datalab API key không có quyền thực hiện yêu cầu này.",
+        429: "Datalab API đang giới hạn tần suất yêu cầu; hãy đợi rồi chạy lại.",
+    }
+    message = messages.get(
+        status_code,
+        f"Datalab API thất bại ở bước {operation} với HTTP {status_code}.",
+    )
+    return LiftAPIRequestError(
+        message,
+        status_code=status_code,
+        operation=operation,
+    )

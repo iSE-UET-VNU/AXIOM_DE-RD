@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
 from ..models import CleanedData, CleanedSchema, EnrichedData, EnrichedSchema, make_id
 
 
@@ -13,8 +12,11 @@ class EnrichmentOutput:
     enriched_schemas: list[EnrichedSchema] = field(default_factory=list)
 
 
-def run(cleaned_data: list[CleanedData], cleaned_schemas: list[CleanedSchema]) -> EnrichmentOutput:
-    """Pass cleaned data through until the enrichment module is implemented."""
+def run(
+    cleaned_data: list[CleanedData],
+    cleaned_schemas: list[CleanedSchema],
+) -> EnrichmentOutput:
+    """Pass cleaned records through until enrichment is implemented."""
     output = EnrichmentOutput()
     schema_by_object = {schema.source_object_id: schema for schema in cleaned_schemas}
 

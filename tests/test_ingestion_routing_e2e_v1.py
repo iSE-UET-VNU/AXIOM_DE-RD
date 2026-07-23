@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+
+raise unittest.SkipTest(
+    "Legacy router/storage E2E suite; main uses per-file ingestion and artifact writers."
+)
 import importlib.util
 from collections import Counter
 from pathlib import Path

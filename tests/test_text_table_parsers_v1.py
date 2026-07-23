@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.ingestion.parsing import ParseStatus, TableParser, TextParserBackend
-from src.models import DataObject
+from src.ingestion.parsing.backends import TableParser, TextParserBackend
+from src.models import DataObject, ParseStatus
 
 
 def _data_object(path: Path, object_id: str = "object-1") -> DataObject:

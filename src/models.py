@@ -144,6 +144,16 @@ class ParseResult:
 
 
 @dataclass
+class QuarantinedDocument:
+    document_id: str
+    source: DataObject
+    parsed: ParsedData
+    reasons: list[dict[str, Any]] = field(default_factory=list)
+    stage: str = "ingestion"
+    status: str = "quarantined"
+
+
+@dataclass
 class InitialSchema:
     schema_id: str
     source_object_id: str
@@ -243,19 +253,20 @@ class RelationshipRecord:
 @dataclass
 class PipelineState:
     run_id: str
-    input_dir: str
+    input_source: str | None
+    embedded_dir: str
     output_dir: str
-    work_dir: str | None = None
+    raw_dir: str | None = None
+    ingested_dir: str | None = None
+    cleaned_dir: str | None = None
+    enriched_dir: str | None = None
     data_objects: list[DataObject] = field(default_factory=list)
     parsed_data: list[ParsedData] = field(default_factory=list)
     parse_results: list[ParseResult] = field(default_factory=list)
     initial_schemas: list[InitialSchema] = field(default_factory=list)
+    quarantined_documents: list[QuarantinedDocument] = field(default_factory=list)
     cleaned_data: list[CleanedData] = field(default_factory=list)
     cleaned_schemas: list[CleanedSchema] = field(default_factory=list)
-    normalized_texts: list[dict[str, Any]] = field(default_factory=list)
-    normalized_images: list[dict[str, Any]] = field(default_factory=list)
-    normalized_tables: list[dict[str, Any]] = field(default_factory=list)
-    normalized_documents: list[dict[str, Any]] = field(default_factory=list)
     enriched_data: list[EnrichedData] = field(default_factory=list)
     enriched_schemas: list[EnrichedSchema] = field(default_factory=list)
     metadata_records: list[MetadataRecord] = field(default_factory=list)
@@ -263,7 +274,6 @@ class PipelineState:
     index_quality_report: dict[str, Any] = field(default_factory=dict)
     vector_records: list[dict[str, Any]] = field(default_factory=list)
     embedding_report: dict[str, Any] = field(default_factory=dict)
-    vector_db_report: dict[str, Any] = field(default_factory=dict)
     schema_matches: list[SchemaMatch] = field(default_factory=list)
     entity_matches: list[EntityMatch] = field(default_factory=list)
     relationship_records: list[RelationshipRecord] = field(default_factory=list)
