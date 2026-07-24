@@ -14,7 +14,7 @@ from src.ingestion.parsing import (
     Chandra2Provider,
 )
 from src.ingestion.parsing.backends import DocumentParser
-from src.ingestion.parsing.chandra2 import _ChandraRuntime
+from src.ingestion.parsing.chandra2 import _ChandraRuntime, _replace_tables
 from src.ingestion.parsing.service import ParsingService
 from src.ingestion.runner import run as run_ingestion
 from src.ingestion.schema_inference import build_initial_schema
@@ -24,9 +24,16 @@ from src.utils.config import resolve_parser_config
 
 
 class _FakeBatchInput:
-    def __init__(self, *, image: object, prompt_type: str) -> None:
+    def __init__(
+        self,
+        *,
+        image: object,
+        prompt_type: str | None = None,
+        prompt: str | None = None,
+    ) -> None:
         self.image = image
         self.prompt_type = prompt_type
+        self.prompt = prompt
 
 
 class _FakeManager:
@@ -48,7 +55,15 @@ class _FakeManager:
         self.calls.append((batch, kwargs))
         if self.error:
             raise self.error
-        return [self.results[item.image] for item in batch]
+        generated = []
+        for item in batch:
+            if item.prompt is not None:
+                generated.append(self.results["__table_result__"])
+            elif item.image in self.results:
+                generated.append(self.results[item.image])
+            else:
+                generated.append(self.results["__page_result__"])
+        return generated
 
 
 class _FakeImage:
@@ -57,6 +72,29 @@ class _FakeImage:
 
     def save(self, path: str | Path) -> None:
         Path(path).write_bytes(self.payload)
+
+
+class _FakePageImage:
+    size = (1000, 1400)
+
+    def crop(self, box: tuple[int, int, int, int]) -> "_FakeCropImage":
+        return _FakeCropImage((box[2] - box[0], box[3] - box[1]))
+
+
+class _FakeCropImage(_FakeImage):
+    def __init__(self, size: tuple[int, int]) -> None:
+        super().__init__(b"table-crop")
+        self.size = size
+
+    def copy(self) -> "_FakeCropImage":
+        return _FakeCropImage(self.size)
+
+    def resize(
+        self,
+        size: tuple[int, int],
+        resample: object | None = None,
+    ) -> "_FakeCropImage":
+        return _FakeCropImage(size)
 
 
 def _runtime(pages: list[object], manager: _FakeManager) -> _ChandraRuntime:
@@ -445,6 +483,153 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertFalse(manager.calls[0][1]["include_images"])
         self.assertNotIn("max_workers", manager.calls[0][1])
         self.assertNotIn("max_retries", manager.calls[0][1])
+
+    def test_refines_detected_table_crop_and_preserves_merged_cells(self) -> None:
+        original = "<table><tr><td>A</td><td></td></tr></table>"
+        refined = (
+            '<table><tr><td rowspan="2">A</td><td>1</td></tr>'
+            '<tr><td colspan="1">2</td></tr></table>'
+        )
+        manager = _FakeManager(
+            {
+                "__page_result__": _result(
+                    f"Before\n\n{original}\n\nAfter",
+                    10,
+                    raw=f'<div data-label="Table">{original}</div>',
+                    html=f"<p>Before</p>{original}<p>After</p>",
+                    chunks=[
+                        {
+                            "bbox": [100, 200, 900, 800],
+                            "label": "Table",
+                            "content": original,
+                        }
+                    ],
+                    page_box=[0, 0, 1000, 1400],
+                ),
+                "__table_result__": _result(
+                    refined,
+                    7,
+                    raw=f"model prose that is ignored\n{refined}",
+                ),
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "table.pdf"
+            path.write_bytes(b"%PDF-1.4\n")
+            provider = Chandra2Provider(
+                Chandra2Config.from_mapping(
+                    {
+                        "method": "hf",
+                        "refine_tables": True,
+                        "output_dir": str(root / "outputs"),
+                        "project_root": str(root),
+                    }
+                ),
+                _runtime_loader=lambda: _runtime([_FakePageImage()], manager),
+            )
+
+            parsed = provider.parse_file(path, _data_object(path))
+            bundle = root / "outputs" / "table--document-1"
+            saved_markdown = (bundle / "result.md").read_text(encoding="utf-8")
+            chunks = json.loads(
+                (bundle / "chunks.json").read_text(encoding="utf-8")
+            )
+            first_pass_raw = (bundle / "raw.html").read_text(encoding="utf-8")
+            artifact_names = {
+                item.relative_to(bundle).as_posix()
+                for item in bundle.rglob("*")
+                if item.is_file()
+            }
+
+        refinement = parsed.metadata["table_refinement"]
+        self.assertEqual(len(manager.calls), 2)
+        self.assertIsNone(manager.calls[0][0][0].prompt)
+        self.assertIsNotNone(manager.calls[1][0][0].prompt)
+        self.assertEqual(manager.calls[1][1]["max_output_tokens"], 4096)
+        self.assertFalse(manager.calls[1][1]["include_images"])
+        self.assertNotIn("max_workers", manager.calls[1][1])
+        self.assertIn('rowspan="2"', parsed.text)
+        self.assertIn('rowspan="2"', saved_markdown)
+        self.assertIn(
+            'rowspan="2"',
+            parsed.rows[0]["extraction"]["tables"][0]["content"],
+        )
+        self.assertIn(
+            'rowspan="2"',
+            chunks["pages"][0]["blocks"][0]["content"],
+        )
+        self.assertIn(original, first_pass_raw)
+        self.assertEqual(parsed.metadata["token_count"], 17)
+        self.assertEqual(refinement["attempted"], 1)
+        self.assertEqual(refinement["succeeded"], 1)
+        self.assertEqual(refinement["failed"], 0)
+        self.assertEqual(refinement["records"][0]["rowspan_count"], 1)
+        self.assertTrue(
+            {
+                "table_refinement/page_0001_table_0001.crop.png",
+                "table_refinement/page_0001_table_0001.raw.html",
+                "table_refinement/page_0001_table_0001.table.html",
+            }.issubset(artifact_names)
+        )
+
+    def test_failed_table_refinement_falls_back_to_first_pass_table(self) -> None:
+        original = "<table><tr><td>Keep me</td></tr></table>"
+        manager = _FakeManager(
+            {
+                "__page_result__": _result(
+                    original,
+                    3,
+                    html=original,
+                    chunks=[
+                        {
+                            "bbox": [100, 100, 900, 500],
+                            "label": "Table",
+                            "content": original,
+                        }
+                    ],
+                    page_box=[0, 0, 1000, 1400],
+                ),
+                "__table_result__": _result("", 0, error=True),
+            }
+        )
+        provider = Chandra2Provider(
+            Chandra2Config.from_mapping(
+                {
+                    "method": "hf",
+                    "refine_tables": True,
+                    "save_raw_outputs": False,
+                    "include_images": False,
+                }
+            ),
+            _runtime_loader=lambda: _runtime([_FakePageImage()], manager),
+        )
+
+        parsed = provider.parse_file(Path("table.pdf"), _data_object(Path("table.pdf")))
+
+        self.assertEqual(parsed.text, original)
+        self.assertEqual(
+            parsed.rows[0]["extraction"]["tables"][0]["content"],
+            original,
+        )
+        self.assertEqual(parsed.metadata["table_refinement"]["failed"], 1)
+
+    def test_table_replacement_uses_layout_ordinal(self) -> None:
+        first = "<table><tr><td>First</td></tr></table>"
+        second = "<table><tr><td>Second</td></tr></table>"
+        refined_second = (
+            '<table><tr><td rowspan="2">Second</td></tr>'
+            "<tr></tr></table>"
+        )
+
+        updated = _replace_tables(
+            f"{first}\n{second}",
+            [(1, refined_second)],
+        )
+
+        self.assertIn(first, updated)
+        self.assertNotIn(second, updated)
+        self.assertIn(refined_second, updated)
 
     def test_any_failed_page_fails_the_document_without_partial_artifacts(self) -> None:
         pages = ["page-1", "page-2"]

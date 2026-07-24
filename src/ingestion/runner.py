@@ -17,6 +17,7 @@ from ..models import (
 )
 from .parsing import ParsingService, infer_initial_schema
 from .detector import detect_content_type, detect_format
+from .image_filter import apply_image_filters
 from .validation import validate_parsed_document
 from ..utils.paths import portable_path
 
@@ -69,6 +70,7 @@ def run(
     )
     parse_result = ParsingService.from_config(parser_config).parse(path, data_object)
     parsed = _require_parsed_data(parse_result)
+    apply_image_filters(parsed)
     quarantine_reasons = validate_parsed_document(parsed)
     if quarantine_reasons:
         output.quarantined_documents.append(

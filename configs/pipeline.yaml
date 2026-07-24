@@ -62,7 +62,13 @@
       "max_retries": 6,
       "include_images": true,
       "include_headers_footers": false,
-      "save_raw_outputs": true
+      "save_raw_outputs": true,
+      "refine_tables": false,
+      "table_max_output_tokens": 4096,
+      "table_crop_margin_ratio": 0.02,
+      "table_crop_min_short_side": 1536,
+      "table_crop_max_long_side": 3072,
+      "table_crop_max_pixels": 6291456
     },
     "lift_api": {
       "api_key_env": "DATALAB_API_KEY",

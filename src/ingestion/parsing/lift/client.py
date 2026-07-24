@@ -14,6 +14,7 @@ import os
 import time
 
 from ....models import DataObject, ParsedData
+from ...image_contract import normalize_markdown_images
 from ....reading_order import (
     parse_document_json,
     source_blocks_from_parser_json,
@@ -145,6 +146,18 @@ class LiftAPIParserClient:
             else None
         )
         image_files = _write_images(bundle_dir, images)
+        image_markdown_source = (
+            conversion if conversion is not None else result
+        )
+        image_markdown = str(
+            _get_attr(image_markdown_source, "markdown", "") or ""
+        )
+        extraction, normalized_image_count = normalize_markdown_images(
+            extraction,
+            image_markdown,
+            image_files,
+            source_blocks,
+        )
         raw_output_paths = _write_lift_raw_outputs(
             bundle_dir,
             extract_result=result,
@@ -169,6 +182,7 @@ class LiftAPIParserClient:
             "images": images,
             "image_files": image_files,
             "image_source": image_source,
+            "normalized_image_count": normalized_image_count,
             "raw_lift_outputs": raw_output_paths,
         }
         output_path = (
@@ -207,6 +221,7 @@ class LiftAPIParserClient:
                 "image_count": len(image_files),
                 "image_files": image_files,
                 "image_source": image_source,
+                "normalized_image_count": normalized_image_count,
                 "raw_lift_outputs": raw_output_paths,
                 "reading_order_source": (
                     "parser_json"

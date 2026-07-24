@@ -64,7 +64,26 @@ def source_blocks_from_parser_json(
         block["component_id"]: block
         for block in source_blocks_from_extraction(extraction or {})
     }
+    page_boxes: dict[int, Any] = {}
     collected: list[dict[str, Any]] = []
+
+    def collect_page_boxes(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                collect_page_boxes(item)
+            return
+        if not isinstance(value, dict):
+            return
+        component_id = value.get("id") or value.get("component_id")
+        parts = component_path_parts(component_id) if isinstance(component_id, str) else None
+        if parts is not None:
+            page, _, path_type = parts
+            block_type = str(value.get("block_type") or value.get("type") or path_type)
+            if block_type.casefold() == "page" and value.get("bbox") is not None:
+                page_boxes[page] = value["bbox"]
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                collect_page_boxes(child)
 
     def visit(value: Any) -> None:
         if isinstance(value, list):
@@ -96,6 +115,8 @@ def source_blocks_from_parser_json(
                 for field in ("bbox", "polygon", "section_hierarchy"):
                     if value.get(field) is not None:
                         block[field] = value[field]
+                if page in page_boxes:
+                    block["page_box"] = page_boxes[page]
                 if isinstance(value.get("html"), str) and value["html"]:
                     block["html"] = value["html"]
                 collected.append(block)
@@ -104,6 +125,7 @@ def source_blocks_from_parser_json(
             if isinstance(child, (dict, list)):
                 visit(child)
 
+    collect_page_boxes(document)
     visit(document)
     parser_ids = {
         block["component_id"]

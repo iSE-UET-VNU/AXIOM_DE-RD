@@ -1,10 +1,12 @@
-"""Chandra2 document provider backed by a self-hosted vLLM server."""
+"""Chandra2 document provider backed by self-hosted inference."""
 
 from __future__ import annotations
 
 from collections import Counter
 from html.parser import HTMLParser
+import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -19,6 +21,18 @@ CHANDRA2_EXTENSIONS = frozenset(
     {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".tiff"}
 )
 
+TABLE_OCR_PROMPT = """
+OCR this image as exactly one HTML table.
+Return only one complete <table>...</table>; no prose, Markdown, JSON, or outer div.
+Reconstruct the complete logical row and column grid from the visible borders.
+A missing internal horizontal border means a cell spans rows: use rowspan.
+A missing internal vertical border means a cell spans columns: use colspan.
+Place each merged cell at its upper-left grid position and emit its content once.
+Do not emit td/th cells for positions covered by an earlier rowspan or colspan.
+Preserve visible text and genuinely empty cells.
+Use only table, thead, tbody, tr, th, td, b, i, br, span, sup, sub, and math.
+""".strip()
+
 
 @dataclass(frozen=True)
 class Chandra2Config:
@@ -32,6 +46,13 @@ class Chandra2Config:
     include_images: bool = True
     include_headers_footers: bool = False
     save_raw_outputs: bool = True
+    refine_tables: bool = False
+    table_prompt: str = TABLE_OCR_PROMPT
+    table_max_output_tokens: int = 4096
+    table_crop_margin_ratio: float = 0.02
+    table_crop_min_short_side: int = 1536
+    table_crop_max_long_side: int = 3072
+    table_crop_max_pixels: int = 3072 * 2048
     output_dir: str | None = "data/work/chandra2"
     project_root: str | None = None
 
@@ -54,6 +75,26 @@ class Chandra2Config:
                 config.get("include_headers_footers", False)
             ),
             save_raw_outputs=bool(config.get("save_raw_outputs", True)),
+            refine_tables=bool(config.get("refine_tables", False)),
+            table_prompt=_non_empty_str(
+                config.get("table_prompt", TABLE_OCR_PROMPT),
+                "table_prompt",
+            ),
+            table_max_output_tokens=_positive_int(
+                config, "table_max_output_tokens", 4096
+            ),
+            table_crop_margin_ratio=_non_negative_float(
+                config, "table_crop_margin_ratio", 0.02
+            ),
+            table_crop_min_short_side=_positive_int(
+                config, "table_crop_min_short_side", 1536
+            ),
+            table_crop_max_long_side=_positive_int(
+                config, "table_crop_max_long_side", 3072
+            ),
+            table_crop_max_pixels=_positive_int(
+                config, "table_crop_max_pixels", 3072 * 2048
+            ),
             output_dir=_optional_str(config.get("output_dir", "data/work/chandra2")),
             project_root=_optional_str(config.get("project_root")),
         )
@@ -128,14 +169,37 @@ class Chandra2Provider:
                 raise RuntimeError(f"Chandra2 failed to parse page(s): {pages_text}")
             results.extend(generated)
 
-        markdown = "\n\n".join(
+        page_payloads, raw_block_count = _page_payloads(results)
+        page_markdown = [
             str(getattr(result, "markdown", "") or "") for result in results
+        ]
+        page_clean_html = [
+            str(getattr(result, "html", "") or "") for result in results
+        ]
+        bundle_dir = _output_bundle_dir(
+            self.config,
+            file_path,
+            data_object,
+            results,
         )
+        table_refinement = _refine_table_blocks(
+            self.config,
+            runtime,
+            self._get_manager(),
+            pages,
+            page_payloads,
+            page_markdown,
+            page_clean_html,
+            bundle_dir,
+        )
+        markdown = "\n\n".join(page_markdown)
         latency_seconds = round(time.monotonic() - started, 3)
-        token_count = sum(
+        first_pass_token_count = sum(
             int(getattr(result, "token_count", 0) or 0) for result in results
         )
-        page_payloads, raw_block_count = _page_payloads(results)
+        token_count = first_pass_token_count + int(
+            table_refinement["token_count"]
+        )
         source_blocks = _source_blocks_from_pages(page_payloads)
         reading_order_complete = bool(source_blocks) and (
             len(source_blocks) == raw_block_count
@@ -143,12 +207,6 @@ class Chandra2Provider:
         )
         extraction = _build_extraction(markdown, source_blocks)
 
-        bundle_dir = _output_bundle_dir(
-            self.config,
-            file_path,
-            data_object,
-            results,
-        )
         saved_images = _write_images(
             self.config,
             bundle_dir,
@@ -173,12 +231,15 @@ class Chandra2Provider:
             data_object,
             markdown,
             results,
+            page_clean_html,
             page_payloads,
             source_blocks,
             extraction,
             image_files,
             reading_order_complete,
             latency_seconds,
+            token_count,
+            table_refinement,
         )
         label_counts = Counter(
             str(block.get("raw_label") or block.get("type") or "Block")
@@ -208,6 +269,8 @@ class Chandra2Provider:
                 "model_name": _model_name(self.config.method),
                 "page_count": len(results),
                 "token_count": token_count,
+                "first_pass_token_count": first_pass_token_count,
+                "table_refinement": table_refinement,
                 "latency_seconds": latency_seconds,
                 "raw_output_path": raw_output_paths.get("result_markdown"),
                 "raw_metadata_path": raw_output_paths.get("metadata"),
@@ -261,6 +324,245 @@ def _load_runtime() -> _ChandraRuntime:
     return _ChandraRuntime(load_file, InferenceManager, BatchInputItem)
 
 
+def _refine_table_blocks(
+    config: Chandra2Config,
+    runtime: _ChandraRuntime,
+    manager: Any,
+    page_images: list[Any],
+    page_payloads: list[dict[str, Any]],
+    page_markdown: list[str],
+    page_clean_html: list[str],
+    bundle_dir: Path | None,
+) -> dict[str, Any]:
+    """Run a focused OCR pass for each layout block labelled as a table."""
+
+    summary: dict[str, Any] = {
+        "enabled": config.refine_tables,
+        "prompt_sha256": hashlib.sha256(
+            config.table_prompt.encode("utf-8")
+        ).hexdigest(),
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "token_count": 0,
+        "records": [],
+    }
+    if not config.refine_tables:
+        return summary
+
+    artifact_dir = (
+        bundle_dir / "table_refinement"
+        if bundle_dir is not None and config.save_raw_outputs
+        else None
+    )
+    if artifact_dir is not None:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    for page_index, (page_image, page_payload) in enumerate(
+        zip(page_images, page_payloads)
+    ):
+        replacements: list[tuple[int, str]] = []
+        page_box = _numeric_box(page_payload.get("page_box"))
+        blocks = page_payload.get("blocks")
+        if not isinstance(blocks, list):
+            continue
+
+        table_number = 0
+        for block_index, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                continue
+            if _normalize_label(str(block.get("label") or "")) != "Table":
+                continue
+
+            table_number += 1
+            summary["attempted"] += 1
+            bbox = _numeric_box(block.get("bbox"))
+            record: dict[str, Any] = {
+                "page": page_index,
+                "block_index": block_index,
+                "bbox": bbox,
+                "status": "failed",
+            }
+            try:
+                if not bbox or not page_box:
+                    raise ValueError("table bbox or page_box is unavailable")
+                crop_box = _crop_box_from_bbox(
+                    page_image,
+                    bbox,
+                    page_box,
+                    config.table_crop_margin_ratio,
+                )
+                crop = page_image.crop(crop_box)
+                model_crop = _resize_table_crop(crop, config)
+                record["crop_box_pixels"] = list(crop_box)
+                record["model_image_size"] = list(model_crop.size)
+
+                prefix = f"page_{page_index + 1:04d}_table_{table_number:04d}"
+                if artifact_dir is not None:
+                    crop_path = artifact_dir / f"{prefix}.crop.png"
+                    model_crop.save(crop_path)
+                    record["crop_path"] = portable_path(
+                        crop_path, config.project_root
+                    )
+
+                batch = [
+                    runtime.batch_input_item(
+                        image=model_crop,
+                        prompt=config.table_prompt,
+                    )
+                ]
+                options: dict[str, Any] = {
+                    "include_images": False,
+                    "include_headers_footers": False,
+                    "max_output_tokens": config.table_max_output_tokens,
+                }
+                if config.method == "vllm":
+                    options.update(
+                        max_workers=config.max_workers,
+                        max_retries=config.max_retries,
+                    )
+                generated = list(manager.generate(batch, **options))
+                if len(generated) != 1:
+                    raise RuntimeError("table OCR returned no single result")
+                result = generated[0]
+                if bool(getattr(result, "error", False)):
+                    raise RuntimeError("table OCR result is marked as failed")
+
+                raw_response = str(getattr(result, "raw", "") or "")
+                response = (
+                    raw_response
+                    or str(getattr(result, "html", "") or "")
+                    or str(getattr(result, "markdown", "") or "")
+                )
+                refined_table = _extract_first_table(response)
+                if not refined_table:
+                    raise ValueError("table OCR did not return a complete HTML table")
+
+                block["content"] = refined_table
+                replacements.append((table_number - 1, refined_table))
+                result_tokens = int(getattr(result, "token_count", 0) or 0)
+                summary["token_count"] += result_tokens
+                summary["succeeded"] += 1
+                record.update(
+                    status="succeeded",
+                    token_count=result_tokens,
+                    rowspan_count=_span_count(refined_table, "rowspan"),
+                    colspan_count=_span_count(refined_table, "colspan"),
+                )
+                if artifact_dir is not None:
+                    raw_path = artifact_dir / f"{prefix}.raw.html"
+                    table_path = artifact_dir / f"{prefix}.table.html"
+                    raw_path.write_text(response, encoding="utf-8")
+                    table_path.write_text(refined_table, encoding="utf-8")
+                    record["raw_path"] = portable_path(
+                        raw_path, config.project_root
+                    )
+                    record["table_path"] = portable_path(
+                        table_path, config.project_root
+                    )
+            except Exception as exc:
+                summary["failed"] += 1
+                record["error"] = f"{type(exc).__name__}: {exc}"
+            summary["records"].append(record)
+
+        if replacements:
+            page_markdown[page_index] = _replace_tables(
+                page_markdown[page_index], replacements
+            )
+            page_clean_html[page_index] = _replace_tables(
+                page_clean_html[page_index], replacements
+            )
+
+    summary["complete"] = summary["failed"] == 0
+    if artifact_dir is not None:
+        summary["artifact_dir"] = portable_path(
+            artifact_dir, config.project_root
+        )
+    return summary
+
+
+def _crop_box_from_bbox(
+    image: Any,
+    bbox: list[int | float],
+    page_box: list[int | float],
+    margin_ratio: float,
+) -> tuple[int, int, int, int]:
+    image_width, image_height = image.size
+    page_x0, page_y0, page_x1, page_y1 = page_box
+    page_width = float(page_x1) - float(page_x0)
+    page_height = float(page_y1) - float(page_y0)
+    if page_width <= 0 or page_height <= 0:
+        raise ValueError("invalid page_box dimensions")
+
+    x0, y0, x1, y1 = bbox
+    left = (float(x0) - float(page_x0)) * image_width / page_width
+    top = (float(y0) - float(page_y0)) * image_height / page_height
+    right = (float(x1) - float(page_x0)) * image_width / page_width
+    bottom = (float(y1) - float(page_y0)) * image_height / page_height
+    margin = max(right - left, bottom - top) * margin_ratio
+    crop_box = (
+        max(0, math.floor(left - margin)),
+        max(0, math.floor(top - margin)),
+        min(image_width, math.ceil(right + margin)),
+        min(image_height, math.ceil(bottom + margin)),
+    )
+    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+        raise ValueError("table bbox maps to an empty crop")
+    return crop_box
+
+
+def _resize_table_crop(image: Any, config: Chandra2Config) -> Any:
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise ValueError("empty table crop")
+    scale = min(
+        config.table_crop_min_short_side / min(width, height),
+        config.table_crop_max_long_side / max(width, height),
+        math.sqrt(config.table_crop_max_pixels / (width * height)),
+    )
+    if abs(scale - 1.0) < 0.01:
+        return image.copy()
+    size = (
+        max(1, round(width * scale)),
+        max(1, round(height * scale)),
+    )
+    try:
+        from PIL import Image
+
+        return image.resize(size, Image.Resampling.LANCZOS)
+    except (ImportError, AttributeError):
+        return image.resize(size)
+
+
+def _extract_first_table(value: str) -> str | None:
+    match = re.search(r"<table\b[^>]*>.*?</table\s*>", value, re.I | re.S)
+    return match.group(0).strip() if match else None
+
+
+def _replace_tables(value: str, replacements: list[tuple[int, str]]) -> str:
+    """Replace tables by their page-local layout order."""
+
+    by_index = dict(replacements)
+    index = 0
+
+    def replace_at_index(match: re.Match[str]) -> str:
+        nonlocal index
+        replacement = by_index.get(index, match.group(0))
+        index += 1
+        return replacement
+
+    return re.sub(
+        r"<table\b[^>]*>.*?</table\s*>",
+        replace_at_index,
+        value,
+        flags=re.I | re.S,
+    )
+
+
+def _span_count(value: str, attribute: str) -> int:
+    return len(re.findall(rf"\b{re.escape(attribute)}\s*=", value, re.I))
+
+
 def _write_raw_outputs(
     config: Chandra2Config,
     bundle_dir: Path | None,
@@ -268,12 +570,15 @@ def _write_raw_outputs(
     data_object: DataObject,
     markdown: str,
     results: list[Any],
+    page_clean_html: list[str],
     page_payloads: list[dict[str, Any]],
     source_blocks: list[dict[str, Any]],
     extraction: dict[str, Any],
     image_files: list[dict[str, Any]],
     reading_order_complete: bool,
     latency_seconds: float,
+    token_count: int,
+    table_refinement: dict[str, Any],
 ) -> dict[str, str]:
     if not config.save_raw_outputs or bundle_dir is None:
         return {}
@@ -288,13 +593,12 @@ def _write_raw_outputs(
 
     raw_sections: list[str] = []
     clean_sections: list[str] = []
-    for page_index, (result, page_payload) in enumerate(
-        zip(results, page_payloads),
+    for page_index, (result, clean_html, page_payload) in enumerate(
+        zip(results, page_clean_html, page_payloads),
         start=1,
     ):
         prefix = f"page_{page_index:04d}"
         raw_html = str(getattr(result, "raw", "") or "")
-        clean_html = str(getattr(result, "html", "") or "")
         raw_sections.append(
             f'<section data-page-number="{page_index}">\n{raw_html}\n</section>'
         )
@@ -347,10 +651,7 @@ def _write_raw_outputs(
                 "method": config.method,
                 "model_name": _model_name(config.method),
                 "page_count": len(results),
-                "token_count": sum(
-                    int(getattr(result, "token_count", 0) or 0)
-                    for result in results
-                ),
+                "token_count": token_count,
                 "latency_seconds": latency_seconds,
                 "label_counts": dict(sorted(label_counts.items())),
                 "source_block_count": len(source_blocks),
@@ -362,6 +663,7 @@ def _write_raw_outputs(
                     "chandra2_layout" if source_blocks else "unavailable"
                 ),
                 "reading_order_complete": reading_order_complete,
+                "table_refinement": table_refinement,
                 "raw_chandra_outputs": paths,
             }
         ),
@@ -851,6 +1153,24 @@ def _non_negative_int(config: dict[str, Any], name: str, default: int) -> int:
     if value < 0:
         raise ValueError(f"chandra2.{name} must be zero or greater")
     return value
+
+
+def _non_negative_float(
+    config: dict[str, Any],
+    name: str,
+    default: float,
+) -> float:
+    value = float(config.get(name, default))
+    if value < 0:
+        raise ValueError(f"chandra2.{name} must be zero or greater")
+    return value
+
+
+def _non_empty_str(value: Any, name: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"chandra2.{name} must not be empty")
+    return text
 
 
 def _optional_str(value: Any) -> str | None:
