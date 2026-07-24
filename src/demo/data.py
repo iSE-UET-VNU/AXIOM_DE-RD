@@ -192,6 +192,35 @@ def load_document(
     return {}
 
 
+def persist_dataeng_response(
+    response: dict[str, Any],
+    project_root: str | Path = PROJECT_ROOT,
+) -> str:
+    """Persist only final normalized output so the demo explorer can render it."""
+    metadata = response.get("metadata")
+    documents = response.get("documents")
+    if not isinstance(metadata, dict) or not isinstance(documents, list):
+        raise ValueError("Data engineering response must contain metadata and documents.")
+    run_id = str(metadata.get("run_id") or "").strip()
+    _validate_identifier(run_id, "run id")
+
+    root = Path(project_root).resolve()
+    output_dir = root / "data" / "output" / run_id
+    document_dir = output_dir / "documents"
+    document_dir.mkdir(parents=True, exist_ok=True)
+    for document in documents:
+        if not isinstance(document, dict):
+            raise ValueError("Data engineering documents must be JSON objects.")
+        identity = document.get("document")
+        if not isinstance(identity, dict):
+            raise ValueError("Output document is missing its document identity.")
+        document_id = str(identity.get("document_id") or "").strip()
+        _validate_identifier(document_id, "document id")
+        _write_json(document_dir / f"{document_id}.json", document)
+    _write_json(output_dir / "metadata.json", metadata)
+    return run_id
+
+
 def extract_document_view(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize v3, legacy v2, and ingestion artifacts for the UI."""
     if not payload:
@@ -362,3 +391,12 @@ def _is_within(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from ..pipeline import run_pipeline
-from .output import build_dataeng_output
+from ..dispatcher import dispatch_dataeng_request
 from .schemas import DataEngRequest, DataEngResponse, HealthResponse
 
 
@@ -19,8 +18,7 @@ app = FastAPI(
 def dataeng(request: DataEngRequest) -> dict:
     """Run the current pipeline for every presigned object in the request."""
     try:
-        state = run_pipeline(presigned_inventory=request.to_inventory())
-        return build_dataeng_output(state)
+        return dispatch_dataeng_request(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -35,4 +33,3 @@ def live() -> dict[str, str]:
 @app.get("/health/ready", response_model=HealthResponse)
 def ready() -> dict[str, str]:
     return {"status": "ok"}
-
