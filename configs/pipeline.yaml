@@ -52,6 +52,25 @@
       "save_raw_outputs": false
     }
   },
+  "table_agent": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8001",
+    "base_url_env": "TABLE_AGENT_BASE_URL",
+    "upload_path": "/v1/jobs/upload",
+    "api_key_env": "TABLE_AGENT_SERVICE_API_KEY",
+    "timeout_seconds": 1800,
+    "verify_ssl": true,
+    "stage": "structure",
+    "embed": true,
+    "sheets": [],
+    "supported_extensions": [
+      ".xls",
+      ".xlsm",
+      ".xlsx",
+      ".xltm",
+      ".xltx"
+    ]
+  },
   "chunking_embedding": {
     "chunker": "recursive",
     "chunker_params": {

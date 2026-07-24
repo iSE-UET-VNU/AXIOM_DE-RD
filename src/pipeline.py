@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import argparse
+import json
 import logging
 import time
 
@@ -43,6 +44,7 @@ def run_pipeline(
     s3_all_objects: bool = False,
     local_raw: str | Path | None = None,
 ) -> PipelineState:
+    """Run the non-table document engine after public input routing."""
     project_root = Path(__file__).resolve().parents[1]
     load_dotenv_file(project_root)
     config_file = _resolve_config_path(project_root, config_path)
@@ -370,7 +372,7 @@ def _accept_ingestion_result(
     )
 
 
-def cli(argv: list[str] | None = None) -> PipelineState:
+def cli(argv: list[str] | None = None) -> Any:
     parser = argparse.ArgumentParser(description="Run the AXIOM_DE-RD pipeline scaffold.")
     parser.add_argument("--config", default="configs/pipeline.yaml", help="Path to pipeline config.")
     input_group = parser.add_mutually_exclusive_group()
@@ -401,7 +403,11 @@ def cli(argv: list[str] | None = None) -> PipelineState:
     )
     args = parser.parse_args(argv)
 
-    state = run_pipeline(
+    # Import lazily because the dispatcher uses run_pipeline as the document
+    # engine after it has routed spreadsheet inputs to TableAgent.
+    from .dispatcher import dispatch_dataeng_inputs
+
+    result = dispatch_dataeng_inputs(
         args.config,
         s3_uri=args.s3_uri,
         s3_info_file=args.s3_info_file,
@@ -409,6 +415,19 @@ def cli(argv: list[str] | None = None) -> PipelineState:
         s3_all_objects=args.s3_all_objects,
         local_raw=args.local_raw,
     )
+    state = result.pipeline_state
+    if result.table_document_count:
+        metadata = result.response.get("metadata", {})
+        print(
+            "AXIOM completed "
+            f"{metadata.get('document_count', 0)} document(s), including "
+            f"{result.table_document_count} workbook(s) routed to TableAgent."
+        )
+        print(json.dumps(result.response, ensure_ascii=False, indent=2))
+        return result
+
+    if state is None:
+        raise RuntimeError("The document pipeline did not return a run state.")
     run_status = "completed_with_errors" if state.errors else "completed"
     print(f"Pipeline run {state.run_id} {run_status}.")
     print(f"Modules: {', '.join(state.completed_modules) or 'none'}")
@@ -416,7 +435,7 @@ def cli(argv: list[str] | None = None) -> PipelineState:
         print(f"Quarantined documents: {len(state.quarantined_documents)}")
     if state.artifact_paths:
         print(f"Artifacts: {state.artifact_paths.get('output_metadata')}")
-    return state
+    return result
 
 
 def _resolve_config_path(project_root: Path, config_path: str | Path) -> Path:
