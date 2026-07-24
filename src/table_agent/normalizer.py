@@ -6,6 +6,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ..indexing_cataloging.lexical import (
+    build_corpus_statistics,
+    build_lexical_payload,
+    content_text,
+)
+
 
 _TABLE_FIELDS = {"workbook", "sheet", "status", "structure"}
 _METADATA_FIELDS = {"name", "description", "size_bytes"}
@@ -15,6 +21,7 @@ _RETRIEVAL_FIELDS = {
     "type",
     "position",
     "content",
+    "lexical",
     "embeddings",
     "embedding",
     "workbook",
@@ -128,7 +135,17 @@ def normalize_table_agent_response(
             },
             "annotations": {"table_agent": table_agent_annotations},
         },
-        "retrieval": {"items": retrieval_items},
+        "retrieval": {
+            "items": retrieval_items,
+            "lexical_stats": build_corpus_statistics(
+                (
+                    item.get("lexical")
+                    for item in retrieval_items
+                    if isinstance(item, dict)
+                ),
+                scope="document",
+            ),
+        },
         "lineage": {
             "run_id": run_id,
             "status": "succeeded",
@@ -259,14 +276,14 @@ def _retrieval_items(
         supplied = retrieval.get("items") if isinstance(retrieval, dict) else None
     if isinstance(supplied, list):
         normalized = [
-            _normalize_retrieval_item(item, index)
+            _with_lexical(_normalize_retrieval_item(item, index))
             for index, item in enumerate(supplied)
             if isinstance(item, dict)
         ]
         if normalized:
             return normalized
 
-    return [
+    fallback_items = [
         {
             "item_id": ":".join(
                 str(value)
@@ -288,6 +305,7 @@ def _retrieval_items(
         }
         for index, table in enumerate(tables)
     ]
+    return [_with_lexical(item) for item in fallback_items]
 
 
 def _normalize_retrieval_item(
@@ -324,6 +342,13 @@ def _normalize_retrieval_item(
     if extensions:
         normalized["extensions"] = extensions
     return normalized
+
+
+def _with_lexical(item: dict[str, Any]) -> dict[str, Any]:
+    lexical = build_lexical_payload(content_text(item.get("content")))
+    if lexical:
+        item["lexical"] = lexical
+    return item
 
 
 def _normalize_embeddings(item: dict[str, Any]) -> list[dict[str, Any]]:

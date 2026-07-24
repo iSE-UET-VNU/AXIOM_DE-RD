@@ -298,7 +298,7 @@ data/embedded/<run_id>/
 
 data/output/<run_id>/
 ├── documents/
-│   └── <document_id>.json              # Semantic content, source blocks, reading order, retrieval
+│   └── <document_id>.json              # Semantic content, retrieval items, and per-document BM25 inputs
 └── metadata.json                       # Common document schema and compact run summary
 ```
 
@@ -308,6 +308,12 @@ provenance/completeness in `content.reading_order_meta`. New Lift runs use JSON
 output so the order includes text, headings, equations, figures, captions, and
 tables. Older artifacts can be reconstructed from structured-extraction
 citations, with `reading_order_meta.complete` set to `false`.
+
+Each text-bearing `retrieval.items[]` entry also contains a `lexical` object
+with raw term frequencies (`tf`), analyzed token length (`dl`), and analyzer
+name. Each document's `retrieval.lexical_stats` contains `df`, `N`, and
+`avgdl`, calculated only from the chunks in that document. The common
+`metadata.json` does not contain BM25 statistics.
 
 An ingested quarantine record uses `status: "quarantined"`, has no `schema_id`,
 and includes machine-readable failure reasons such as `zero_page_count`,
