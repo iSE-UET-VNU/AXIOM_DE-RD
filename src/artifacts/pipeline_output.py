@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..indexing_cataloging.index_builder import DocumentView, document_from_enriched_data
+from ..indexing_cataloging.lexical import build_corpus_statistics
 from ..models import DataObject, EnrichedData, ParsedData, PipelineState
 from ..reading_order import reading_order_from_rows
 from ..utils.paths import portable_path
@@ -378,15 +379,24 @@ def _compact_retrieval(
             vectors_by_record.setdefault(record_id, []).append(vector)
 
     assets = image_files if isinstance(image_files, list) else []
+    items = [
+        _compact_retrieval_item(
+            record,
+            vectors_by_record.get(record.record_id, []),
+            assets,
+        )
+        for record in index_records
+    ]
     return {
-        "items": [
-            _compact_retrieval_item(
-                record,
-                vectors_by_record.get(record.record_id, []),
-                assets,
-            )
-            for record in index_records
-        ]
+        "items": items,
+        "lexical_stats": build_corpus_statistics(
+            (
+                item.get("lexical")
+                for item in items
+                if isinstance(item, dict)
+            ),
+            scope="document",
+        ),
     }
 
 
@@ -403,6 +413,9 @@ def _compact_retrieval_item(
         "content": content,
         "embeddings": [_compact_embedding(vector) for vector in vectors],
     }
+    lexical = record.payload.get("lexical")
+    if isinstance(lexical, dict):
+        item["lexical"] = dict(lexical)
     if record.index_type == "image":
         image_index = record.payload.get("image_index")
         if isinstance(image_index, int) and 0 <= image_index < len(image_files):

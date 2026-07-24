@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..models import EnrichedData, IndexRecord, MetadataRecord, make_id
+from .lexical import build_lexical_payload
 
 INDEX_CONTRACT_VERSION = "indexing-contract-v1"
 DEFAULT_CHUNK_SIZE = 1200
@@ -159,6 +160,7 @@ def build_text_chunk_index_records(
                     "text": chunk.text,
                     "start_char": chunk.start_char,
                     "end_char": chunk.end_char,
+                    **_lexical_payload(chunk.text),
                     **_embedding_payload(chunk.text),
                 },
                 metadata=_record_metadata("text_chunk"),
@@ -182,6 +184,7 @@ def build_table_index_records(document: DocumentView) -> list[IndexRecord]:
                     "table_id": table_id,
                     "table_index": index,
                     "table": table,
+                    **_lexical_payload(embedding_text),
                     **_embedding_payload(embedding_text),
                 },
                 metadata=_record_metadata("table"),
@@ -205,6 +208,7 @@ def build_image_index_records(document: DocumentView) -> list[IndexRecord]:
                     "image_id": image_id,
                     "image_index": index,
                     "image": figure,
+                    **_lexical_payload(embedding_text),
                     **_embedding_payload(embedding_text),
                 },
                 metadata=_record_metadata("image"),
@@ -298,6 +302,11 @@ def _embedding_payload(embedding_text: str) -> dict[str, Any]:
         "embedding_model": None,
         "embedding_status": "pending",
     }
+
+
+def _lexical_payload(text: str) -> dict[str, Any]:
+    lexical = build_lexical_payload(text)
+    return {"lexical": lexical} if lexical else {}
 
 
 def _record_metadata(component_type: str) -> dict[str, Any]:
