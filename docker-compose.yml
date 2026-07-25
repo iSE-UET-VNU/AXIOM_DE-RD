@@ -1,0 +1,22 @@
+services:
+  indexing-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      S3_ENDPOINT_URL: http://minio:9000
+    ports:
+      - "18000:8000"
+    networks:
+      axiom-k8s:
+        aliases:
+          - indexing-service
+          - axiom-de-rd
+
+networks:
+  axiom-k8s:
+    external: true
+    name: axiom-k8s
