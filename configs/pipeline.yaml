@@ -53,11 +53,12 @@
     "artifacts"
   ],
   "parsing": {
-    "provider": "lift_api",
+    "provider": "chandra2",
     "chandra2": {
       "method": "vllm",
-      "batch_size": 28,
-      "max_workers": 4,
+      "continuous_page_queue": true,
+      "batch_size": 64,
+      "max_workers": 40,
       "max_output_tokens": 12384,
       "max_retries": 6,
       "include_images": true,

@@ -39,6 +39,7 @@ class Chandra2Config:
     """Runtime and artifact settings for Chandra2 inference."""
 
     method: str = "vllm"
+    continuous_page_queue: bool = False
     batch_size: int = 28
     max_workers: int = 4
     max_output_tokens: int = 12384
@@ -60,8 +61,14 @@ class Chandra2Config:
     def from_mapping(cls, config: dict[str, Any] | None) -> "Chandra2Config":
         config = config or {}
         method = _inference_method(config.get("method", "vllm"))
+        continuous_page_queue = bool(config.get("continuous_page_queue", False))
+        if continuous_page_queue and method != "vllm":
+            raise ValueError(
+                "chandra2.continuous_page_queue is only supported with method='vllm'"
+            )
         return cls(
             method=method,
+            continuous_page_queue=continuous_page_queue,
             batch_size=_positive_int(
                 config,
                 "batch_size",
@@ -107,6 +114,22 @@ class _ChandraRuntime:
     batch_input_item: Callable[..., Any]
 
 
+@dataclass
+class _PreparedDocument:
+    file_path: Path
+    data_object: DataObject
+    pages: list[Any]
+    results: list[Any | None]
+
+
+@dataclass(frozen=True)
+class _PageJob:
+    document_id: str
+    document_index: int
+    page_index: int
+    input_item: Any
+
+
 class Chandra2Provider:
     """Convert PDF and image pages to ordered Markdown with Chandra2."""
 
@@ -125,40 +148,18 @@ class Chandra2Provider:
         self._manager: Any = None
 
     def parse_file(self, path: str | Path, data_object: DataObject) -> ParsedData:
-        file_path = Path(path)
-        if file_path.suffix.lower() not in self.supported_extensions:
-            raise RuntimeError(
-                f"Chandra2 does not support file type: {file_path.suffix}"
-            )
+        if self.config.continuous_page_queue:
+            return self.parse_files([(path, data_object)])[0]
 
         started = time.monotonic()
         runtime = self._get_runtime()
-        pages = runtime.load_file(str(file_path), {})
-        if not pages:
-            raise RuntimeError("Chandra2 could not load any pages from the document.")
-
+        file_path, pages = self._load_document(path, runtime)
         results: list[Any] = []
         for start in range(0, len(pages), self.config.batch_size):
-            page_batch = pages[start : start + self.config.batch_size]
-            batch = [
-                runtime.batch_input_item(image=image, prompt_type="ocr_layout")
-                for image in page_batch
-            ]
-            generate_options: dict[str, Any] = {
-                "include_images": self.config.include_images,
-                "include_headers_footers": self.config.include_headers_footers,
-                "max_output_tokens": self.config.max_output_tokens,
-            }
-            if self.config.method == "vllm":
-                generate_options.update(
-                    max_workers=self.config.max_workers,
-                    max_retries=self.config.max_retries,
-                )
-            generated = list(self._get_manager().generate(batch, **generate_options))
-            if len(generated) != len(batch):
-                raise RuntimeError(
-                    "Chandra2 returned a different number of results than input pages."
-                )
+            generated = self._generate_pages(
+                runtime,
+                pages[start : start + self.config.batch_size],
+            )
             failed_pages = [
                 start + index + 1
                 for index, result in enumerate(generated)
@@ -169,6 +170,152 @@ class Chandra2Provider:
                 raise RuntimeError(f"Chandra2 failed to parse page(s): {pages_text}")
             results.extend(generated)
 
+        return self._finalize_document(
+            runtime,
+            file_path,
+            data_object,
+            pages,
+            results,
+            started=started,
+            inference_mode=(
+                "batched_vllm" if self.config.method == "vllm" else "static_hf"
+            ),
+        )
+
+    def parse_files(
+        self,
+        documents: list[tuple[str | Path, DataObject]],
+    ) -> list[ParsedData]:
+        """Parse multiple documents through one continuous vLLM page queue."""
+
+        if not documents:
+            return []
+        if not self.config.continuous_page_queue:
+            return [
+                self.parse_file(path, data_object)
+                for path, data_object in documents
+            ]
+
+        started = time.monotonic()
+        runtime = self._get_runtime()
+        prepared: list[_PreparedDocument] = []
+        jobs: list[_PageJob] = []
+        for document_index, (path, data_object) in enumerate(documents):
+            file_path, pages = self._load_document(path, runtime)
+            prepared.append(
+                _PreparedDocument(
+                    file_path=file_path,
+                    data_object=data_object,
+                    pages=pages,
+                    results=[None] * len(pages),
+                )
+            )
+            jobs.extend(
+                _PageJob(
+                    document_id=data_object.object_id,
+                    document_index=document_index,
+                    page_index=page_index,
+                    input_item=runtime.batch_input_item(
+                        image=image,
+                        prompt_type="ocr_layout",
+                    ),
+                )
+                for page_index, image in enumerate(pages)
+            )
+
+        generated = self._generate_batch([job.input_item for job in jobs])
+        for job, result in zip(jobs, generated):
+            document = prepared[job.document_index]
+            if document.data_object.object_id != job.document_id:
+                raise RuntimeError("Chandra2 page job document metadata is inconsistent.")
+            document.results[job.page_index] = result
+
+        failures: list[str] = []
+        for document in prepared:
+            failed_pages = [
+                index + 1
+                for index, result in enumerate(document.results)
+                if result is None or bool(getattr(result, "error", False))
+            ]
+            if failed_pages:
+                pages_text = ", ".join(str(page) for page in failed_pages)
+                failures.append(f"{document.file_path.name}: {pages_text}")
+        if failures:
+            raise RuntimeError(
+                "Chandra2 failed to parse page(s): " + "; ".join(failures)
+            )
+
+        return [
+            self._finalize_document(
+                runtime,
+                document.file_path,
+                document.data_object,
+                document.pages,
+                list(document.results),
+                started=started,
+                inference_mode="continuous_vllm",
+            )
+            for document in prepared
+        ]
+
+    def _load_document(
+        self,
+        path: str | Path,
+        runtime: _ChandraRuntime,
+    ) -> tuple[Path, list[Any]]:
+        file_path = Path(path)
+        if file_path.suffix.lower() not in self.supported_extensions:
+            raise RuntimeError(
+                f"Chandra2 does not support file type: {file_path.suffix}"
+            )
+        pages = runtime.load_file(str(file_path), {})
+        if not pages:
+            raise RuntimeError(
+                f"Chandra2 could not load any pages from the document: {file_path.name}"
+            )
+        return file_path, pages
+
+    def _generate_pages(
+        self,
+        runtime: _ChandraRuntime,
+        pages: list[Any],
+    ) -> list[Any]:
+        return self._generate_batch(
+            [
+                runtime.batch_input_item(image=image, prompt_type="ocr_layout")
+                for image in pages
+            ]
+        )
+
+    def _generate_batch(self, batch: list[Any]) -> list[Any]:
+        generate_options: dict[str, Any] = {
+            "include_images": self.config.include_images,
+            "include_headers_footers": self.config.include_headers_footers,
+            "max_output_tokens": self.config.max_output_tokens,
+        }
+        if self.config.method == "vllm":
+            generate_options.update(
+                max_workers=self.config.max_workers,
+                max_retries=self.config.max_retries,
+            )
+        generated = list(self._get_manager().generate(batch, **generate_options))
+        if len(generated) != len(batch):
+            raise RuntimeError(
+                "Chandra2 returned a different number of results than input pages."
+            )
+        return generated
+
+    def _finalize_document(
+        self,
+        runtime: _ChandraRuntime,
+        file_path: Path,
+        data_object: DataObject,
+        pages: list[Any],
+        results: list[Any],
+        *,
+        started: float,
+        inference_mode: str,
+    ) -> ParsedData:
         page_payloads, raw_block_count = _page_payloads(results)
         page_markdown = [
             str(getattr(result, "markdown", "") or "") for result in results
@@ -240,6 +387,7 @@ class Chandra2Provider:
             latency_seconds,
             token_count,
             table_refinement,
+            inference_mode,
         )
         label_counts = Counter(
             str(block.get("raw_label") or block.get("type") or "Block")
@@ -266,6 +414,8 @@ class Chandra2Provider:
             metadata={
                 "parser": "chandra2",
                 "method": self.config.method,
+                "inference_mode": inference_mode,
+                "continuous_page_queue": self.config.continuous_page_queue,
                 "model_name": _model_name(self.config.method),
                 "page_count": len(results),
                 "token_count": token_count,
@@ -579,6 +729,7 @@ def _write_raw_outputs(
     latency_seconds: float,
     token_count: int,
     table_refinement: dict[str, Any],
+    inference_mode: str,
 ) -> dict[str, str]:
     if not config.save_raw_outputs or bundle_dir is None:
         return {}
@@ -649,6 +800,8 @@ def _write_raw_outputs(
                 "source_object_id": data_object.object_id,
                 "file_name": file_path.name,
                 "method": config.method,
+                "inference_mode": inference_mode,
+                "continuous_page_queue": config.continuous_page_queue,
                 "model_name": _model_name(config.method),
                 "page_count": len(results),
                 "token_count": token_count,
