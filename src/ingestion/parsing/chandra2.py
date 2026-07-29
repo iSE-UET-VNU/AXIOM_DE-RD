@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import Executor, Future, ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 import hashlib
 import json
@@ -10,6 +11,7 @@ import math
 import os
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -27,6 +29,7 @@ Return only one complete <table>...</table>; no prose, Markdown, JSON, or outer 
 Reconstruct the complete logical row and column grid from the visible borders.
 A missing internal horizontal border means a cell spans rows: use rowspan.
 A missing internal vertical border means a cell spans columns: use colspan.
+Do not create a new column unless a visible boundary or clear subheader supports it.
 Place each merged cell at its upper-left grid position and emit its content once.
 Do not emit td/th cells for positions covered by an earlier rowspan or colspan.
 Preserve visible text and genuinely empty cells.
@@ -43,13 +46,14 @@ class Chandra2Config:
     batch_size: int = 28
     max_workers: int = 4
     max_output_tokens: int = 12384
-    max_retries: int = 6
+    max_retries: int = 2
     include_images: bool = True
     include_headers_footers: bool = False
     save_raw_outputs: bool = True
     refine_tables: bool = False
     table_prompt: str = TABLE_OCR_PROMPT
-    table_max_output_tokens: int = 4096
+    table_max_workers: int = 4
+    table_max_output_tokens: int = 8192
     table_crop_margin_ratio: float = 0.02
     table_crop_min_short_side: int = 1536
     table_crop_max_long_side: int = 3072
@@ -76,7 +80,7 @@ class Chandra2Config:
             ),
             max_workers=_positive_int(config, "max_workers", 4),
             max_output_tokens=_positive_int(config, "max_output_tokens", 12384),
-            max_retries=_non_negative_int(config, "max_retries", 6),
+            max_retries=_non_negative_int(config, "max_retries", 2),
             include_images=bool(config.get("include_images", True)),
             include_headers_footers=bool(
                 config.get("include_headers_footers", False)
@@ -87,8 +91,13 @@ class Chandra2Config:
                 config.get("table_prompt", TABLE_OCR_PROMPT),
                 "table_prompt",
             ),
+            table_max_workers=_positive_int(
+                config,
+                "table_max_workers",
+                _positive_int(config, "max_workers", 4),
+            ),
             table_max_output_tokens=_positive_int(
-                config, "table_max_output_tokens", 4096
+                config, "table_max_output_tokens", 8192
             ),
             table_crop_margin_ratio=_non_negative_float(
                 config, "table_crop_margin_ratio", 0.02
@@ -128,6 +137,16 @@ class _PageJob:
     document_index: int
     page_index: int
     input_item: Any
+
+
+@dataclass
+class _TableRefinementJob:
+    page_index: int
+    table_index: int
+    block: dict[str, Any]
+    model_crop: Any
+    prefix: str
+    record: dict[str, Any]
 
 
 class Chandra2Provider:
@@ -223,40 +242,94 @@ class Chandra2Provider:
                 for page_index, image in enumerate(pages)
             )
 
-        generated = self._generate_batch([job.input_item for job in jobs])
-        for job, result in zip(jobs, generated):
-            document = prepared[job.document_index]
-            if document.data_object.object_id != job.document_id:
-                raise RuntimeError("Chandra2 page job document metadata is inconsistent.")
-            document.results[job.page_index] = result
-
+        # InferenceManager.generate() waits for every item in its input batch.
+        # Submit one page per future instead so completed documents can be
+        # finalized and persisted while slow pages are still retrying.
+        self._get_manager()
+        completed_page_counts = [0] * len(prepared)
+        parsed_documents: list[ParsedData | None] = [None] * len(prepared)
         failures: list[str] = []
-        for document in prepared:
-            failed_pages = [
-                index + 1
-                for index, result in enumerate(document.results)
-                if result is None or bool(getattr(result, "error", False))
-            ]
-            if failed_pages:
-                pages_text = ", ".join(str(page) for page in failed_pages)
-                failures.append(f"{document.file_path.name}: {pages_text}")
+        worker_count = min(self.config.max_workers, len(jobs))
+        finalize_worker_count = min(
+            self.config.table_max_workers,
+            len(prepared),
+        )
+        refinement_worker_count = self.config.table_max_workers
+        with (
+            ThreadPoolExecutor(max_workers=worker_count) as page_executor,
+            ThreadPoolExecutor(max_workers=finalize_worker_count) as finalize_executor,
+            ThreadPoolExecutor(
+                max_workers=refinement_worker_count
+            ) as refinement_executor,
+        ):
+            future_to_job = {
+                page_executor.submit(
+                    self._generate_batch,
+                    [job.input_item],
+                    max_workers=1,
+                ): job
+                for job in jobs
+            }
+            future_to_document: dict[Future[ParsedData], int] = {}
+            for future in as_completed(future_to_job):
+                job = future_to_job[future]
+                document = prepared[job.document_index]
+                if document.data_object.object_id != job.document_id:
+                    raise RuntimeError(
+                        "Chandra2 page job document metadata is inconsistent."
+                    )
+                try:
+                    document.results[job.page_index] = future.result()[0]
+                except Exception:
+                    # Preserve completion of other documents. The missing page
+                    # is reported with the rest of the page-level failures.
+                    document.results[job.page_index] = None
+                completed_page_counts[job.document_index] += 1
+                if completed_page_counts[job.document_index] != len(document.pages):
+                    continue
+
+                failed_pages = [
+                    index + 1
+                    for index, result in enumerate(document.results)
+                    if result is None or bool(getattr(result, "error", False))
+                ]
+                if failed_pages:
+                    pages_text = ", ".join(str(page) for page in failed_pages)
+                    failures.append(f"{document.file_path.name}: {pages_text}")
+                    continue
+
+                finalize_future = finalize_executor.submit(
+                    self._finalize_document,
+                    runtime,
+                    document.file_path,
+                    document.data_object,
+                    document.pages,
+                    list(document.results),
+                    started=started,
+                    inference_mode="continuous_vllm",
+                    refinement_executor=refinement_executor,
+                )
+                future_to_document[finalize_future] = job.document_index
+
+            for future in as_completed(future_to_document):
+                document_index = future_to_document[future]
+                document = prepared[document_index]
+                try:
+                    parsed_documents[document_index] = future.result()
+                except Exception as exc:
+                    failures.append(
+                        f"{document.file_path.name}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+
         if failures:
             raise RuntimeError(
                 "Chandra2 failed to parse page(s): " + "; ".join(failures)
             )
 
-        return [
-            self._finalize_document(
-                runtime,
-                document.file_path,
-                document.data_object,
-                document.pages,
-                list(document.results),
-                started=started,
-                inference_mode="continuous_vllm",
-            )
-            for document in prepared
-        ]
+        if any(document is None for document in parsed_documents):
+            raise RuntimeError("Chandra2 did not finalize every completed document.")
+        return [document for document in parsed_documents if document is not None]
 
     def _load_document(
         self,
@@ -287,7 +360,12 @@ class Chandra2Provider:
             ]
         )
 
-    def _generate_batch(self, batch: list[Any]) -> list[Any]:
+    def _generate_batch(
+        self,
+        batch: list[Any],
+        *,
+        max_workers: int | None = None,
+    ) -> list[Any]:
         generate_options: dict[str, Any] = {
             "include_images": self.config.include_images,
             "include_headers_footers": self.config.include_headers_footers,
@@ -295,7 +373,11 @@ class Chandra2Provider:
         }
         if self.config.method == "vllm":
             generate_options.update(
-                max_workers=self.config.max_workers,
+                max_workers=(
+                    self.config.max_workers
+                    if max_workers is None
+                    else max_workers
+                ),
                 max_retries=self.config.max_retries,
             )
         generated = list(self._get_manager().generate(batch, **generate_options))
@@ -315,6 +397,7 @@ class Chandra2Provider:
         *,
         started: float,
         inference_mode: str,
+        refinement_executor: Executor | None = None,
     ) -> ParsedData:
         page_payloads, raw_block_count = _page_payloads(results)
         page_markdown = [
@@ -338,6 +421,7 @@ class Chandra2Provider:
             page_markdown,
             page_clean_html,
             bundle_dir,
+            executor=refinement_executor,
         )
         markdown = "\n\n".join(page_markdown)
         latency_seconds = round(time.monotonic() - started, 3)
@@ -483,16 +567,20 @@ def _refine_table_blocks(
     page_markdown: list[str],
     page_clean_html: list[str],
     bundle_dir: Path | None,
+    *,
+    executor: Executor | None = None,
 ) -> dict[str, Any]:
     """Run a focused OCR pass for each layout block labelled as a table."""
 
     summary: dict[str, Any] = {
         "enabled": config.refine_tables,
+        "max_workers": config.table_max_workers,
         "prompt_sha256": hashlib.sha256(
             config.table_prompt.encode("utf-8")
         ).hexdigest(),
         "attempted": 0,
         "succeeded": 0,
+        "rejected": 0,
         "failed": 0,
         "token_count": 0,
         "records": [],
@@ -508,10 +596,10 @@ def _refine_table_blocks(
     if artifact_dir is not None:
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    jobs: list[_TableRefinementJob] = []
     for page_index, (page_image, page_payload) in enumerate(
         zip(page_images, page_payloads)
     ):
-        replacements: list[tuple[int, str]] = []
         page_box = _numeric_box(page_payload.get("page_box"))
         blocks = page_payload.get("blocks")
         if not isinstance(blocks, list):
@@ -533,6 +621,7 @@ def _refine_table_blocks(
                 "bbox": bbox,
                 "status": "failed",
             }
+            summary["records"].append(record)
             try:
                 if not bbox or not page_box:
                     raise ValueError("table bbox or page_box is unavailable")
@@ -555,72 +644,86 @@ def _refine_table_blocks(
                         crop_path, config.project_root
                     )
 
-                batch = [
-                    runtime.batch_input_item(
-                        image=model_crop,
-                        prompt=config.table_prompt,
+                jobs.append(
+                    _TableRefinementJob(
+                        page_index=page_index,
+                        table_index=table_number - 1,
+                        block=block,
+                        model_crop=model_crop,
+                        prefix=prefix,
+                        record=record,
                     )
-                ]
-                options: dict[str, Any] = {
-                    "include_images": False,
-                    "include_headers_footers": False,
-                    "max_output_tokens": config.table_max_output_tokens,
-                }
-                if config.method == "vllm":
-                    options.update(
-                        max_workers=config.max_workers,
-                        max_retries=config.max_retries,
-                    )
-                generated = list(manager.generate(batch, **options))
-                if len(generated) != 1:
-                    raise RuntimeError("table OCR returned no single result")
-                result = generated[0]
-                if bool(getattr(result, "error", False)):
-                    raise RuntimeError("table OCR result is marked as failed")
-
-                raw_response = str(getattr(result, "raw", "") or "")
-                response = (
-                    raw_response
-                    or str(getattr(result, "html", "") or "")
-                    or str(getattr(result, "markdown", "") or "")
                 )
-                refined_table = _extract_first_table(response)
-                if not refined_table:
-                    raise ValueError("table OCR did not return a complete HTML table")
-
-                block["content"] = refined_table
-                replacements.append((table_number - 1, refined_table))
-                result_tokens = int(getattr(result, "token_count", 0) or 0)
-                summary["token_count"] += result_tokens
-                summary["succeeded"] += 1
-                record.update(
-                    status="succeeded",
-                    token_count=result_tokens,
-                    rowspan_count=_span_count(refined_table, "rowspan"),
-                    colspan_count=_span_count(refined_table, "colspan"),
-                )
-                if artifact_dir is not None:
-                    raw_path = artifact_dir / f"{prefix}.raw.html"
-                    table_path = artifact_dir / f"{prefix}.table.html"
-                    raw_path.write_text(response, encoding="utf-8")
-                    table_path.write_text(refined_table, encoding="utf-8")
-                    record["raw_path"] = portable_path(
-                        raw_path, config.project_root
-                    )
-                    record["table_path"] = portable_path(
-                        table_path, config.project_root
-                    )
             except Exception as exc:
                 summary["failed"] += 1
                 record["error"] = f"{type(exc).__name__}: {exc}"
-            summary["records"].append(record)
 
+    replacements_by_page: dict[int, list[tuple[int, str]]] = {}
+
+    def consume(job: _TableRefinementJob, result: Any) -> None:
+        try:
+            _apply_table_refinement_result(
+                config,
+                job,
+                result,
+                artifact_dir,
+                summary,
+                replacements_by_page,
+            )
+        except Exception as exc:
+            summary["failed"] += 1
+            job.record["error"] = f"{type(exc).__name__}: {exc}"
+
+    if jobs and config.method == "vllm":
+        owned_executor: ThreadPoolExecutor | None = None
+        active_executor = executor
+        if active_executor is None:
+            owned_executor = ThreadPoolExecutor(
+                max_workers=min(config.table_max_workers, len(jobs))
+            )
+            active_executor = owned_executor
+        try:
+            future_to_job = {
+                active_executor.submit(
+                    _generate_table_refinement,
+                    config,
+                    runtime,
+                    manager,
+                    job.model_crop,
+                ): job
+                for job in jobs
+            }
+            for future in as_completed(future_to_job):
+                job = future_to_job[future]
+                try:
+                    consume(job, future.result())
+                except Exception as exc:
+                    summary["failed"] += 1
+                    job.record["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            if owned_executor is not None:
+                owned_executor.shutdown(wait=True)
+    else:
+        for job in jobs:
+            try:
+                result = _generate_table_refinement(
+                    config,
+                    runtime,
+                    manager,
+                    job.model_crop,
+                )
+                consume(job, result)
+            except Exception as exc:
+                summary["failed"] += 1
+                job.record["error"] = f"{type(exc).__name__}: {exc}"
+
+    for page_index, replacements in replacements_by_page.items():
         if replacements:
             page_markdown[page_index] = _replace_tables(
-                page_markdown[page_index], replacements
+                page_markdown[page_index], sorted(replacements)
             )
             page_clean_html[page_index] = _replace_tables(
-                page_clean_html[page_index], replacements
+                page_clean_html[page_index], sorted(replacements)
             )
 
     summary["complete"] = summary["failed"] == 0
@@ -629,6 +732,89 @@ def _refine_table_blocks(
             artifact_dir, config.project_root
         )
     return summary
+
+
+def _generate_table_refinement(
+    config: Chandra2Config,
+    runtime: _ChandraRuntime,
+    manager: Any,
+    model_crop: Any,
+) -> Any:
+    batch = [
+        runtime.batch_input_item(
+            image=model_crop,
+            prompt=config.table_prompt,
+        )
+    ]
+    options: dict[str, Any] = {
+        "include_images": False,
+        "include_headers_footers": False,
+        "max_output_tokens": config.table_max_output_tokens,
+    }
+    if config.method == "vllm":
+        options.update(
+            max_workers=1,
+            max_retries=config.max_retries,
+        )
+    generated = list(manager.generate(batch, **options))
+    if len(generated) != 1:
+        raise RuntimeError("table OCR returned no single result")
+    result = generated[0]
+    if bool(getattr(result, "error", False)):
+        raise RuntimeError("table OCR result is marked as failed")
+    return result
+
+
+def _apply_table_refinement_result(
+    config: Chandra2Config,
+    job: _TableRefinementJob,
+    result: Any,
+    artifact_dir: Path | None,
+    summary: dict[str, Any],
+    replacements_by_page: dict[int, list[tuple[int, str]]],
+) -> None:
+    raw_response = str(getattr(result, "raw", "") or "")
+    response = (
+        raw_response
+        or str(getattr(result, "html", "") or "")
+        or str(getattr(result, "markdown", "") or "")
+    )
+    refined_table = _extract_first_table(response)
+    if not refined_table:
+        raise ValueError("table OCR did not return a complete HTML table")
+
+    primary_table = _extract_first_table(str(job.block.get("content") or ""))
+    accepted, guard = _minimal_table_refinement_guard(
+        primary_table or "",
+        refined_table,
+    )
+    result_tokens = int(getattr(result, "token_count", 0) or 0)
+    summary["token_count"] += result_tokens
+    job.record.update(
+        token_count=result_tokens,
+        rowspan_count=_span_count(refined_table, "rowspan"),
+        colspan_count=_span_count(refined_table, "colspan"),
+        guard=guard,
+    )
+    if artifact_dir is not None:
+        raw_path = artifact_dir / f"{job.prefix}.raw.html"
+        table_path = artifact_dir / f"{job.prefix}.table.html"
+        raw_path.write_text(response, encoding="utf-8")
+        table_path.write_text(refined_table, encoding="utf-8")
+        job.record["raw_path"] = portable_path(raw_path, config.project_root)
+        job.record["table_path"] = portable_path(table_path, config.project_root)
+
+    if not accepted:
+        summary["rejected"] += 1
+        job.record["status"] = "rejected"
+        return
+
+    job.block["content"] = refined_table
+    replacements_by_page.setdefault(job.page_index, []).append(
+        (job.table_index, refined_table)
+    )
+    summary["succeeded"] += 1
+    job.record["status"] = "succeeded"
 
 
 def _crop_box_from_bbox(
@@ -711,6 +897,94 @@ def _replace_tables(value: str, replacements: list[tuple[int, str]]) -> str:
 
 def _span_count(value: str, attribute: str) -> int:
     return len(re.findall(rf"\b{re.escape(attribute)}\s*=", value, re.I))
+
+
+def _minimal_table_refinement_guard(
+    primary: str,
+    candidate: str,
+) -> tuple[bool, dict[str, Any]]:
+    """Accept structural repairs without allowing schema or content drift."""
+
+    primary_shape = _table_shape(primary)
+    candidate_shape = _table_shape(candidate)
+    detail: dict[str, Any] = {
+        "profile": "minimal",
+        "primary_shape": primary_shape,
+        "candidate_shape": candidate_shape,
+    }
+    if primary_shape is None or candidate_shape is None:
+        detail["reason"] = "unparseable"
+        return False, detail
+
+    primary_rows, primary_columns = primary_shape
+    candidate_rows, candidate_columns = candidate_shape
+    primary_tokens = _table_tokens(primary)
+    candidate_tokens = _table_tokens(candidate)
+    overlap = sum((primary_tokens & candidate_tokens).values())
+    precision = overlap / max(1, sum(candidate_tokens.values()))
+    recall = overlap / max(1, sum(primary_tokens.values()))
+    detail.update(
+        token_precision=precision,
+        token_recall=recall,
+    )
+
+    if candidate_columns > primary_columns:
+        detail["reason"] = "added_columns"
+        return False, detail
+
+    contracting_grid = (
+        candidate_rows < primary_rows
+        and candidate_columns < primary_columns
+        and precision >= 0.99
+    )
+    if (precision < 0.99 or recall < 0.99) and not contracting_grid:
+        detail["reason"] = "text_not_preserved"
+        return False, detail
+
+    detail["reason"] = "accepted"
+    return True, detail
+
+
+def _table_tokens(value: str) -> Counter[str]:
+    inspected = _inspect_html(value)
+    text = unicodedata.normalize(
+        "NFKC",
+        " ".join(inspected.parts),
+    ).casefold()
+    return Counter(re.findall(r"\w+|[^\w\s]", text, re.UNICODE))
+
+
+def _table_shape(value: str) -> tuple[int, int] | None:
+    parser = _TableShapeParser()
+    try:
+        parser.feed(value)
+        parser.close()
+    except (ValueError, TypeError):
+        return None
+    if not parser.rows or not any(parser.rows):
+        return None
+
+    occupied: set[tuple[int, int]] = set()
+    max_columns = 0
+    for row_index, cells in enumerate(parser.rows):
+        column_index = 0
+        for rowspan, colspan in cells:
+            while (row_index, column_index) in occupied:
+                column_index += 1
+            for spanned_row in range(row_index, row_index + rowspan):
+                for spanned_column in range(
+                    column_index,
+                    column_index + colspan,
+                ):
+                    occupied.add((spanned_row, spanned_column))
+            column_index += colspan
+        row_columns = [
+            column + 1
+            for row, column in occupied
+            if row == row_index
+        ]
+        max_columns = max(max_columns, max(row_columns, default=0))
+    return len(parser.rows), max_columns
 
 
 def _write_raw_outputs(
@@ -827,6 +1101,58 @@ def _write_raw_outputs(
         config.project_root,
     )
     return paths
+
+
+class _TableShapeParser(HTMLParser):
+    """Read the logical dimensions of the first HTML table."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[tuple[int, int]]] = []
+        self._table_depth = 0
+        self._current_row: list[tuple[int, int]] | None = None
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        tag = tag.casefold()
+        if tag == "table":
+            self._table_depth += 1
+            return
+        if self._table_depth != 1:
+            return
+        if tag == "tr":
+            self._current_row = []
+            self.rows.append(self._current_row)
+            return
+        if tag not in {"td", "th"} or self._current_row is None:
+            return
+        attributes = {
+            key.casefold(): str(value or "")
+            for key, value in attrs
+        }
+        self._current_row.append(
+            (
+                _positive_span(attributes.get("rowspan")),
+                _positive_span(attributes.get("colspan")),
+            )
+        )
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if tag == "tr" and self._table_depth == 1:
+            self._current_row = None
+        elif tag == "table" and self._table_depth:
+            self._table_depth -= 1
+
+
+def _positive_span(value: str | None) -> int:
+    try:
+        return max(1, int(value or 1))
+    except (TypeError, ValueError):
+        return 1
 
 
 class _HTMLInspector(HTMLParser):

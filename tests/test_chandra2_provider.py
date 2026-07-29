@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,11 +15,20 @@ from src.ingestion.parsing import (
     Chandra2Provider,
 )
 from src.ingestion.parsing.backends import DocumentParser
-from src.ingestion.parsing.chandra2 import _ChandraRuntime, _replace_tables
+from src.ingestion.parsing.chandra2 import (
+    _ChandraRuntime,
+    _minimal_table_refinement_guard,
+    _replace_tables,
+)
 from src.ingestion.parsing.service import ParsingService
-from src.ingestion.runner import run as run_ingestion
+from src.ingestion.runner import (
+    IngestionInput,
+    run as run_ingestion,
+    run_many as run_ingestion_many,
+)
 from src.ingestion.schema_inference import build_initial_schema
 from src.models import DataObject, ParseStatus
+from src.pipeline import run_pipeline
 from src.reading_order import reading_order_from_rows
 from src.utils.config import resolve_parser_config
 
@@ -64,6 +74,37 @@ class _FakeManager:
             else:
                 generated.append(self.results["__page_result__"])
         return generated
+
+
+class _ConcurrentRefinementManager(_FakeManager):
+    def __init__(self, results: dict[object, object], parties: int) -> None:
+        super().__init__(results)
+        self._barrier = threading.Barrier(parties, timeout=2)
+        self._lock = threading.Lock()
+        self.active_refinements = 0
+        self.max_active_refinements = 0
+
+    def generate(
+        self,
+        batch: list[_FakeBatchInput],
+        **kwargs: object,
+    ) -> list[object]:
+        if len(batch) != 1 or batch[0].prompt is None:
+            return super().generate(batch, **kwargs)
+
+        self.calls.append((batch, kwargs))
+        with self._lock:
+            self.active_refinements += 1
+            self.max_active_refinements = max(
+                self.max_active_refinements,
+                self.active_refinements,
+            )
+        try:
+            self._barrier.wait()
+            return [self.results["__table_result__"]]
+        finally:
+            with self._lock:
+                self.active_refinements -= 1
 
 
 class _FakeImage:
@@ -164,6 +205,45 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertEqual(backend.provider.config.batch_size, 7)
         self.assertTrue(backend.fallback_to_deferred)
 
+    def test_service_parse_many_preserves_mixed_input_order(self) -> None:
+        manager = _FakeManager({"page-1": _result("Scanned", 2)})
+        runtime = _runtime(["page-1"], manager)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            note = root / "note.txt"
+            scan = root / "scan.pdf"
+            note.write_text("Plain text", encoding="utf-8")
+            scan.write_bytes(b"%PDF-1.4\n")
+            with patch(
+                "src.ingestion.parsing.chandra2._load_runtime",
+                return_value=runtime,
+            ):
+                service = ParsingService.from_config(
+                    {
+                        "provider": "chandra2",
+                        "chandra2": {
+                            "continuous_page_queue": True,
+                            "save_raw_outputs": False,
+                            "include_images": False,
+                        },
+                    }
+                )
+                results = service.parse_many(
+                    [
+                        (note, _data_object(note, "text-document")),
+                        (scan, _data_object(scan, "scan-document")),
+                    ]
+                )
+
+        self.assertEqual(
+            [result.source_object_id for result in results],
+            ["text-document", "scan-document"],
+        )
+        self.assertEqual([result.status for result in results], [ParseStatus.SUCCESS] * 2)
+        self.assertEqual(results[0].parsed_data.text, "Plain text")
+        self.assertEqual(results[1].parsed_data.text, "Scanned")
+        self.assertEqual([len(batch) for batch, _ in manager.calls], [1])
+
     def test_local_alias_builds_hf_provider_with_safe_batch_default(self) -> None:
         service = ParsingService.from_config(
             {
@@ -249,14 +329,200 @@ class Chandra2ProviderTests(unittest.TestCase):
                 "include_headers_footers": False,
                 "max_output_tokens": 12384,
                 "max_workers": 4,
-                "max_retries": 6,
+                "max_retries": 2,
             },
         )
         self.assertEqual(metadata["page_count"], 3)
         self.assertEqual(metadata["token_count"], 12)
         self.assertEqual(metadata["method"], "vllm")
+        self.assertEqual(metadata["inference_mode"], "batched_vllm")
+        self.assertFalse(metadata["continuous_page_queue"])
         self.assertEqual(metadata["model_name"], "chandra-test")
         self.assertFalse(parsed.metadata["reading_order_complete"])
+
+    def test_continuous_queue_submits_pages_as_completion_aware_requests(self) -> None:
+        pages = ["page-1", "page-2", "page-3"]
+        manager = _FakeManager(
+            {
+                "page-1": _result("First", 3),
+                "page-2": _result("Second", 4),
+                "page-3": _result("Third", 5),
+            }
+        )
+        provider = Chandra2Provider(
+            Chandra2Config.from_mapping(
+                {
+                    "method": "vllm",
+                    "continuous_page_queue": True,
+                    "batch_size": 2,
+                    "save_raw_outputs": False,
+                    "include_images": False,
+                }
+            ),
+            _runtime_loader=lambda: _runtime(pages, manager),
+        )
+
+        parsed = provider.parse_file(Path("scan.pdf"), _data_object(Path("scan.pdf")))
+
+        self.assertEqual(parsed.text, "First\n\nSecond\n\nThird")
+        self.assertEqual([len(batch) for batch, _ in manager.calls], [1, 1, 1])
+        self.assertEqual(
+            Counter(item.image for batch, _ in manager.calls for item in batch),
+            Counter(pages),
+        )
+        self.assertTrue(
+            all(options["max_workers"] == 1 for _, options in manager.calls)
+        )
+        self.assertEqual(parsed.metadata["inference_mode"], "continuous_vllm")
+        self.assertTrue(parsed.metadata["continuous_page_queue"])
+
+    def test_continuous_queue_flattens_documents_and_regroups_outputs(self) -> None:
+        manager = _FakeManager(
+            {
+                "a-1": _result("A1", 1),
+                "a-2": _result("A2", 2),
+                "b-1": _result("B1", 3),
+            }
+        )
+        pages_by_name = {
+            "a.pdf": ["a-1", "a-2"],
+            "b.pdf": ["b-1"],
+        }
+        runtime = _ChandraRuntime(
+            load_file=lambda path, config: pages_by_name[Path(path).name],
+            inference_manager=lambda **kwargs: manager,
+            batch_input_item=_FakeBatchInput,
+        )
+        provider = Chandra2Provider(
+            Chandra2Config.from_mapping(
+                {
+                    "method": "vllm",
+                    "continuous_page_queue": True,
+                    "save_raw_outputs": False,
+                    "include_images": False,
+                }
+            ),
+            _runtime_loader=lambda: runtime,
+        )
+
+        parsed = provider.parse_files(
+            [
+                (Path("a.pdf"), _data_object(Path("a.pdf"), "document-a")),
+                (Path("b.pdf"), _data_object(Path("b.pdf"), "document-b")),
+            ]
+        )
+
+        self.assertEqual([item.text for item in parsed], ["A1\n\nA2", "B1"])
+        self.assertEqual([item.object_id for item in parsed], ["document-a", "document-b"])
+        self.assertEqual([len(batch) for batch, _ in manager.calls], [1, 1, 1])
+        self.assertEqual(
+            Counter(item.image for batch, _ in manager.calls for item in batch),
+            Counter(["a-1", "a-2", "b-1"]),
+        )
+
+    def test_continuous_queue_persists_completed_documents_before_batch_failure(
+        self,
+    ) -> None:
+        manager = _FakeManager(
+            {
+                "a-1": _result("A1", 1),
+                "b-1": _result("", 0, error=True),
+            }
+        )
+        pages_by_name = {"a.pdf": ["a-1"], "b.pdf": ["b-1"]}
+        runtime = _ChandraRuntime(
+            load_file=lambda path, config: pages_by_name[Path(path).name],
+            inference_manager=lambda **kwargs: manager,
+            batch_input_item=_FakeBatchInput,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "outputs"
+            provider = Chandra2Provider(
+                Chandra2Config.from_mapping(
+                    {
+                        "method": "vllm",
+                        "continuous_page_queue": True,
+                        "output_dir": str(output_dir),
+                    }
+                ),
+                _runtime_loader=lambda: runtime,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, r"b\.pdf: 1"):
+                provider.parse_files(
+                    [
+                        (Path("a.pdf"), _data_object(Path("a.pdf"), "document-a")),
+                        (Path("b.pdf"), _data_object(Path("b.pdf"), "document-b")),
+                    ]
+                )
+
+            self.assertTrue(
+                (output_dir / "a--document-a" / "metadata.json").is_file()
+            )
+            self.assertFalse((output_dir / "b--document-b").exists())
+
+    def test_continuous_queue_refines_tables_concurrently(self) -> None:
+        original = (
+            "<table><tr><td>A</td><td>1</td></tr>"
+            "<tr><td></td><td>2</td></tr></table>"
+        )
+        refined = (
+            '<table><tr><td rowspan="2">A</td><td>1</td></tr>'
+            "<tr><td>2</td></tr></table>"
+        )
+        page_result = _result(
+            original,
+            3,
+            html=original,
+            chunks=[
+                {
+                    "bbox": [100, 100, 900, 500],
+                    "label": "Table",
+                    "content": original,
+                }
+            ],
+            page_box=[0, 0, 1000, 1400],
+        )
+        manager = _ConcurrentRefinementManager(
+            {
+                "__page_result__": page_result,
+                "__table_result__": _result(refined, 4, raw=refined),
+            },
+            parties=2,
+        )
+        provider = Chandra2Provider(
+            Chandra2Config.from_mapping(
+                {
+                    "method": "vllm",
+                    "continuous_page_queue": True,
+                    "max_workers": 4,
+                    "table_max_workers": 2,
+                    "refine_tables": True,
+                    "save_raw_outputs": False,
+                    "include_images": False,
+                }
+            ),
+            _runtime_loader=lambda: _runtime([_FakePageImage()], manager),
+        )
+
+        parsed = provider.parse_files(
+            [
+                (Path("a.pdf"), _data_object(Path("a.pdf"), "document-a")),
+                (Path("b.pdf"), _data_object(Path("b.pdf"), "document-b")),
+            ]
+        )
+
+        refinement_calls = [
+            (batch, options)
+            for batch, options in manager.calls
+            if batch[0].prompt is not None
+        ]
+        self.assertEqual(manager.max_active_refinements, 2)
+        self.assertEqual(len(refinement_calls), 2)
+        self.assertTrue(
+            all(options["max_workers"] == 1 for _, options in refinement_calls)
+        )
+        self.assertTrue(all('rowspan="2"' in item.text for item in parsed))
 
     def test_adapts_layout_blocks_components_and_images_to_ingestion_contract(
         self,
@@ -485,7 +751,10 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertNotIn("max_retries", manager.calls[0][1])
 
     def test_refines_detected_table_crop_and_preserves_merged_cells(self) -> None:
-        original = "<table><tr><td>A</td><td></td></tr></table>"
+        original = (
+            "<table><tr><td>A</td><td>1</td></tr>"
+            "<tr><td></td><td>2</td></tr></table>"
+        )
         refined = (
             '<table><tr><td rowspan="2">A</td><td>1</td></tr>'
             '<tr><td colspan="1">2</td></tr></table>'
@@ -546,7 +815,7 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertEqual(len(manager.calls), 2)
         self.assertIsNone(manager.calls[0][0][0].prompt)
         self.assertIsNotNone(manager.calls[1][0][0].prompt)
-        self.assertEqual(manager.calls[1][1]["max_output_tokens"], 4096)
+        self.assertEqual(manager.calls[1][1]["max_output_tokens"], 8192)
         self.assertFalse(manager.calls[1][1]["include_images"])
         self.assertNotIn("max_workers", manager.calls[1][1])
         self.assertIn('rowspan="2"', parsed.text)
@@ -563,7 +832,9 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertEqual(parsed.metadata["token_count"], 17)
         self.assertEqual(refinement["attempted"], 1)
         self.assertEqual(refinement["succeeded"], 1)
+        self.assertEqual(refinement["rejected"], 0)
         self.assertEqual(refinement["failed"], 0)
+        self.assertEqual(refinement["records"][0]["guard"]["reason"], "accepted")
         self.assertEqual(refinement["records"][0]["rowspan_count"], 1)
         self.assertTrue(
             {
@@ -572,6 +843,40 @@ class Chandra2ProviderTests(unittest.TestCase):
                 "table_refinement/page_0001_table_0001.table.html",
             }.issubset(artifact_names)
         )
+
+    def test_table_refinement_guard_rejects_schema_drift(self) -> None:
+        original = "<table><tr><td>A</td><td>B</td></tr></table>"
+        wider = "<table><tr><td>A</td><td>B</td><td></td></tr></table>"
+
+        accepted, detail = _minimal_table_refinement_guard(original, wider)
+
+        self.assertFalse(accepted)
+        self.assertEqual(detail["reason"], "added_columns")
+        self.assertEqual(detail["primary_shape"], (1, 2))
+        self.assertEqual(detail["candidate_shape"], (1, 3))
+
+    def test_table_refinement_guard_rejects_text_drift(self) -> None:
+        original = "<table><tr><td>Alpha</td><td>Beta</td></tr></table>"
+        changed = "<table><tr><td>Alpha</td><td>Gamma</td></tr></table>"
+
+        accepted, detail = _minimal_table_refinement_guard(original, changed)
+
+        self.assertFalse(accepted)
+        self.assertEqual(detail["reason"], "text_not_preserved")
+
+    def test_table_refinement_guard_allows_clean_grid_contraction(self) -> None:
+        original = (
+            "<table><tr><td>Title</td><td>Title</td></tr>"
+            "<tr><td>Value</td><td>Value</td></tr></table>"
+        )
+        contracted = "<table><tr><td>Value</td></tr></table>"
+
+        accepted, detail = _minimal_table_refinement_guard(original, contracted)
+
+        self.assertTrue(accepted)
+        self.assertEqual(detail["reason"], "accepted")
+        self.assertEqual(detail["token_precision"], 1.0)
+        self.assertLess(detail["token_recall"], 0.99)
 
     def test_failed_table_refinement_falls_back_to_first_pass_table(self) -> None:
         original = "<table><tr><td>Keep me</td></tr></table>"
@@ -660,6 +965,16 @@ class Chandra2ProviderTests(unittest.TestCase):
             Chandra2Config.from_mapping({"max_retries": -1})
         with self.assertRaisesRegex(ValueError, "method"):
             Chandra2Config.from_mapping({"method": "unknown"})
+        with self.assertRaisesRegex(ValueError, "continuous_page_queue"):
+            Chandra2Config.from_mapping(
+                {"method": "hf", "continuous_page_queue": True}
+            )
+        with self.assertRaisesRegex(ValueError, "table_max_workers"):
+            Chandra2Config.from_mapping({"table_max_workers": 0})
+        self.assertEqual(
+            Chandra2Config.from_mapping({"max_workers": 7}).table_max_workers,
+            7,
+        )
         self.assertFalse(
             Chandra2Config.from_mapping({"include_images": False}).include_images
         )
@@ -682,6 +997,125 @@ class Chandra2ProviderTests(unittest.TestCase):
 
 
 class Chandra2EndToEndTests(unittest.TestCase):
+    def test_local_pipeline_uses_one_continuous_queue_for_multiple_pdfs(self) -> None:
+        manager = _FakeManager(
+            {
+                "a-1": _result("A1", 1),
+                "a-2": _result("A2", 2),
+                "b-1": _result("B1", 3),
+            }
+        )
+        pages_by_name = {
+            "a.pdf": ["a-1", "a-2"],
+            "b.pdf": ["b-1"],
+        }
+        runtime = _ChandraRuntime(
+            load_file=lambda path, config: pages_by_name[Path(path).name],
+            inference_manager=lambda **kwargs: manager,
+            batch_input_item=_FakeBatchInput,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            raw = root / "raw"
+            raw.mkdir()
+            (raw / "a.pdf").write_bytes(b"%PDF-1.4\n")
+            (raw / "b.pdf").write_bytes(b"%PDF-1.4\n")
+            config_path = root / "pipeline.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "input": {"mode": "local_raw"},
+                        "local_input": {
+                            "path": str(raw),
+                            "recursive": False,
+                            "include_extensions": [".pdf"],
+                        },
+                        "ingested_dir": str(root / "ingested"),
+                        "cleaned_dir": str(root / "cleaned"),
+                        "enriched_dir": str(root / "enriched"),
+                        "embedded_dir": str(root / "embedded"),
+                        "output_dir": str(root / "output"),
+                        "enabled_modules": ["ingestion", "artifacts"],
+                        "parsing": {
+                            "provider": "router",
+                            "document": {"provider": "chandra2"},
+                            "chandra2": {
+                                "method": "vllm",
+                                "continuous_page_queue": True,
+                                "max_workers": 4,
+                                "save_raw_outputs": False,
+                                "include_images": False,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "src.ingestion.parsing.chandra2._load_runtime",
+                return_value=runtime,
+            ):
+                state = run_pipeline(config_path)
+
+        self.assertEqual([len(batch) for batch, _ in manager.calls], [1, 1, 1])
+        self.assertEqual(
+            [parsed.text for parsed in state.parsed_data],
+            ["A1\n\nA2", "B1"],
+        )
+        self.assertEqual(len(state.data_objects), 2)
+        self.assertEqual(state.quarantined_documents, [])
+
+    def test_run_many_validates_each_continuous_document_independently(self) -> None:
+        manager = _FakeManager(
+            {
+                "good-page": _result("Useful content", 3),
+                "empty-page": _result("", 1),
+            }
+        )
+        pages_by_name = {
+            "good.pdf": ["good-page"],
+            "empty.pdf": ["empty-page"],
+        }
+        runtime = _ChandraRuntime(
+            load_file=lambda path, config: pages_by_name[Path(path).name],
+            inference_manager=lambda **kwargs: manager,
+            batch_input_item=_FakeBatchInput,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            good = root / "good.pdf"
+            empty = root / "empty.pdf"
+            good.write_bytes(b"%PDF-1.4\n")
+            empty.write_bytes(b"%PDF-1.4\n")
+            with patch(
+                "src.ingestion.parsing.chandra2._load_runtime",
+                return_value=runtime,
+            ):
+                output = run_ingestion_many(
+                    [
+                        IngestionInput(good, metadata={"file_name": good.name}),
+                        IngestionInput(empty, metadata={"file_name": empty.name}),
+                    ],
+                    parser_config={
+                        "provider": "chandra2",
+                        "chandra2": {
+                            "continuous_page_queue": True,
+                            "save_raw_outputs": False,
+                            "include_images": False,
+                        },
+                    },
+                    project_root=root,
+                )
+
+        self.assertEqual(len(manager.calls), 2)
+        self.assertEqual([len(batch) for batch, _ in manager.calls], [1, 1])
+        self.assertEqual(len(output.data_objects), 1)
+        self.assertEqual(len(output.quarantined_documents), 1)
+        self.assertEqual(
+            output.quarantined_documents[0].reasons[0]["code"],
+            "empty_parsed_content",
+        )
+
     def test_pdf_reaches_canonical_text_and_index_records(self) -> None:
         manager = _FakeManager(
             {

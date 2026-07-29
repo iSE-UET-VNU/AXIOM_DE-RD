@@ -9,6 +9,10 @@ venv/
 .env
 .streamlit/
 
+# Local benchmark checkouts and generated probe artifacts.
+/ParseBench/
+/tmp/
+
 # Local inputs and presigned-URL inventories can contain sensitive data.
 data/raw/
 data/ingested/*
