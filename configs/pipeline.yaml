@@ -53,7 +53,7 @@
     "artifacts"
   ],
   "parsing": {
-    "provider": "chandra2",
+    "provider": "lift_api",
     "pptx": {
       "extract_images": true
     },
@@ -130,7 +130,6 @@
       "enabled": true,
       "target_index_types": [
         "text_chunk",
-        "table",
         "image"
       ],
       "provider": "openrouter",
