@@ -16,6 +16,9 @@ venv/
 # Local benchmark checkouts and generated probe artifacts.
 /ParseBench/
 /tmp/
+/test/
+/chandra2_technical_summary_for_codex.md
+/debug.log
 
 # Local inputs and presigned-URL inventories can contain sensitive data.
 data/raw/
