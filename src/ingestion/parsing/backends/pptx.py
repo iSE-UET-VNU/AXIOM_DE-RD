@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 from ....models import DataObject, ParsedData, ParsedTable, ParseResult
 from ....utils.paths import portable_path
+from ..contracts import AXIOM_NATIVE_BLOCK_SOURCE
 from ._tabular import normalize_headers
 
 
@@ -456,9 +457,10 @@ def _append_block(
             "block_index": block_index,
             "type": block_type,
             "text": text,
-            "source": "pptx_native",
+            "source": AXIOM_NATIVE_BLOCK_SOURCE,
+            "parser_source": "pptx_native",
             "bbox": _shape_box(shape),
-            "page_box": list(page_box),
+            "page_bbox": list(page_box),
         }
     )
     return component_id

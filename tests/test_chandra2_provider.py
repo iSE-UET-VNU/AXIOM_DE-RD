@@ -662,7 +662,9 @@ class Chandra2ProviderTests(unittest.TestCase):
             first_block["polygon"],
             [[100, 50], [900, 50], [900, 120], [100, 120]],
         )
-        self.assertEqual(first_block["page_box"], [0, 0, 1000, 1400])
+        self.assertEqual(first_block["page_bbox"], [0, 0, 1000, 1400])
+        self.assertEqual(first_block["source"], "parser_json")
+        self.assertEqual(first_block["parser_source"], "chandra2_layout")
         self.assertEqual(
             row["reading_order"][-1],
             "/page/1/EquationBlock/0",
@@ -672,7 +674,7 @@ class Chandra2ProviderTests(unittest.TestCase):
         )
         self.assertEqual(len(final_blocks), 7)
         self.assertEqual(final_order, row["reading_order"])
-        self.assertEqual(final_order_meta["source"], "chandra2_layout")
+        self.assertEqual(final_order_meta["source"], "parser_json")
         self.assertTrue(final_order_meta["complete"])
         self.assertTrue(parsed.metadata["reading_order_complete"])
         self.assertEqual(parsed.metadata["reading_order_source"], "chandra2_layout")

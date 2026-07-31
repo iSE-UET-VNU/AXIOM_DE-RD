@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from ...models import DataObject, ParsedData
 from ...utils.paths import portable_path
+from .contracts import AXIOM_NATIVE_BLOCK_SOURCE
 
 CHANDRA2_EXTENSIONS = frozenset(
     {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".tiff"}
@@ -1252,7 +1253,8 @@ def _source_blocks_from_pages(
                 "type": block_type,
                 "raw_label": raw_label,
                 "text": _normalize_text("".join(inspected.parts)),
-                "source": "chandra2_layout",
+                "source": AXIOM_NATIVE_BLOCK_SOURCE,
+                "parser_source": "chandra2_layout",
                 "html": html,
                 "section_hierarchy": {},
             }
@@ -1261,7 +1263,7 @@ def _source_blocks_from_pages(
                 block["bbox"] = bbox
                 block["polygon"] = _polygon_from_box(bbox)
             if page_box:
-                block["page_box"] = page_box
+                block["page_bbox"] = page_box
             source_blocks.append(block)
     return source_blocks
 

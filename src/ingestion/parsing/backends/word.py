@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 from ....models import DataObject, ParsedData, ParsedTable, ParseResult
 from ....utils.paths import portable_path
+from ..contracts import AXIOM_NATIVE_BLOCK_SOURCE
 from ._tabular import normalize_headers
 
 
@@ -451,12 +452,13 @@ def _append_block(
         "block_index": block_index,
         "type": block_type,
         "text": text,
-        "source": "docx_native",
+        "source": AXIOM_NATIVE_BLOCK_SOURCE,
+        "parser_source": "docx_native",
     }
     if bbox is not None:
         block["bbox"] = bbox
     if page_box is not None:
-        block["page_box"] = list(page_box)
+        block["page_bbox"] = list(page_box)
     state.source_blocks.append(block)
     return component_id
 

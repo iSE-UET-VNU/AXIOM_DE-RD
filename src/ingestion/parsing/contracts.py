@@ -8,6 +8,12 @@ from typing import Protocol, runtime_checkable
 from ...models import DataObject, ParsedData, ParseResult
 
 
+# ``reading_order.py`` in the production pipeline uses this value to identify
+# parser-native source blocks. Provider-specific provenance belongs in the
+# block's ``parser_source`` field and in ParsedData metadata.
+AXIOM_NATIVE_BLOCK_SOURCE = "parser_json"
+
+
 @runtime_checkable
 class ParserBackend(Protocol):
     """Parse contract implemented by every routing target."""

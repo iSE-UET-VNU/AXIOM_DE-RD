@@ -2,6 +2,8 @@
 
 AXIOM_DE-RD is a document-processing pipeline that converts documents from S3
 or a local raw path into parsed records, index records, and vector embeddings.
+Spreadsheet workbooks can be delegated to a running TableAgent API and
+normalized into the same final output contract.
 
 
 ## Project Structure
@@ -88,12 +90,82 @@ Important settings include:
 | `output_dir` | Final consolidated document artifacts |
 | `enabled_modules` | Pipeline stages to enable; execution follows the order defined by the orchestrator |
 | `parsing` | Parser provider and Lift options |
+| `table_agent` | TableAgent API routing, authentication, timeout, and workbook extensions |
 | `indexing.embeddings` | Embedding provider, model, dimensions, and targets |
+
+### TableAgent integration
+
+Start TableAgent on a separate port, for example `8001`, then set:
+
+```bash
+TABLE_AGENT_BASE_URL=http://127.0.0.1:8001
+TABLE_AGENT_SERVICE_API_KEY=
+```
+
+When `table_agent.enabled` is true, every supported AXIOM entrypoint first uses
+the shared `src.dispatcher.dispatch_dataeng_inputs` boundary. REST presigned
+inventories, Streamlit uploads, local paths, direct S3 URIs, and file-backed
+presigned inventories all use the same extension-based routing:
+
+- supported Excel workbooks are uploaded to TableAgent's existing
+  `/v1/jobs/upload` endpoint with `stage=structure`;
+- non-workbook files continue through the existing document pipeline;
+- both branches are normalized and merged into the existing `metadata` plus
+  `documents` response with `output-document-v4` documents.
+
+`src.pipeline.run_pipeline` remains the internal non-table document engine and
+is called by the dispatcher only after workbook inputs have been removed from
+the document branch. This keeps TableAgent state out of document models,
+ingestion, indexing, and persisted intermediate artifacts.
+
+The Streamlit uploader uses the same routing behavior for local uploads.
+Workbook-only uploads do not require `DATALAB_API_KEY`; mixed batches send
+Excel files to TableAgent and keep PDF/image files on the existing document
+pipeline. For the demo explorer only, Streamlit persists the final normalized
+metadata and document JSON under `data/output/<run_id>/`; it does not create
+workbook ingestion, cleaning, enrichment, or indexing artifacts. Workbook
+results therefore open in **Explore results** with the same tabs and downloads
+as other final output documents.
+
+The current TableAgent source response does not include temporary retrieval
+artifact files. AXIOM will preserve `retrieval_items` or `retrieval.items` when
+the deployed API returns them; otherwise it builds retrieval items from the
+returned structures with empty `embeddings` arrays.
+
+Normalization consumes known TableAgent fields into their canonical
+`output-document-v4` locations instead of copying the complete source response.
+Unmapped response, table, retrieval-item, and embedding fields are retained
+once under an `extensions` mapping at the corresponding level. This avoids a
+duplicated `raw_response` while allowing future or deployment-specific
+TableAgent fields to pass through without being discarded.
 
 ## Running the Pipeline
 
+The CLI uses the shared dispatcher, including when input mode comes from
+`configs/pipeline.yaml`:
+
 ```bash
 python scripts/run_pipeline.py --config configs/pipeline.yaml
+```
+
+Process a local workbook through TableAgent:
+
+```bash
+python scripts/run_pipeline.py \
+  --config configs/pipeline.yaml \
+  --local-raw path/to/workbook.xlsx
+```
+
+Programmatic callers that need source routing should use:
+
+```python
+from src.dispatcher import dispatch_dataeng_inputs
+
+result = dispatch_dataeng_inputs(
+    "configs/pipeline.yaml",
+    local_raw="path/to/input",
+)
+response = result.response
 ```
 
 #### Use the existing `s3://bucket/key` CLI option:
@@ -185,19 +257,6 @@ Start the interactive demo from the repository root:
 streamlit run streamlit_app.py
 ```
 
-The app opens existing persisted runs immediately, so it can be demonstrated
-without calling external services. The **Run pipeline** page accepts a batch of
-PDF, PNG, or JPEG files. Parsing new files uses `DATALAB_API_KEY`; the demo uses
-local hash embeddings and does not require `OPENROUTER_API_KEY`.
-
-The demo includes:
-
-- multi-document upload and synchronous pipeline execution;
-- exploration of both current `output-document-v4` and legacy artifacts;
-- side-by-side raw document and reading-order parsing content comparison;
-- chunking, embeddings, lineage, and raw JSON views;
-- per-document JSON and full-run ZIP downloads.
-
 
 ## Output Artifacts
 
@@ -239,7 +298,7 @@ data/embedded/<run_id>/
 
 data/output/<run_id>/
 ├── documents/
-│   └── <document_id>.json              # Semantic content, source blocks, reading order, retrieval
+│   └── <document_id>.json              # Semantic content, retrieval items, and per-document BM25 inputs
 └── metadata.json                       # Common document schema and compact run summary
 ```
 
@@ -249,6 +308,12 @@ provenance/completeness in `content.reading_order_meta`. New Lift runs use JSON
 output so the order includes text, headings, equations, figures, captions, and
 tables. Older artifacts can be reconstructed from structured-extraction
 citations, with `reading_order_meta.complete` set to `false`.
+
+Each text-bearing `retrieval.items[]` entry also contains a `lexical` object
+with raw term frequencies (`tf`), analyzed token length (`dl`), and analyzer
+name. Each document's `retrieval.lexical_stats` contains `df`, `N`, and
+`avgdl`, calculated only from the chunks in that document. The common
+`metadata.json` does not contain BM25 statistics.
 
 An ingested quarantine record uses `status: "quarantined"`, has no `schema_id`,
 and includes machine-readable failure reasons such as `zero_page_count`,

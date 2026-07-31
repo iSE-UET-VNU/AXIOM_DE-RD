@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 from importlib.util import find_spec
 import json
 import logging
+import math
 import mimetypes
 import os
 from pathlib import Path
@@ -29,13 +30,15 @@ from src.demo.data import (
     list_documents,
     load_document,
     load_stage_metadata,
+    persist_dataeng_response,
 )
-from src.pipeline import run_pipeline
+from src.dispatcher import dispatch_dataeng_inputs
 from src.reading_order import (
     citation_ids,
     component_path_parts,
     source_blocks_from_extraction,
 )
+from src.table_agent.client import DEFAULT_WORKBOOK_EXTENSIONS
 from src.utils.config import load_config
 from src.utils.env import load_dotenv_file
 
@@ -47,7 +50,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-SUPPORTED_UPLOAD_TYPES = ["pdf", "png", "jpg", "jpeg"]
+SUPPORTED_UPLOAD_TYPES = [
+    "pdf",
+    "png",
+    "jpg",
+    "jpeg",
+    *(extension.removeprefix(".") for extension in DEFAULT_WORKBOOK_EXTENSIONS),
+]
 DISPLAY_TITLE_OVERRIDES = {
     "5.4. Data size analysis (RQ4)": "Analysis",
 }
@@ -175,21 +184,20 @@ def _sidebar() -> str:
 def _render_pipeline_runner() -> None:
     _hero(
         "Run pipeline",
-        "Upload PDF or image files to parse and generate output artifacts.",
+        "Upload documents or Excel workbooks and route them to the right processor.",
         "NEW RUN",
     )
     parser_key_ready = bool(os.getenv("DATALAB_API_KEY"))
     parser_sdk_ready = find_spec("datalab_sdk") is not None
-    if not parser_sdk_ready:
-        st.error("Missing `datalab-python-sdk`. Run `pip install -e .`, then restart Streamlit.")
-    elif not parser_key_ready:
-        st.warning("Add `DATALAB_API_KEY` to `.env` to run the parser.")
 
     uploads = st.file_uploader(
-        "Choose PDF, PNG, or JPEG files",
+        "Choose PDF, image, or Excel workbook files",
         type=SUPPORTED_UPLOAD_TYPES,
         accept_multiple_files=True,
-        help="Selected files will be processed together in a single pipeline run.",
+        help=(
+            "Excel workbooks are sent to TableAgent. Other supported files "
+            "continue through the normal AXIOM pipeline."
+        ),
     )
     if uploads:
         for item in uploads:
@@ -197,12 +205,27 @@ def _render_pipeline_runner() -> None:
             cols[0].write(item.name)
             cols[1].caption(format_bytes(item.size))
 
-    st.caption("Datalab Lift parser · Local hash embedding")
+    needs_document_parser = any(
+        Path(item.name).suffix.lower() not in DEFAULT_WORKBOOK_EXTENSIONS
+        for item in uploads or []
+    )
+    if needs_document_parser and not parser_sdk_ready:
+        st.error("Missing `datalab-python-sdk`. Run `pip install -e .`, then restart Streamlit.")
+    elif needs_document_parser and not parser_key_ready:
+        st.warning("Add `DATALAB_API_KEY` to `.env` to process PDF or image files.")
+
+    st.caption("Excel → TableAgent · PDF/images → Datalab Lift")
     run_clicked = st.button(
         "Run pipeline",
         type="primary",
         width="stretch",
-        disabled=not uploads or not parser_key_ready or not parser_sdk_ready,
+        disabled=(
+            not uploads
+            or (
+                needs_document_parser
+                and (not parser_key_ready or not parser_sdk_ready)
+            )
+        ),
     )
     if run_clicked and uploads:
         _execute_upload_run(uploads)
@@ -215,16 +238,34 @@ def _execute_upload_run(uploads: list) -> None:
     used_names: set[str] = set()
     for uploaded in uploads:
         file_name = _unique_file_name(_safe_upload_name(uploaded.name), used_names)
-        (upload_root / file_name).write_bytes(uploaded.getvalue())
+        upload_path = upload_root / file_name
+        upload_path.write_bytes(uploaded.getvalue())
 
     progress = st.progress(8, text="Uploaded files saved")
     config_path: Path | None = None
     try:
         config_path = _demo_config()
-        progress.progress(18, text="Parsing and processing documents…")
-        with st.spinner("Pipeline running. Large PDFs may take several minutes to parse."):
-            state = run_pipeline(config_path, local_raw=upload_root)
+        progress.progress(18, text="Routing files to the appropriate processor…")
+        with st.spinner("Processing files. Large documents may take several minutes."):
+            dispatch_result = dispatch_dataeng_inputs(
+                config_path=config_path,
+                local_raw=upload_root,
+            )
         progress.progress(100, text="Pipeline completed")
+        state = dispatch_result.pipeline_state
+        if dispatch_result.table_document_count:
+            run_id = persist_dataeng_response(dispatch_result.response)
+            st.session_state["selected_run"] = run_id
+            st.session_state["run_notice"] = (
+                f"Run `{run_id}` completed with "
+                f"{dispatch_result.table_document_count} workbook(s) "
+                "processed by TableAgent."
+            )
+            st.session_state["_next_page"] = RESULTS_PAGE
+            st.rerun()
+
+        if state is None:
+            raise RuntimeError("The document pipeline did not return a run state.")
         st.session_state["selected_run"] = state.run_id
         st.session_state["run_notice"] = (
             f"Run `{state.run_id}` completed with {len(state.errors)} errors/quarantined documents."
@@ -833,23 +874,52 @@ def _bbox_canvas_size(
     image_width: int,
     image_height: int,
 ) -> tuple[float, float]:
-    """Infer parser coordinates without assuming they match raw image pixels."""
-    right_edges = [float(image_width)]
-    bottom_edges = [float(image_height)]
+    """Resolve the parser canvas while preserving the source image aspect ratio."""
+    for block in blocks:
+        page_bbox = block.get("page_bbox")
+        if not _is_numeric_bbox(page_bbox):
+            continue
+        left, top, right, bottom = (float(item) for item in page_bbox)
+        if right > left and bottom > top:
+            return right - left, bottom - top
+
+    # Legacy artifacts did not retain the Page polygon. Datalab image canvases
+    # are bucketed in 128 px steps, so find the smallest bucket that contains
+    # every box on both axes. Deriving height from the source aspect ratio is
+    # important: using the last detected box independently on each axis warps
+    # the overlay and makes the error grow toward the bottom/right of the page.
+    right_edges: list[float] = []
+    bottom_edges: list[float] = []
     for block in blocks:
         value = block.get("bbox")
-        if not isinstance(value, (list, tuple)) or len(value) != 4:
-            continue
-        if any(
-            isinstance(item, bool) or not isinstance(item, (int, float))
-            for item in value
-        ):
+        if not _is_numeric_bbox(value):
             continue
         left, top, right, bottom = (float(item) for item in value)
         if right > left and bottom > top:
             right_edges.append(right)
             bottom_edges.append(bottom)
-    return max(right_edges), max(bottom_edges)
+    if not right_edges:
+        return float(image_width), float(image_height)
+
+    required_width = max(
+        max(right_edges),
+        max(bottom_edges) * image_width / image_height,
+        1536.0,
+    )
+    canvas_width = math.ceil(required_width / 128.0) * 128.0
+    canvas_height = canvas_width * image_height / image_width
+    return canvas_width, canvas_height
+
+
+def _is_numeric_bbox(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(
+            not isinstance(item, bool) and isinstance(item, (int, float))
+            for item in value
+        )
+    )
 
 
 def _render_parsed_content(parsed_payload: object) -> None:

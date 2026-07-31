@@ -141,6 +141,15 @@ class WordParserTests(unittest.TestCase):
                 len({block["component_id"] for block in row["source_blocks"]}),
                 len(row["source_blocks"]),
             )
+            self.assertTrue(
+                all(block["source"] == "parser_json" for block in row["source_blocks"])
+            )
+            self.assertTrue(
+                all(
+                    block["parser_source"] == "docx_native"
+                    for block in row["source_blocks"]
+                )
+            )
             self.assertEqual(
                 row["reading_order"],
                 second.parsed_data.rows[0]["reading_order"],

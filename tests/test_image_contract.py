@@ -31,7 +31,7 @@ class ImageContractTests(unittest.TestCase):
             ]
         }
         source_blocks = source_blocks_from_parser_json(document_json)
-        self.assertEqual(source_blocks[0]["page_box"], [0, 0, 1000, 1000])
+        self.assertEqual(source_blocks[0]["page_bbox"], [0, 0, 1000, 1000])
         image_files = [
             {"name": "chart.png", "path": "images/chart.png", "status": "saved"},
             {"name": "logo.png", "path": "images/logo.png", "status": "saved"},

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from ....models import DataObject, ParsedData, ParseResult
+from ..contracts import AXIOM_NATIVE_BLOCK_SOURCE
 
 
 TEXT_EXTENSIONS = frozenset(
@@ -64,7 +65,8 @@ class TextParserBackend:
                     "block_index": 0,
                     "type": "Text",
                     "text": text,
-                    "source": "text_native",
+                    "source": AXIOM_NATIVE_BLOCK_SOURCE,
+                    "parser_source": "text_native",
                 }
             ]
             if text

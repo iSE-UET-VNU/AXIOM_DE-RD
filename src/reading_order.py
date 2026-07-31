@@ -10,7 +10,6 @@ from typing import Any
 
 _COMPONENT_PATH = re.compile(r"^/page/(\d+)/([^/]+)/(\d+)$")
 _NON_CONTENT_BLOCK_TYPES = {"document", "page"}
-_NATIVE_BLOCK_SOURCES = {"parser_json", "chandra2_layout"}
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -64,37 +63,30 @@ def source_blocks_from_parser_json(
         block["component_id"]: block
         for block in source_blocks_from_extraction(extraction or {})
     }
-    page_boxes: dict[int, Any] = {}
     collected: list[dict[str, Any]] = []
 
-    def collect_page_boxes(value: Any) -> None:
+    def visit(
+        value: Any,
+        inherited_page_bbox: list[float] | None = None,
+    ) -> None:
         if isinstance(value, list):
             for item in value:
-                collect_page_boxes(item)
-            return
-        if not isinstance(value, dict):
-            return
-        component_id = value.get("id") or value.get("component_id")
-        parts = component_path_parts(component_id) if isinstance(component_id, str) else None
-        if parts is not None:
-            page, _, path_type = parts
-            block_type = str(value.get("block_type") or value.get("type") or path_type)
-            if block_type.casefold() == "page" and value.get("bbox") is not None:
-                page_boxes[page] = value["bbox"]
-        for child in value.values():
-            if isinstance(child, (dict, list)):
-                collect_page_boxes(child)
-
-    def visit(value: Any) -> None:
-        if isinstance(value, list):
-            for item in value:
-                visit(item)
+                visit(item, inherited_page_bbox)
             return
         if not isinstance(value, dict):
             return
 
         component_id = value.get("id") or value.get("component_id")
         parts = component_path_parts(component_id) if isinstance(component_id, str) else None
+        block_type = str(
+            value.get("block_type")
+            or value.get("type")
+            or (parts[2] if parts is not None else "")
+        )
+        page_bbox = inherited_page_bbox
+        if block_type.casefold() == "page":
+            page_bbox = _page_bbox(value) or inherited_page_bbox
+
         if parts is not None:
             page, block_index, path_type = parts
             block_type = str(value.get("block_type") or value.get("type") or path_type)
@@ -115,17 +107,16 @@ def source_blocks_from_parser_json(
                 for field in ("bbox", "polygon", "section_hierarchy"):
                     if value.get(field) is not None:
                         block[field] = value[field]
-                if page in page_boxes:
-                    block["page_box"] = page_boxes[page]
+                if page_bbox is not None:
+                    block["page_bbox"] = page_bbox
                 if isinstance(value.get("html"), str) and value["html"]:
                     block["html"] = value["html"]
                 collected.append(block)
 
         for child in value.values():
             if isinstance(child, (dict, list)):
-                visit(child)
+                visit(child, page_bbox)
 
-    collect_page_boxes(document)
     visit(document)
     parser_ids = {
         block["component_id"]
@@ -186,7 +177,6 @@ def reading_order_from_rows(
     all_blocks: list[dict[str, Any]] = []
     native_rows = 0
     extraction_rows = 0
-    native_sources: set[str] = set()
 
     for row in rows:
         if not isinstance(row, dict):
@@ -198,13 +188,8 @@ def reading_order_from_rows(
             else []
         )
         if normalized_row_blocks:
-            row_sources = {
-                str(block.get("source") or "")
-                for block in normalized_row_blocks
-            }
-            if row_sources and row_sources <= _NATIVE_BLOCK_SOURCES:
+            if all(block.get("source") == "parser_json" for block in normalized_row_blocks):
                 native_rows += 1
-                native_sources.update(row_sources)
             else:
                 extraction_rows += 1
             all_blocks.extend(normalized_row_blocks)
@@ -221,9 +206,7 @@ def reading_order_from_rows(
     reading_order = [block["component_id"] for block in blocks]
     is_native = bool(blocks) and native_rows > 0 and extraction_rows == 0
     source = (
-        next(iter(native_sources))
-        if is_native and len(native_sources) == 1
-        else "parser_native_mixed"
+        "parser_json"
         if is_native
         else "structured_extraction_citations"
         if blocks
@@ -300,6 +283,49 @@ def _block_text(block: dict[str, Any]) -> str:
     parser = _HTMLTextExtractor()
     parser.feed(html)
     return " ".join(parser.parts)
+
+
+def _page_bbox(block: dict[str, Any]) -> list[float] | None:
+    """Return the parser page bounds used by all child block coordinates."""
+    bbox = block.get("bbox")
+    if _is_numeric_bbox(bbox):
+        left, top, right, bottom = (float(item) for item in bbox)
+        if right > left and bottom > top:
+            return [left, top, right, bottom]
+
+    polygon = block.get("polygon")
+    if not isinstance(polygon, (list, tuple)) or len(polygon) < 3:
+        return None
+    points: list[tuple[float, float]] = []
+    for point in polygon:
+        if (
+            not isinstance(point, (list, tuple))
+            or len(point) != 2
+            or any(
+                isinstance(item, bool) or not isinstance(item, (int, float))
+                for item in point
+            )
+        ):
+            return None
+        points.append((float(point[0]), float(point[1])))
+    left = min(point[0] for point in points)
+    top = min(point[1] for point in points)
+    right = max(point[0] for point in points)
+    bottom = max(point[1] for point in points)
+    if right <= left or bottom <= top:
+        return None
+    return [left, top, right, bottom]
+
+
+def _is_numeric_bbox(value: Any) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(
+            not isinstance(item, bool) and isinstance(item, (int, float))
+            for item in value
+        )
+    )
 
 
 def _deduplicate_and_sort(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:

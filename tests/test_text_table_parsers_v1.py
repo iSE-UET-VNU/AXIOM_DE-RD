@@ -51,6 +51,8 @@ class TextParserBackendV1Tests(unittest.TestCase):
             row["source_blocks"][0]["component_id"],
             "/page/0/Text/0",
         )
+        self.assertEqual(row["source_blocks"][0]["source"], "parser_json")
+        self.assertEqual(row["source_blocks"][0]["parser_source"], "text_native")
 
     def test_markdown_is_preserved_without_structural_parsing(self) -> None:
         content = "# Heading\n\n- first\n- second\n"

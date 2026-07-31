@@ -336,8 +336,7 @@ def _area_ratio(
     if bbox is None:
         return None, "missing_or_invalid_bbox", None
 
-    page_box = _numeric_box(geometry.get("page_box"))
-    page_area_source = "page_box"
+    page_box, page_area_source = _page_geometry(geometry)
     if page_box is None:
         page = _page_number(geometry, source_ref)
         if page is None and len(page_bounds) == 1:
@@ -360,14 +359,16 @@ def _page_bounds(
     blocks: Iterable[dict[str, Any]],
 ) -> dict[int, tuple[tuple[float, float, float, float], str]]:
     explicit: dict[int, list[tuple[float, float, float, float]]] = {}
+    explicit_sources: dict[int, str] = {}
     inferred: dict[int, list[tuple[float, float, float, float]]] = {}
     for block in blocks:
         page = _page_number(block, str(block.get("component_id") or ""))
         if page is None:
             continue
-        page_box = _numeric_box(block.get("page_box"))
+        page_box, page_area_source = _page_geometry(block)
         if page_box is not None:
             explicit.setdefault(page, []).append(page_box)
+            explicit_sources.setdefault(page, page_area_source or "page_bbox")
         bbox = _numeric_box(block.get("bbox"))
         if bbox is not None:
             inferred.setdefault(page, []).append(bbox)
@@ -375,10 +376,24 @@ def _page_bounds(
     result: dict[int, tuple[tuple[float, float, float, float], str]] = {}
     for page in set(explicit) | set(inferred):
         if explicit.get(page):
-            result[page] = (_union_boxes(explicit[page]), "page_box")
+            result[page] = (
+                _union_boxes(explicit[page]),
+                explicit_sources.get(page, "page_bbox"),
+            )
         elif inferred.get(page):
             result[page] = (_union_boxes(inferred[page]), "inferred_block_union")
     return result
+
+
+def _page_geometry(
+    block: dict[str, Any],
+) -> tuple[tuple[float, float, float, float] | None, str | None]:
+    """Read develop's page geometry field with legacy ingestion fallback."""
+    for field in ("page_bbox", "page_box"):
+        value = _numeric_box(block.get(field))
+        if value is not None:
+            return value, field
+    return None, None
 
 
 def _page_number(block: dict[str, Any], source_ref: str) -> int | None:

@@ -114,6 +114,18 @@ class PptxParserTests(unittest.TestCase):
             parsed.metadata["image_files"][0]["source_ref"],
             parsed.metadata["image_files"][1]["source_ref"],
         )
+        self.assertTrue(
+            all(
+                block["source"] == "parser_json"
+                for block in parsed.rows[0]["source_blocks"]
+            )
+        )
+        self.assertTrue(
+            all(
+                block["parser_source"] == "pptx_native"
+                for block in parsed.rows[0]["source_blocks"]
+            )
+        )
         self.assertEqual(
             parsed.rows[0]["reading_order"],
             second.parsed_data.rows[0]["reading_order"],
