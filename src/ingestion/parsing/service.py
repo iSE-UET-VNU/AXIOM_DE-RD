@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from ...models import DataObject, ParseResult, ParseStatus
-from .backends import DocumentParser, TableParser, TextParserBackend
+from .backends import (
+    DocumentParser,
+    PptxConfig,
+    PptxParserBackend,
+    TextParserBackend,
+    WordConfig,
+    WordParserBackend,
+)
 from .chandra2 import Chandra2Config, Chandra2Provider
 from .lift import LiftAPIConfig, LiftAPIParserClient
 from .router import ParserRouter
@@ -32,7 +39,12 @@ class ParsingService:
             ParserRouter(
                 [
                     TextParserBackend(),
-                    TableParser(),
+                    PptxParserBackend(
+                        PptxConfig.from_mapping(_provider_config(config, "pptx"))
+                    ),
+                    WordParserBackend(
+                        WordConfig.from_mapping(_provider_config(config, "word"))
+                    ),
                     document_parser,
                 ]
             )

@@ -9,6 +9,7 @@ import shutil
 from typing import Any
 
 from ..models import ParsedData
+from ..utils.paths import portable_path
 
 
 MIN_PAGE_AREA_RATIO = 0.01
@@ -27,7 +28,11 @@ _COMPONENT_PAGE_PATTERN = re.compile(r"^/page/(\d+)/")
 _NUMBER_PATTERN = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)")
 
 
-def apply_image_filters(parsed: ParsedData) -> dict[str, Any]:
+def apply_image_filters(
+    parsed: ParsedData,
+    *,
+    project_root: str | Path | None = None,
+) -> dict[str, Any]:
     """Remove low-value figures while retaining source assets for audit.
 
     The function updates ``rows[].extraction.figures`` and the aligned
@@ -142,7 +147,8 @@ def apply_image_filters(parsed: ParsedData) -> dict[str, Any]:
             kept_figure_count += 1
             kept_assets.append(
                 _copy_kept_asset(
-                    _kept_asset(asset, source_ref, original_index)
+                    _kept_asset(asset, source_ref, original_index),
+                    project_root=project_root,
                 )
             )
 
@@ -183,13 +189,23 @@ def apply_image_filters(parsed: ParsedData) -> dict[str, Any]:
     return report
 
 
-def _copy_kept_asset(asset: dict[str, Any]) -> dict[str, Any]:
+def _copy_kept_asset(
+    asset: dict[str, Any],
+    *,
+    project_root: str | Path | None,
+) -> dict[str, Any]:
     copied = dict(asset)
     if copied.get("status") != "saved" or not copied.get("path"):
         copied["filter_copy_status"] = "not_saved"
         return copied
 
-    source_path = Path(str(copied["path"]))
+    serialized_source_path = Path(str(copied["path"]))
+    root = Path(project_root).resolve() if project_root else None
+    source_path = (
+        root / serialized_source_path
+        if root is not None and not serialized_source_path.is_absolute()
+        else serialized_source_path
+    )
     if source_path.parent.name.casefold() != "images":
         copied["filter_copy_status"] = "unsupported_source_directory"
         return copied
@@ -207,8 +223,12 @@ def _copy_kept_asset(asset: dict[str, Any]) -> dict[str, Any]:
         copied["filter_copy_error"] = str(exc)
         return copied
 
-    copied["original_path"] = str(source_path)
-    copied["path"] = str(target_path)
+    copied["original_path"] = (
+        portable_path(source_path, root) if root is not None else str(source_path)
+    )
+    copied["path"] = (
+        portable_path(target_path, root) if root is not None else str(target_path)
+    )
     copied["filter_copy_status"] = "copied"
     return copied
 

@@ -7,12 +7,14 @@ from unittest.mock import patch
 
 from src.ingestion.parsing.backends import (
     DocumentParser,
-    TableParser,
+    PptxParserBackend,
     TextParserBackend,
+    WordParserBackend,
 )
 from src.ingestion.parsing.router import ParserRouter
 from src.ingestion.parsing.service import ParsingService
 from src.ingestion.runner import run as run_ingestion
+from src.local_reader import DEFAULT_INCLUDE_EXTENSIONS
 from src.models import DataObject, ParsedData, ParseResult, ParseStatus
 
 
@@ -26,23 +28,30 @@ def _data_object(path: Path, object_id: str = "object-1") -> DataObject:
 
 
 class ParserRouterV1Tests(unittest.TestCase):
+    def test_default_discovery_excludes_table_pipeline_formats(self) -> None:
+        for extension in (".csv", ".xls", ".xlsx"):
+            self.assertNotIn(extension, DEFAULT_INCLUDE_EXTENSIONS)
+
     def test_routes_supported_extensions_case_insensitively(self) -> None:
         router = ParsingService.from_config().router
 
         expected_routes = {
             "notes.TXT": TextParserBackend,
             "readme.Md": TextParserBackend,
-            "records.CSV": TextParserBackend,
             "records.JsOnL": TextParserBackend,
-            "workbook.XLSX": TableParser,
-            "legacy.XlS": TableParser,
             "scan.PDF": DocumentParser,
-            "slides.PpTx": DocumentParser,
+            "slides.PpTx": PptxParserBackend,
+            "report.DoCx": WordParserBackend,
+            "legacy.DoC": WordParserBackend,
             "photo.TiFf": DocumentParser,
         }
         for name, backend_type in expected_routes.items():
             with self.subTest(name=name):
                 self.assertIsInstance(router.resolve(Path(name)), backend_type)
+
+        for name in ("records.CSV", "workbook.XLSX", "legacy.XlS"):
+            with self.subTest(name=name):
+                self.assertIsNone(router.resolve(Path(name)))
 
     def test_resolve_selects_a_backend_without_executing_it(self) -> None:
         class CountingBackend:
@@ -93,7 +102,7 @@ class ParserRouterV1Tests(unittest.TestCase):
         self.assertIsInstance(document_backend, DocumentParser)
         self.assertEqual(document_backend.provider_name, "lift_api")
         self.assertIsInstance(router.resolve(Path("notes.txt")), TextParserBackend)
-        self.assertIsInstance(router.resolve(Path("book.xlsx")), TableParser)
+        self.assertIsNone(router.resolve(Path("book.xlsx")))
 
     def test_default_service_uses_lift_for_documents(self) -> None:
         router = ParsingService.from_config().router

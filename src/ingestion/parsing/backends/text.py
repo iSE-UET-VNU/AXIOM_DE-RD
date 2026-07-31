@@ -1,23 +1,25 @@
-"""Local text, JSON, and CSV parser backend."""
+"""Local parser for plain and structured text files."""
 
 from __future__ import annotations
 
-import csv
 import json
-from io import StringIO
 from pathlib import Path
-from typing import Any
+import re
 
-from ....models import DataObject, ParsedData, ParsedTable, ParseResult
-from ._tabular import normalize_headers, row_is_empty
+from ....models import DataObject, ParsedData, ParseResult
+
 
 TEXT_EXTENSIONS = frozenset(
-    {".txt", ".md", ".csv", ".json", ".jsonl", ".yaml", ".yml"}
+    {".txt", ".md", ".json", ".jsonl", ".yaml", ".yml"}
+)
+_MARKDOWN_HEADING = re.compile(
+    r"^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$",
+    re.MULTILINE,
 )
 
 
 class TextParserBackend:
-    """Parse UTF-8 text, JSON, and CSV inputs locally."""
+    """Parse UTF-8 text into the canonical document contract."""
 
     supported_extensions = TEXT_EXTENSIONS
     backend_name = "text"
@@ -31,132 +33,84 @@ class TextParserBackend:
                 data_object.object_id,
                 self.backend_name,
                 exc,
-                route="text",
+                route=self.backend_name,
             )
         return ParseResult.success(
             data_object.object_id,
             self.backend_name,
             parsed,
-            route="text",
+            route=self.backend_name,
         )
 
     def _parse(self, path: Path, data_object: DataObject) -> ParsedData:
         extension = path.suffix.lower()
-        source_format = extension.lstrip(".")
-        if extension == ".csv":
-            return self._parse_csv(path, data_object, source_format)
+        if extension not in self.supported_extensions:
+            raise ValueError(
+                f"Unsupported text extension: {extension or '<none>'}"
+            )
 
-        text = _read_utf8_text(path)
-        rows = _json_rows(json.loads(text)) if extension == ".json" else (
-            [{"text": text}] if text else []
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        if extension == ".json":
+            json.loads(text)
+
+        markdown_title = _markdown_title(text) if extension == ".md" else None
+        title = markdown_title or path.stem
+        component_id = "/page/0/Text/0"
+        source_blocks = (
+            [
+                {
+                    "component_id": component_id,
+                    "page": 0,
+                    "block_index": 0,
+                    "type": "Text",
+                    "text": text,
+                    "source": "text_native",
+                }
+            ]
+            if text
+            else []
         )
-        return ParsedData(
-            object_id=data_object.object_id,
-            source_uri=data_object.uri,
-            source_format=source_format,
-            rows=rows,
-            text=text,
-            metadata={"parser": self.backend_name},
-        )
-
-    def _parse_csv(
-        self,
-        path: Path,
-        data_object: DataObject,
-        source_format: str,
-    ) -> ParsedData:
-        text = _read_utf8_text(path)
-        delimiter = _detect_csv_delimiter(text)
-        raw_rows = [
-            list(row)
-            for row in csv.reader(StringIO(text, newline=""), delimiter=delimiter)
-        ]
-        header_index = _first_non_empty_row_index(raw_rows)
-
-        if header_index is None:
-            headers: list[str] = []
-            table_rows: list[list[str]] = []
-        else:
-            relevant_rows = raw_rows[header_index:]
-            while len(relevant_rows) > 1 and row_is_empty(relevant_rows[-1]):
-                relevant_rows.pop()
-            width = max((len(row) for row in relevant_rows), default=0)
-            headers = normalize_headers(relevant_rows[0], width=width)
-            table_rows = [row + [""] * (width - len(row)) for row in relevant_rows[1:]]
-
-        table = ParsedTable(
-            name=path.stem,
-            source_ref=f"csv:0:{path.stem}",
-            headers=headers,
-            rows=table_rows,
-            metadata={
-                "parser": self.backend_name,
-                "delimiter": delimiter,
-                "header_row_number": header_index + 1 if header_index is not None else None,
-            },
-        )
-        rows = [dict(zip(headers, row, strict=True)) for row in table_rows] if headers else []
-        return ParsedData(
-            object_id=data_object.object_id,
-            source_uri=data_object.uri,
-            source_format=source_format,
-            rows=rows,
-            text=None,
-            tables=[table],
-            metadata={
-                "parser": self.backend_name,
-                "table_count": 1,
-                "delimiter": delimiter,
-            },
-        )
-
-
-def _json_rows(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [item if isinstance(item, dict) else {"value": item} for item in payload]
-    if isinstance(payload, dict):
-        return [payload]
-    return [{"value": payload}]
-
-
-def _read_utf8_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8-sig", errors="replace")
-
-
-def _first_non_empty_row_index(rows: list[list[str]]) -> int | None:
-    return next((index for index, row in enumerate(rows) if not row_is_empty(row)), None)
-
-
-def _detect_csv_delimiter(text: str) -> str:
-    if not text:
-        return ","
-    try:
-        return csv.Sniffer().sniff(text[:65536], delimiters=",;\t|").delimiter
-    except csv.Error:
-        return _best_effort_csv_delimiter(text)
-
-
-def _best_effort_csv_delimiter(text: str) -> str:
-    best_delimiter = ","
-    best_score = (0, 0, 0)
-    for delimiter in (",", ";", "\t", "|"):
-        try:
-            rows = list(csv.reader(StringIO(text, newline=""), delimiter=delimiter))
-        except csv.Error:
-            continue
-        widths = [len(row) for row in rows if not row_is_empty(row)]
-        multi_column_widths = [width for width in widths if width > 1]
-        if not multi_column_widths:
-            continue
-        frequencies = {
-            width: multi_column_widths.count(width) for width in set(multi_column_widths)
+        citations = [component_id] if source_blocks else []
+        extraction = {
+            "document_type": "text",
+            "language": None,
+            "title": title,
+            "title_citations": citations if markdown_title else [],
+            "main_text": text,
+            "main_text_citations": citations,
+            "tables": [],
+            "figures": [],
+            "formulas": [],
+            "formulas_citations": [],
         }
-        score = (
-            len(multi_column_widths),
-            max(frequencies.values(), default=0),
-            sum(width - 1 for width in multi_column_widths),
+        return ParsedData(
+            object_id=data_object.object_id,
+            source_uri=data_object.uri,
+            source_format=extension.lstrip("."),
+            rows=[
+                {
+                    "extraction": extraction,
+                    "text": text,
+                    "source_blocks": source_blocks,
+                    "reading_order": citations,
+                }
+            ],
+            text=text,
+            metadata={
+                "parser": self.backend_name,
+                "page_count": None,
+                "logical_page_count": 1,
+                "pagination_source": "unavailable",
+                "source_block_count": len(source_blocks),
+                "table_count": 0,
+                "figure_count": 0,
+                "formula_count": 0,
+                "reading_order_source": "text_native",
+                "reading_order_complete": True,
+            },
         )
-        if score > best_score:
-            best_score = score
-            best_delimiter = delimiter
-    return best_delimiter
+
+
+def _markdown_title(text: str) -> str | None:
+    match = _MARKDOWN_HEADING.search(text)
+    return match.group(1).strip() if match else None

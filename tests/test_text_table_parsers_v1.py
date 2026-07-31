@@ -24,6 +24,19 @@ class TextParserBackendV1Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.backend = TextParserBackend()
 
+    def _assert_contract(self, result: object, text: str) -> None:
+        self.assertEqual(result.status, ParseStatus.SUCCESS)
+        parsed = result.parsed_data
+        row = parsed.rows[0]
+        extraction = row["extraction"]
+        self.assertEqual(parsed.text, text)
+        self.assertEqual(row["text"], text)
+        self.assertEqual(extraction["main_text"], text)
+        self.assertEqual(extraction["document_type"], "text")
+        self.assertEqual(extraction["tables"], [])
+        self.assertEqual(extraction["figures"], [])
+        self.assertEqual(parsed.tables, [])
+
     def test_txt_strips_utf8_bom_and_replaces_invalid_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "notes.txt"
@@ -31,10 +44,13 @@ class TextParserBackendV1Tests(unittest.TestCase):
 
             result = self.backend.parse(path, _data_object(path))
 
-        self.assertEqual(result.status, ParseStatus.SUCCESS)
-        self.assertIsNotNone(result.parsed_data)
-        self.assertEqual(result.parsed_data.text, "hello\ufffdworld")
-        self.assertEqual(result.parsed_data.rows, [{"text": "hello\ufffdworld"}])
+        self._assert_contract(result, "hello\ufffdworld")
+        row = result.parsed_data.rows[0]
+        self.assertEqual(row["reading_order"], ["/page/0/Text/0"])
+        self.assertEqual(
+            row["source_blocks"][0]["component_id"],
+            "/page/0/Text/0",
+        )
 
     def test_markdown_is_preserved_without_structural_parsing(self) -> None:
         content = "# Heading\n\n- first\n- second\n"
@@ -44,9 +60,11 @@ class TextParserBackendV1Tests(unittest.TestCase):
 
             result = self.backend.parse(path, _data_object(path))
 
-        self.assertEqual(result.status, ParseStatus.SUCCESS)
-        self.assertEqual(result.parsed_data.text, content)
-        self.assertEqual(result.parsed_data.tables, [])
+        self._assert_contract(result, content)
+        self.assertEqual(
+            result.parsed_data.rows[0]["extraction"]["title"],
+            "Heading",
+        )
 
     def test_empty_text_file_is_a_success_with_no_content(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -55,11 +73,13 @@ class TextParserBackendV1Tests(unittest.TestCase):
 
             result = self.backend.parse(path, _data_object(path))
 
-        self.assertEqual(result.status, ParseStatus.SUCCESS)
-        self.assertEqual(result.parsed_data.text, "")
-        self.assertEqual(result.parsed_data.rows, [])
+        self._assert_contract(result, "")
+        row = result.parsed_data.rows[0]
+        self.assertEqual(row["source_blocks"], [])
+        self.assertEqual(row["reading_order"], [])
+        self.assertEqual(row["extraction"]["title"], "empty")
 
-    def test_json_keeps_raw_text_and_compatible_rows(self) -> None:
+    def test_json_keeps_raw_text_in_one_canonical_row(self) -> None:
         payload = [{"name": "Ada"}, 2, "three"]
         raw = json.dumps(payload, ensure_ascii=False)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -68,12 +88,48 @@ class TextParserBackendV1Tests(unittest.TestCase):
 
             result = self.backend.parse(path, _data_object(path))
 
-        self.assertEqual(result.status, ParseStatus.SUCCESS)
-        self.assertEqual(result.parsed_data.text, raw)
+        self._assert_contract(result, raw)
+        self.assertEqual(result.parsed_data.rows[0]["extraction"]["title"], "data")
+
+    def test_json_root_shapes_all_remain_text(self) -> None:
+        payloads = {
+            "object": {"name": "Ada"},
+            "array": ["một", "اثنان"],
+            "primitive": 42,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for name, payload in payloads.items():
+                with self.subTest(name=name):
+                    raw = json.dumps(payload, ensure_ascii=False)
+                    path = root / f"{name}.json"
+                    path.write_text(raw, encoding="utf-8")
+                    result = self.backend.parse(path, _data_object(path, name))
+
+                    self._assert_contract(result, raw)
+                    self.assertEqual(len(result.parsed_data.rows), 1)
+
+    def test_arabic_markdown_heading_is_preserved_as_title(self) -> None:
+        content = "## صدام حسين\n\nنص عربي للاختبار.\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "arabic.md"
+            path.write_text(content, encoding="utf-8")
+            result = self.backend.parse(path, _data_object(path))
+
+        self._assert_contract(result, content)
         self.assertEqual(
-            result.parsed_data.rows,
-            [{"name": "Ada"}, {"value": 2}, {"value": "three"}],
+            result.parsed_data.rows[0]["extraction"]["title"],
+            "صدام حسين",
         )
+
+    def test_invalid_json_returns_failed_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "broken.json"
+            path.write_text('{"broken":', encoding="utf-8")
+            result = self.backend.parse(path, _data_object(path))
+
+        self.assertEqual(result.status, ParseStatus.FAILED)
+        self.assertEqual(result.backend, "text")
 
     def test_jsonl_yaml_and_yml_remain_plain_text(self) -> None:
         cases = {
@@ -89,12 +145,18 @@ class TextParserBackendV1Tests(unittest.TestCase):
                     path.write_text(content, encoding="utf-8")
                     result = self.backend.parse(path, _data_object(path, name))
 
-                    self.assertEqual(result.status, ParseStatus.SUCCESS)
-                    self.assertEqual(result.parsed_data.text, content)
-                    self.assertEqual(result.parsed_data.rows, [{"text": content}])
-                    self.assertEqual(result.parsed_data.tables, [])
+                    self._assert_contract(result, content)
 
-    def test_csv_detects_supported_delimiters(self) -> None:
+    def test_csv_is_not_supported_by_text_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "records.csv"
+            path.write_text("name,score\nAda,10\n", encoding="utf-8")
+            result = self.backend.parse(path, _data_object(path))
+
+        self.assertEqual(result.status, ParseStatus.FAILED)
+        self.assertIn("Unsupported text extension", result.error["message"])
+
+    def _legacy_csv_detects_supported_delimiters(self) -> None:
         cases = {
             "comma.csv": ("name,score\nAda,10\n", ["name", "score"]),
             "semicolon.csv": ("name;score\nAda;10\n", ["name", "score"]),
@@ -115,7 +177,7 @@ class TextParserBackendV1Tests(unittest.TestCase):
                     self.assertEqual(table.rows, [["Ada", "10"]])
                     self.assertEqual(result.parsed_data.rows, [{"name": "Ada", "score": "10"}])
 
-    def test_csv_normalizes_headers_and_ragged_rows(self) -> None:
+    def _legacy_csv_normalizes_headers_and_ragged_rows(self) -> None:
         content = "\n,name,name\n1,A,B\n2,C,D,extra\n3\n"
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "ragged.csv"
@@ -138,7 +200,7 @@ class TextParserBackendV1Tests(unittest.TestCase):
             {"column_1": "2", "name": "C", "name_2": "D", "column_4": "extra"},
         )
 
-    def test_csv_detects_non_comma_delimiters_with_ragged_rows(self) -> None:
+    def _legacy_csv_detects_non_comma_delimiters_with_ragged_rows(self) -> None:
         cases = {
             "ragged-semicolon.csv": "a;b\n1;2;3\n",
             "ragged-tab.csv": "a\tb\n1\t2\t3\n",
@@ -156,7 +218,7 @@ class TextParserBackendV1Tests(unittest.TestCase):
                     self.assertEqual(result.parsed_data.tables[0].headers, ["a", "b", "column_3"])
                     self.assertEqual(result.parsed_data.tables[0].rows, [["1", "2", "3"]])
 
-    def test_csv_preserves_quoted_newline(self) -> None:
+    def _legacy_csv_preserves_quoted_newline(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "quoted.csv"
             path.write_text('body,value\n"line one\nline two",x\n', encoding="utf-8")
@@ -165,7 +227,7 @@ class TextParserBackendV1Tests(unittest.TestCase):
 
         self.assertEqual(result.parsed_data.tables[0].rows, [["line one\nline two", "x"]])
 
-    def test_empty_csv_has_an_empty_table_and_success_status(self) -> None:
+    def _legacy_empty_csv_has_an_empty_table_and_success_status(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "empty.csv"
             path.write_text("", encoding="utf-8")

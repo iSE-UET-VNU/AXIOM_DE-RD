@@ -9,6 +9,10 @@ venv/
 .env
 .streamlit/
 
+# Keep only the main pipeline configuration under version control.
+/configs/*
+!/configs/pipeline.yaml
+
 # Local benchmark checkouts and generated probe artifacts.
 /ParseBench/
 /tmp/
@@ -21,6 +25,7 @@ data/enriched/*
 data/embedded/*
 data/output/*
 data/work/*
+data/processed/*
 
 !data/ingested/.gitkeep
 !data/cleaned/.gitkeep

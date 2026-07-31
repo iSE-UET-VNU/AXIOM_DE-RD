@@ -67,7 +67,12 @@ def run(
     )
     parse_result = ParsingService.from_config(parser_config).parse(path, data_object)
     output = IngestionOutput()
-    _accept_parse_result(output, data_object, parse_result)
+    _accept_parse_result(
+        output,
+        data_object,
+        parse_result,
+        project_root=project_root,
+    )
     return output
 
 
@@ -99,7 +104,12 @@ def run_many(
 
     parse_results = ParsingService.from_config(parser_config).parse_many(prepared)
     for (_, data_object), parse_result in zip(prepared, parse_results):
-        _accept_parse_result(output, data_object, parse_result)
+        _accept_parse_result(
+            output,
+            data_object,
+            parse_result,
+            project_root=project_root,
+        )
     return output
 
 
@@ -132,9 +142,20 @@ def _accept_parse_result(
     output: IngestionOutput,
     data_object: DataObject,
     parse_result: ParseResult,
+    *,
+    project_root: str | Path | None,
 ) -> None:
-    parsed = _require_parsed_data(parse_result)
-    apply_image_filters(parsed)
+    if (
+        parse_result.status is not ParseStatus.SUCCESS
+        or parse_result.parsed_data is None
+    ):
+        output.quarantined_documents.append(
+            _parse_failure_quarantine(data_object, parse_result)
+        )
+        return
+
+    parsed = parse_result.parsed_data
+    apply_image_filters(parsed, project_root=project_root)
     quarantine_reasons = validate_parsed_document(parsed)
     if quarantine_reasons:
         output.quarantined_documents.append(
@@ -154,25 +175,43 @@ def _accept_parse_result(
     output.initial_schemas.append(schema)
 
 
-_PARSER_ERROR_TYPES: dict[str, type[Exception]] = {
-    "ConnectionError": ConnectionError,
-    "FileNotFoundError": FileNotFoundError,
-    "PermissionError": PermissionError,
-    "TimeoutError": TimeoutError,
-    "ValueError": ValueError,
-}
-
-
-def _require_parsed_data(result: ParseResult) -> ParsedData:
-    """Unwrap a successful routed parse while retaining fail-fast behavior."""
-    if result.status is ParseStatus.SUCCESS and result.parsed_data is not None:
-        return result.parsed_data
-
+def _parse_failure_quarantine(
+    data_object: DataObject,
+    result: ParseResult,
+) -> QuarantinedDocument:
     message = str(
         result.error.get("message")
         or result.reason
-        or f"{result.backend} parser returned {result.status.value}"
+        or f"{result.backend} parser returned {result.status.value}."
     )
-    error_type = str(result.error.get("type") or "")
-    exception_type = _PARSER_ERROR_TYPES.get(error_type, RuntimeError)
-    raise exception_type(message)
+    parsed = ParsedData(
+        object_id=data_object.object_id,
+        source_uri=data_object.uri,
+        source_format=str(data_object.metadata.get("format") or ""),
+        metadata={
+            "parser": result.backend,
+            "backend": result.backend,
+            "status": result.status.value,
+            "parse_reason": result.reason,
+            "parse_error": dict(result.error),
+        },
+    )
+    return QuarantinedDocument(
+        document_id=data_object.object_id,
+        source=data_object,
+        parsed=parsed,
+        reasons=[
+            {
+                "code": (
+                    "parse_failed"
+                    if result.status is ParseStatus.FAILED
+                    else f"parse_{result.status.value}"
+                ),
+                "field": "parsing",
+                "message": message,
+                "backend": result.backend,
+                "route": result.route,
+                "error": dict(result.error),
+            }
+        ],
+    )

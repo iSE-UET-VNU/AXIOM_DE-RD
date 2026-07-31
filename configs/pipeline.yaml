@@ -28,13 +28,13 @@
       ".webp",
       ".txt",
       ".md",
-      ".csv",
       ".json",
       ".jsonl",
       ".yaml",
       ".yml",
-      ".xls",
-      ".xlsx"
+      ".pptx",
+      ".doc",
+      ".docx"
     ],
     "max_files": null
   },
@@ -54,6 +54,14 @@
   ],
   "parsing": {
     "provider": "chandra2",
+    "pptx": {
+      "extract_images": true
+    },
+    "word": {
+      "extract_images": true,
+      "soffice_path": null,
+      "conversion_timeout_seconds": 120
+    },
     "chandra2": {
       "method": "vllm",
       "continuous_page_queue": true,

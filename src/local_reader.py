@@ -17,13 +17,13 @@ DEFAULT_INCLUDE_EXTENSIONS = [
     ".webp",
     ".txt",
     ".md",
-    ".csv",
     ".json",
     ".jsonl",
     ".yaml",
     ".yml",
-    ".xls",
-    ".xlsx",
+    ".pptx",
+    ".doc",
+    ".docx",
 ]
 
 

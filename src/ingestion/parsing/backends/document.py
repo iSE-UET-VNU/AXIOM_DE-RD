@@ -8,7 +8,7 @@ from ....models import DataObject, ParseResult
 from ..contracts import DocumentProvider
 
 DOCUMENT_EXTENSIONS = frozenset(
-    {".pdf", ".pptx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".tif", ".tiff"}
+    {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".tif", ".tiff"}
 )
 
 

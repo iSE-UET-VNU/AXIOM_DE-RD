@@ -258,20 +258,15 @@ class Chandra2ProviderTests(unittest.TestCase):
         self.assertEqual(backend.provider.config.method, "hf")
         self.assertEqual(backend.provider.config.batch_size, 1)
 
-    def test_chandra_defers_pptx_without_loading_runtime(self) -> None:
+    def test_chandra_routes_pptx_to_native_backend_without_loading_runtime(self) -> None:
         with patch("src.ingestion.parsing.chandra2._load_runtime") as load_runtime:
             service = ParsingService.from_config(
                 {"document": {"provider": "chandra2"}}
             )
-            path = Path("slides.pptx")
-            result = service.parse(path, _data_object(path))
+            backend = service.router.resolve(Path("slides.pptx"))
 
         load_runtime.assert_not_called()
-        self.assertEqual(result.status, ParseStatus.DEFERRED)
-        self.assertEqual(
-            result.reason,
-            "document_provider_does_not_support_extension",
-        )
+        self.assertEqual(backend.backend_name, "pptx")
 
     def test_lift_fallback_alias_remains_compatible(self) -> None:
         service = ParsingService.from_config(
@@ -1162,7 +1157,7 @@ class Chandra2EndToEndTests(unittest.TestCase):
             Counter({"document": 1, "text_chunk": 1, "catalog": 1}),
         )
 
-    def test_chandra_failure_propagates_from_main_file_runner(self) -> None:
+    def test_chandra_failure_is_quarantined_by_main_file_runner(self) -> None:
         manager = _FakeManager({}, error=ConnectionError("vLLM unavailable"))
         runtime = _runtime(["page-1"], manager)
 
@@ -1174,17 +1169,19 @@ class Chandra2EndToEndTests(unittest.TestCase):
                 "src.ingestion.parsing.chandra2._load_runtime",
                 return_value=runtime,
             ):
-                with self.assertRaisesRegex(
-                    ConnectionError,
-                    "vLLM unavailable",
-                ):
-                    run_ingestion(
-                        path,
-                        parser_config={
-                            "provider": "chandra2",
-                            "chandra2": {"save_raw_outputs": False},
-                        },
-                    )
+                output = run_ingestion(
+                    path,
+                    parser_config={
+                        "provider": "chandra2",
+                        "chandra2": {"save_raw_outputs": False},
+                    },
+                )
+
+        self.assertEqual(output.parsed_data, [])
+        self.assertEqual(len(output.quarantined_documents), 1)
+        reason = output.quarantined_documents[0].reasons[0]
+        self.assertEqual(reason["code"], "parse_failed")
+        self.assertIn("vLLM unavailable", reason["message"])
 
 
 if __name__ == "__main__":
