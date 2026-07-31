@@ -16,7 +16,7 @@ venv/
 # Local benchmark checkouts and generated probe artifacts.
 /ParseBench/
 /tmp/
-/test/
+/tests/
 /chandra2_technical_summary_for_codex.md
 /debug.log
 
