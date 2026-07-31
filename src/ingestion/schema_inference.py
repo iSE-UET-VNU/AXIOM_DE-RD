@@ -50,6 +50,7 @@ def build_initial_schema(parsed: ParsedData) -> InitialSchema:
     entities that downstream stages can rely on.
     """
     document = _document_view(parsed)
+    parsed_table_fields = _parsed_table_fields(parsed)
     component_counts = {
         "rows": len(parsed.rows),
         "tables": len(document["tables"]),
@@ -60,14 +61,14 @@ def build_initial_schema(parsed: ParsedData) -> InitialSchema:
     return InitialSchema(
         schema_id=make_id(parsed.object_id, "initial-schema"),
         source_object_id=parsed.object_id,
-        fields=_schema_fields(),
-        entities=_schema_entities(component_counts),
+        fields=_schema_fields(parsed_table_fields),
+        entities=_schema_entities(component_counts, parsed_table_fields),
         relationships=_schema_relationships(component_counts),
         metadata={
             "contract_version": INITIAL_SCHEMA_CONTRACT_VERSION,
             "schema_type": "document",
             "schema_source": "format_parsing",
-            "parser": parsed.metadata.get("parser"),
+            "parser": parsed.metadata.get("parser") or parsed.metadata.get("backend"),
             "source_format": parsed.source_format,
             "source_uri": parsed.source_uri,
             "row_count": len(parsed.rows),
@@ -93,6 +94,7 @@ def _document_view(parsed: ParsedData) -> dict[str, Any]:
         "formulas": [],
     }
     text_parts: list[str] = []
+    document["tables"].extend(_parsed_tables(parsed))
 
     for row in parsed.rows:
         extraction = row.get("extraction") if isinstance(row.get("extraction"), dict) else {}
@@ -110,25 +112,33 @@ def _document_view(parsed: ParsedData) -> dict[str, Any]:
             extraction.get("markdown"),
             extraction.get("content"),
             row.get("text"),
-            parsed.text,
         )
         if text:
             text_parts.append(text)
 
+    parsed_text = _text_or_none(parsed.text)
+    if parsed_text and parsed_text not in text_parts:
+        text_parts.append(parsed_text)
     document["main_text"] = "\n\n".join(text_parts)
     return document
 
 
-def _schema_fields() -> dict[str, str]:
+def _schema_fields(
+    parsed_table_fields: dict[str, str] | None = None,
+) -> dict[str, str]:
     return {
         **DOCUMENT_FIELDS,
         **TABLE_FIELDS,
+        **(parsed_table_fields or {}),
         **FIGURE_FIELDS,
         **FORMULA_FIELDS,
     }
 
 
-def _schema_entities(component_counts: dict[str, int]) -> list[dict[str, Any]]:
+def _schema_entities(
+    component_counts: dict[str, int],
+    parsed_table_fields: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     return [
         {
             "entity_type": "document",
@@ -140,7 +150,7 @@ def _schema_entities(component_counts: dict[str, int]) -> list[dict[str, Any]]:
             "entity_type": "table",
             "primary_key": "table_id",
             "count": component_counts["tables"],
-            "fields": TABLE_FIELDS,
+            "fields": {**TABLE_FIELDS, **(parsed_table_fields or {})},
         },
         {
             "entity_type": "figure",
@@ -200,6 +210,44 @@ def _tables(value: Any) -> list[dict[str, str]]:
         else:
             tables.append({"caption": "", "content": str(item)})
     return tables
+
+
+def _parsed_tables(parsed: ParsedData) -> list[dict[str, Any]]:
+    tables: list[dict[str, Any]] = []
+    for index, table in enumerate(getattr(parsed, "tables", None) or []):
+        name = _table_value(table, "name") or f"Table {index + 1}"
+        headers = [str(value) for value in (_table_value(table, "headers") or [])]
+        rows = [
+            ["" if value is None else str(value) for value in row]
+            for row in (_table_value(table, "rows") or [])
+            if isinstance(row, (list, tuple))
+        ]
+        tables.append(
+            {
+                "caption": str(name),
+                "content": "\n".join(" | ".join(row) for row in ([headers] if headers else []) + rows),
+                "headers": headers,
+                "rows": rows,
+                "source_ref": str(_table_value(table, "source_ref") or f"table-{index}"),
+            }
+        )
+    return tables
+
+
+def _parsed_table_fields(parsed: ParsedData) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for table in getattr(parsed, "tables", None) or []:
+        for header in _table_value(table, "headers") or []:
+            name = str(header).strip()
+            if name:
+                fields[f"table.{name}"] = "string"
+    return fields
+
+
+def _table_value(table: Any, field_name: str) -> Any:
+    if isinstance(table, dict):
+        return table.get(field_name)
+    return getattr(table, field_name, None)
 
 
 def _figures(value: Any) -> list[dict[str, str]]:

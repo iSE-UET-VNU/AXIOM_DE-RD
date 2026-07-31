@@ -58,4 +58,28 @@ def resolve_parser_config(
         lift_config["output_dir"] = str(Path(parser_assets_dir))
         lift_config["project_root"] = str(project_root)
         parser_config["lift_api"] = lift_config
+
+    chandra_config = parser_config.get("chandra2")
+    if isinstance(chandra_config, dict):
+        chandra_config = dict(chandra_config)
+        chandra_config["output_dir"] = str(Path(parser_assets_dir))
+        chandra_config["project_root"] = str(project_root)
+        parser_config["chandra2"] = chandra_config
+
+    pptx_config = parser_config.get("pptx")
+    pptx_config = dict(pptx_config) if isinstance(pptx_config, dict) else {}
+    pptx_config["output_dir"] = str(Path(parser_assets_dir))
+    pptx_config["project_root"] = str(project_root)
+    parser_config["pptx"] = pptx_config
+
+    word_config = parser_config.get("word")
+    word_config = dict(word_config) if isinstance(word_config, dict) else {}
+    word_config["output_dir"] = str(Path(parser_assets_dir))
+    word_config["project_root"] = str(project_root)
+    soffice_path = word_config.get("soffice_path")
+    if soffice_path:
+        word_config["soffice_path"] = str(
+            resolve_project_path(project_root, soffice_path)
+        )
+    parser_config["word"] = word_config
     return parser_config

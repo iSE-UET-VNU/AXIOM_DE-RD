@@ -9,6 +9,17 @@ venv/
 .env
 .streamlit/
 
+# Keep only the main pipeline configuration under version control.
+/configs/*
+!/configs/pipeline.yaml
+
+# Local benchmark checkouts and generated probe artifacts.
+/ParseBench/
+/tmp/
+/tests/
+/chandra2_technical_summary_for_codex.md
+/debug.log
+
 # Local inputs and presigned-URL inventories can contain sensitive data.
 data/raw/
 data/ingested/*
@@ -16,6 +27,8 @@ data/cleaned/*
 data/enriched/*
 data/embedded/*
 data/output/*
+data/work/*
+data/processed/*
 
 !data/ingested/.gitkeep
 !data/cleaned/.gitkeep

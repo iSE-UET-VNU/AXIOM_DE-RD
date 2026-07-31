@@ -12,6 +12,7 @@ import json
 
 from ...models import DataObject, InitialSchema, ParsedData
 from ..schema_inference import build_initial_schema
+from .chandra2 import Chandra2Config, Chandra2Provider
 from .lift import LiftAPIConfig, LiftAPIParserClient
 
 TEXT_FORMATS = {"csv", "json", "jsonl", "txt", "md", "yaml", "yml"}
@@ -25,8 +26,11 @@ def parse_raw_file(
 ) -> ParsedData:
     """Parse a raw file using the configured parser provider."""
     parser_config = parser_config or {}
-    if parser_config.get("provider") == "lift_api":
+    provider = _provider_name(parser_config.get("provider"))
+    if provider == "lift_api":
         return _parse_with_lift_api(path, data_object, parser_config)
+    if provider == "chandra2":
+        return _parse_with_chandra2(path, data_object, parser_config)
 
     return _parse_locally(path, data_object)
 
@@ -53,6 +57,16 @@ def _parse_with_lift_api(
             }
         )
         return parsed
+
+
+def _parse_with_chandra2(
+    path: str | Path,
+    data_object: DataObject,
+    parser_config: dict[str, Any],
+) -> ParsedData:
+    chandra_config = Chandra2Config.from_mapping(parser_config.get("chandra2"))
+    provider = Chandra2Provider(chandra_config)
+    return provider.parse_file(path, data_object)
 
 
 def _parse_locally(path: str | Path, data_object: DataObject) -> ParsedData:
@@ -102,6 +116,15 @@ def _parse_locally(path: str | Path, data_object: DataObject) -> ParsedData:
 
 def infer_initial_schema(parsed: ParsedData) -> InitialSchema:
     return build_initial_schema(parsed)
+
+
+def _provider_name(value: Any) -> str:
+    provider = str(value or "").strip().lower().replace("-", "_")
+    if provider in {"lift", "lift_api"}:
+        return "lift_api"
+    if provider in {"chandra", "chandra2", "chandra_2"}:
+        return "chandra2"
+    return provider
 
 
 def _parse_csv(path: Path) -> list[dict[str, Any]]:

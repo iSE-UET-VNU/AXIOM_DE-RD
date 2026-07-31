@@ -128,11 +128,20 @@ def run_pipeline(
             state.input_source = batch.source
             state.raw_dir = batch.source
             expected_document_count = len(batch.inputs)
-            for item in batch.inputs:
-                partial_result = ingestion.run(
-                    item.path,
-                    source_uri=item.source_uri,
-                    input_metadata=item.metadata,
+            if _uses_continuous_chandra_queue(parser_config):
+                logger.info(
+                    "Submitting %s local document(s) to the continuous Chandra2 page queue",
+                    len(batch.inputs),
+                )
+                partial_result = ingestion.run_many(
+                    [
+                        ingestion.IngestionInput(
+                            path=item.path,
+                            source_uri=item.source_uri,
+                            metadata=item.metadata,
+                        )
+                        for item in batch.inputs
+                    ],
                     parser_config=parser_config,
                     project_root=project_root,
                 )
@@ -144,6 +153,23 @@ def run_pipeline(
                     expected_document_count,
                     persist_artifacts,
                 )
+            else:
+                for item in batch.inputs:
+                    partial_result = ingestion.run(
+                        item.path,
+                        source_uri=item.source_uri,
+                        input_metadata=item.metadata,
+                        parser_config=parser_config,
+                        project_root=project_root,
+                    )
+                    _accept_ingestion_result(
+                        state,
+                        partial_result,
+                        ingested_dir,
+                        project_root,
+                        expected_document_count,
+                        persist_artifacts,
+                    )
         else:
             resolved_s3_config = {**s3_config, "mode": input_mode}
             raw_objects_dir = raw_dir / "objects"
@@ -489,6 +515,20 @@ def _configure_logging(config: dict[str, Any]) -> None:
     logging.basicConfig(
         level=getattr(logging, level_name.upper(), logging.INFO),
         format="%(levelname)s %(name)s - %(message)s",
+    )
+
+
+def _uses_continuous_chandra_queue(parser_config: dict[str, Any]) -> bool:
+    provider = str(parser_config.get("provider") or "").strip().lower()
+    document_config = parser_config.get("document")
+    if provider in {"", "router"} and isinstance(document_config, dict):
+        provider = str(document_config.get("provider") or "").strip().lower()
+    provider = provider.replace("-", "_")
+    chandra_config = parser_config.get("chandra2")
+    return (
+        provider in {"chandra", "chandra2", "chandra_2"}
+        and isinstance(chandra_config, dict)
+        and bool(chandra_config.get("continuous_page_queue", False))
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 import hashlib
 
@@ -21,6 +22,31 @@ class DataObject:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+class ParseStatus(str, Enum):
+    """Outcome of routing and parsing one source object."""
+
+    SUCCESS = "success"
+    DEFERRED = "deferred"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+
+
+@dataclass
+class ParsedTable:
+    """Provider-neutral tabular content extracted from one source location.
+
+    ``headers`` and ``rows`` are kept separate so downstream normalizers can
+    choose their own physical representation without having to guess whether
+    the first row contains column names.
+    """
+
+    name: str
+    source_ref: str
+    headers: list[str] = field(default_factory=list)
+    rows: list[list[str]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class ParsedData:
     object_id: str
@@ -29,6 +55,92 @@ class ParsedData:
     rows: list[dict[str, Any]] = field(default_factory=list)
     text: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    tables: list[ParsedTable] = field(default_factory=list)
+
+
+@dataclass
+class ParseResult:
+    """Provider-neutral result returned for every discovered input file."""
+
+    source_object_id: str
+    backend: str
+    status: ParseStatus
+    route: str | None = None
+    parsed_data: ParsedData | None = None
+    reason: str | None = None
+    error: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def success(
+        cls,
+        source_object_id: str,
+        backend: str,
+        parsed_data: ParsedData,
+        *,
+        route: str,
+    ) -> "ParseResult":
+        parsed_data.metadata.setdefault("backend", backend)
+        parsed_data.metadata.setdefault("status", ParseStatus.SUCCESS.value)
+        return cls(
+            source_object_id=source_object_id,
+            backend=backend,
+            status=ParseStatus.SUCCESS,
+            route=route,
+            parsed_data=parsed_data,
+        )
+
+    @classmethod
+    def deferred(
+        cls,
+        source_object_id: str,
+        backend: str,
+        *,
+        route: str,
+        reason: str,
+        error: dict[str, Any] | None = None,
+    ) -> "ParseResult":
+        return cls(
+            source_object_id=source_object_id,
+            backend=backend,
+            status=ParseStatus.DEFERRED,
+            route=route,
+            reason=reason,
+            error=dict(error or {}),
+        )
+
+    @classmethod
+    def unsupported(cls, source_object_id: str, extension: str) -> "ParseResult":
+        normalized_extension = extension.lower() or "<none>"
+        return cls(
+            source_object_id=source_object_id,
+            backend="unsupported",
+            status=ParseStatus.UNSUPPORTED,
+            route="unsupported",
+            reason=f"unsupported_extension:{normalized_extension}",
+        )
+
+    @classmethod
+    def failed(
+        cls,
+        source_object_id: str,
+        backend: str,
+        exc: Exception,
+        *,
+        route: str | None,
+        reason: str = "parse_failed",
+        error_type: str | None = None,
+    ) -> "ParseResult":
+        return cls(
+            source_object_id=source_object_id,
+            backend=backend,
+            status=ParseStatus.FAILED,
+            route=route,
+            reason=reason,
+            error={
+                "type": error_type or type(exc).__name__,
+                "message": str(exc),
+            },
+        )
 
 
 @dataclass
@@ -150,6 +262,7 @@ class PipelineState:
     enriched_dir: str | None = None
     data_objects: list[DataObject] = field(default_factory=list)
     parsed_data: list[ParsedData] = field(default_factory=list)
+    parse_results: list[ParseResult] = field(default_factory=list)
     initial_schemas: list[InitialSchema] = field(default_factory=list)
     quarantined_documents: list[QuarantinedDocument] = field(default_factory=list)
     cleaned_data: list[CleanedData] = field(default_factory=list)
