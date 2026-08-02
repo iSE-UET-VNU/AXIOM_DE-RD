@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 import argparse
@@ -290,11 +291,27 @@ def run_pipeline(
         )
 
     if "indexing_cataloging" in enabled_modules:
-        result = indexing_cataloging.run(
-            state.enriched_data,
-            state.enriched_schemas,
-            indexing_config=config.get("indexing", {}),
-        )
+        indexing_config = config.get("indexing", {})
+        engine = str(indexing_config.get("engine") or "indexing_cataloging")
+        if engine == "chunking_embedding":
+            # Imported lazily
+            from .chunking_embedding import pipeline_stage
+
+            result = pipeline_stage.run(
+                [asdict(record) for record in state.parsed_data],
+                config.get("chunking_embedding", {}),
+            )
+        elif engine == "indexing_cataloging":
+            result = indexing_cataloging.run(
+                state.enriched_data,
+                state.enriched_schemas,
+                indexing_config=indexing_config,
+            )
+        else:
+            raise ValueError(
+                f"Unknown indexing engine {engine!r}; "
+                "expected 'indexing_cataloging' or 'chunking_embedding'."
+            )
         state.metadata_records = result.metadata_records
         state.index_records = result.index_records
         state.index_quality_report = result.index_quality_report

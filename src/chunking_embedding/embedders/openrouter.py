@@ -1,8 +1,7 @@
-"""OpenRouter embedder — hardened OpenAI-wire-format client (production default).
+"""OpenRouter embedder — (production default).
 
-Disk cache keyed by sha1(model|text), batch 64, input sanitization, and retry
-with exponential backoff on the HTTP-200-with-error-body responses OpenRouter
-occasionally returns. Raises with the server's own error message once exhausted.
+Cache keyed by sha1(model|text), batch 64, input sanitization, and retry
+with exponential backoff.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import time
 import requests
 
 from ..registry import embedder
-from ._sanitize import sanitize_text
+from ._sanitize import MAX_REQUEST_TOKENS, sanitize_text, token_batches
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -31,8 +30,9 @@ class OpenRouterEmbedder:
         model: str = "openai/text-embedding-3-small",
         dimension: int = 1536,
         api_key_env: str = "OPENROUTER_API_KEY",
-        base_url: str = OPENROUTER_BASE_URL,
+        base_url: str = "",
         batch_size: int = 64,
+        max_request_tokens: int = MAX_REQUEST_TOKENS,
         cache_dir: str | Path = "data/work/embedding_cache",
         timeout: float = 120.0,
         max_retries: int = 4,
@@ -41,8 +41,9 @@ class OpenRouterEmbedder:
         self.model = model
         self.dim = dimension
         self.api_key_env = api_key_env
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url or os.getenv("OPENROUTER_BASE_URL") or OPENROUTER_BASE_URL).rstrip("/")
         self.batch_size = max(1, batch_size)
+        self.max_request_tokens = max_request_tokens
         self.cache_dir = Path(cache_dir)
         self.timeout = timeout
         self.max_retries = max(1, max_retries)
@@ -62,13 +63,13 @@ class OpenRouterEmbedder:
                 self.stats["cache_hits"] += 1
             else:
                 todo.append(i)
-        for batch_start in range(0, len(todo), self.batch_size):
-            batch_idx = todo[batch_start:batch_start + self.batch_size]
+        batches, tokens = token_batches(todo, sanitized, self.batch_size, self.max_request_tokens)
+        self.stats["tokens"] += tokens
+        for batch_idx in batches:
             batch = [sanitized[i] for i in batch_idx]
             for i, vector in zip(batch_idx, self._embed_batch(batch)):
                 vectors[i] = vector
                 self._cache_write(sanitized[i], vector)
-                self.stats["tokens"] += max(1, len(sanitized[i]) // 4)
         return [v for v in vectors if v is not None]
 
     def _embed_batch(self, batch: list[str]) -> list[list[float]]:
