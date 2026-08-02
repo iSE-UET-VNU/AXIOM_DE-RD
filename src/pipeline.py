@@ -297,8 +297,12 @@ def run_pipeline(
             # Imported lazily
             from .chunking_embedding import pipeline_stage
 
+            # Enriched, not parsed: both engines then sit downstream of cleaning
+            # and enrichment. They are pass-throughs today, so the content is
+            # identical -- but reading parsed_data would silently skip their work
+            # the day either is implemented.
             result = pipeline_stage.run(
-                [asdict(record) for record in state.parsed_data],
+                [asdict(record) for record in state.enriched_data],
                 config.get("chunking_embedding", {}),
             )
         elif engine == "indexing_cataloging":
