@@ -298,7 +298,7 @@ def run_pipeline(
             from .chunking_embedding import pipeline_stage
 
             result = pipeline_stage.run(
-                [asdict(record) for record in state.parsed_data],
+                [asdict(record) for record in state.enriched_data],
                 config.get("chunking_embedding", {}),
             )
         elif engine == "indexing_cataloging":

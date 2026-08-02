@@ -31,7 +31,26 @@ class ChunkingCatalogOutput:
     embedding_report: dict[str, Any] = field(default_factory=dict)
 
 
+def _as_chunker_input(record: dict[str, Any]) -> dict[str, Any]:
+    """Accept either a ParsedData or an EnrichedData mapping.
+
+    EnrichedData carries the same ``rows`` but renames ``object_id`` to
+    ``source_object_id`` and moves ``source_uri`` into ``metadata``. Reading the
+    enriched stage keeps us behind cleaning and enrichment, so when those stop
+    being pass-throughs their work reaches our chunks instead of being skipped.
+    """
+    if record.get("object_id"):
+        return record
+    metadata = record.get("metadata") or {}
+    return {
+        **record,
+        "object_id": record.get("source_object_id") or "",
+        "source_uri": record.get("source_uri") or metadata.get("source_uri"),
+    }
+
+
 def run(parsed_records: list[dict[str, Any]], config_section: Any) -> ChunkingCatalogOutput:
+    parsed_records = [_as_chunker_input(record) for record in parsed_records]
     config = ChunkEmbedConfig.from_mapping(config_section)
     embedder = create_embedder(config.embedder, config.embedder_params)
     result = chunk_and_embed(parsed_records, config, embedder=embedder)
