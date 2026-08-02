@@ -126,6 +126,7 @@
     "retrieval_profile": "hybrid_default"
   },
   "indexing": {
+    "engine": "chunking_embedding",
     "embeddings": {
       "enabled": true,
       "target_index_types": [

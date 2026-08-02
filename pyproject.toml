@@ -17,6 +17,10 @@ dependencies = [
     "python-docx>=1.2.0,<2.0.0",
     "python-dotenv>=1.0.0",
     "streamlit[pdf]>=1.49.0",
+    # Exact token counts when batching embedding requests. Without it the
+    # embedders fall back to an upper-bound estimate: correct, but it sends
+    # smaller batches than necessary.
+    "tiktoken>=0.13.0",
     "uvicorn[standard]>=0.30.0",
     "xlrd>=2.0.1",
 ]

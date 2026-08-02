@@ -27,7 +27,8 @@ AXIOM_DE-RD/
 │   ├── ingestion/                    # Local-file parsing and schema inference
 │   ├── cleaning/                     # Cleaning stage
 │   ├── enrichment/                   # Enrichment stage
-│   ├── indexing_cataloging/          # Chunking, indexing, quality, embeddings
+│   ├── chunking_embedding/           # Default indexing engine: pluggable chunkers/embedders
+│   ├── indexing_cataloging/          # Legacy indexing engine; also shared lexical/document helpers
 │   ├── integration/                  # Integration stage
 │   ├── artifacts/                    # Per-document artifact writers
 │   ├── models.py                     # Shared pipeline data contracts
@@ -91,7 +92,35 @@ Important settings include:
 | `enabled_modules` | Pipeline stages to enable; execution follows the order defined by the orchestrator |
 | `parsing` | Parser provider and Lift options |
 | `table_agent` | TableAgent API routing, authentication, timeout, and workbook extensions |
-| `indexing.embeddings` | Embedding provider, model, dimensions, and targets |
+| `indexing.engine` | Indexing engine: `chunking_embedding` (default) or `indexing_cataloging` |
+| `indexing.embeddings` | Embedding provider, model, dimensions, and targets (`indexing_cataloging` only) |
+| `chunking_embedding` | Chunker, embedder, and their parameters (`chunking_embedding` only) |
+
+### Indexing engines
+
+`indexing.engine` selects what turns parsed documents into retrieval items.
+
+| | `chunking_embedding` (default) | `indexing_cataloging` (legacy) |
+|---|---|---|
+| Input | `parsed_data` | `enriched_data` + schemas |
+| Chunking | pluggable, one file per chunker | fixed, built in |
+| Embedding | pluggable, one file per embedder | `indexing.embeddings` provider |
+| Configured by | `chunking_embedding` | `indexing.embeddings` |
+
+Both emit the same `output-document-v4` contract, including the `lexical`
+payload corpus-service needs for server-side BM25, so downstream consumers
+cannot tell them apart. Workbooks are unaffected by this setting: they are
+routed to TableAgent and normalized there, bypassing both engines.
+
+Add a chunker or embedder by dropping a file into
+`src/chunking_embedding/chunkers/` or `.../embedders/` and decorating it —
+the registry discovers it at import, and no other file changes:
+
+```python
+@chunker("my_chunker")
+def my_chunker(text: str, size: int = 400) -> list[Span]:
+    ...
+```
 
 ### TableAgent integration
 

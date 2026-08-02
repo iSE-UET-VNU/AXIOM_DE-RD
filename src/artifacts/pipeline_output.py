@@ -642,6 +642,12 @@ def _retrieval_item_position(record: Any) -> dict[str, Any]:
                 "end_char": payload.get("end_char"),
             }
         )
+    # Which chunking/embedding settings produced this item. It rides in position
+    # because the indexing job persists position verbatim and drops unknown
+    # item-level keys; there is no column for it yet. Consumers that do not read
+    # it are unaffected. See docs/platform_config_hash_proposal.md.
+    if payload.get("config_hash"):
+        position["config_hash"] = payload["config_hash"]
     return position
 
 
