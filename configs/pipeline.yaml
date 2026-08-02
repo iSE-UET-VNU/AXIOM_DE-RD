@@ -109,9 +109,10 @@
     ]
   },
   "chunking_embedding": {
-    "chunker": "recursive",
+    "chunker": "fixed_overlap",
     "chunker_params": {
-      "target": 400
+      "n_words": 512,
+      "overlap": 128
     },
     "max_rows_per_chunk": 20,
     "embedder": "openrouter_te3s",
