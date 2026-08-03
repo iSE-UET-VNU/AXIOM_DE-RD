@@ -1,6 +1,6 @@
 """Data contracts for the chunking + embedding stage.
 
-``doc_id`` is the parsed record's ``object_id`` from ingestion; this stage never
+``doc_id`` is the enriched record's ``source_object_id``; this stage never
 re-derives it. ``chunk_id`` is content-addressed as
 ``sha256(doc_id + field_path + "start:end")`` with offsets within the field, so
 the same config over the same document reproduces identical ids. Synthetic nodes

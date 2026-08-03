@@ -1,4 +1,4 @@
-"""Build the HTTP response from the pipeline's existing output artifacts."""
+"""Build the stage-oriented HTTP response from final pipeline artifacts."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def build_dataeng_output(
     *,
     project_root: str | Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
-    """Return the current metadata and document JSON without changing them."""
+    """Return common run metadata and one stage-oriented object per document."""
     root = Path(project_root).resolve()
     metadata_path = _required_artifact_path(state, "output_metadata", root)
     documents = [
@@ -30,10 +30,48 @@ def build_dataeng_output(
         )
         for data_object in state.data_objects
     ]
-    return {
-        "metadata": _read_json(metadata_path),
+    metadata = _read_json(metadata_path)
+    # Versioning is useful for persisted/internal artifacts, but is not part of
+    # the public document response contract.
+    metadata.pop("contract_version", None)
+    metadata.pop("schema", None)
+    return public_dataeng_response({
+        "metadata": metadata,
         "documents": documents,
-    }
+    })
+
+
+def public_dataeng_response(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove internal envelope fields from the public API response recursively."""
+    value = _without_internal_fields(payload)
+    if not isinstance(value, dict):
+        return {}
+    metadata = value.get("metadata")
+    if isinstance(metadata, dict):
+        metadata.pop("schema", None)
+    documents = value.get("documents")
+    if isinstance(documents, list):
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            for stage_name in ("ingest", "clean", "enrich"):
+                stage = document.get(stage_name)
+                if isinstance(stage, dict):
+                    stage.pop("schema", None)
+                    stage.pop("schema_id", None)
+    return value
+
+
+def _without_internal_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_internal_fields(item)
+            for key, item in value.items()
+            if key not in {"contract_version", "lineage"}
+        }
+    if isinstance(value, list):
+        return [_without_internal_fields(item) for item in value]
+    return value
 
 
 def _required_artifact_path(
@@ -68,4 +106,3 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"Pipeline output artifact must contain a JSON object: {path}")
     return payload
-

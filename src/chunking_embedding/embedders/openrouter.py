@@ -1,7 +1,8 @@
-"""OpenRouter embedder — (production default).
+"""OpenRouter embedding and chat clients.
 
-Cache keyed by sha1(model|text), batch 64, input sanitization, and retry
-with exponential backoff.
+Both clients use deterministic disk caches and bounded retry behavior.  The
+embedding client is the production default; chat is an optional resource for
+chunkers that declare an LLM dependency.
 """
 
 from __future__ import annotations
@@ -16,9 +17,101 @@ import time
 import requests
 
 from ..registry import embedder
-from ._sanitize import MAX_REQUEST_TOKENS, sanitize_text, token_batches
+from . import MAX_REQUEST_TOKENS, sanitize_text, token_batches
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+class OpenRouterLLM:
+    """Cached OpenRouter chat client with offline-safe fallback behavior."""
+
+    def __init__(
+        self,
+        model: str = "google/gemini-2.5-flash",
+        api_key_env: str = "OPENROUTER_API_KEY",
+        base_url: str = OPENROUTER_BASE_URL,
+        cache_dir: str | Path = "data/work/llm_cache",
+        timeout: float = 120.0,
+        max_retries: int = 6,
+        app_title: str | None = None,
+    ) -> None:
+        self.model = model
+        self.api_key_env = api_key_env
+        self.base_url = base_url.rstrip("/")
+        self.cache_dir = Path(cache_dir)
+        self.timeout = timeout
+        self.max_retries = max(1, max_retries)
+        self.app_title = app_title
+        self.stats: dict[str, int] = {
+            "calls": 0,
+            "cache_hits": 0,
+            "fails": 0,
+            "tokens": 0,
+        }
+        self._sleep: Callable[[float], None] = time.sleep
+
+    def complete(
+        self,
+        prompt: str,
+        system: str | None = None,
+        max_tokens: int = 1200,
+        temperature: float = 0.0,
+    ) -> str:
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        key = hashlib.sha1(
+            f"{self.model}|{system}|{prompt}|{max_tokens}|{temperature}".encode(
+                "utf-8",
+                "ignore",
+            )
+        ).hexdigest()
+        path = self.cache_dir / f"llm_{key}.txt"
+        if path.exists():
+            self.stats["cache_hits"] += 1
+            return path.read_text(encoding="utf-8")
+        api_key = os.getenv(self.api_key_env)
+        if not api_key:
+            return ""
+        headers = {"Authorization": f"Bearer {api_key}"}
+        if self.app_title:
+            headers["X-Title"] = self.app_title
+        messages = (
+            ([{"role": "system", "content": system}] if system else [])
+            + [{"role": "user", "content": prompt}]
+        )
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=body,
+                    timeout=self.timeout,
+                )
+            except requests.RequestException:
+                self._sleep(min(2 ** attempt * 2, 40))
+                continue
+            self.stats["calls"] += 1
+            if response.status_code in (429, 500, 502, 503):
+                self._sleep(min(2 ** attempt * 2, 40))
+                continue
+            if response.status_code >= 400:
+                self.stats["fails"] += 1
+                return ""
+            try:
+                output = response.json()["choices"][0]["message"]["content"] or ""
+            except (ValueError, KeyError, IndexError):
+                self.stats["fails"] += 1
+                return ""
+            self.stats["tokens"] += max(1, len(prompt) // 4) + max(1, len(output) // 4)
+            path.write_text(output, encoding="utf-8")
+            return output
+        self.stats["fails"] += 1
+        return ""
 
 
 @embedder("openrouter_te3s")
@@ -96,7 +189,11 @@ class OpenRouterEmbedder:
                 payload = response.json()
             except ValueError:
                 payload = None
-            if response.status_code == 200 and isinstance(payload, dict) and isinstance(payload.get("data"), list):
+            if (
+                response.status_code == 200
+                and isinstance(payload, dict)
+                and isinstance(payload.get("data"), list)
+            ):
                 items = sorted(payload["data"], key=lambda item: item.get("index", 0))
                 embeddings = [[float(x) for x in item["embedding"]] for item in items]
                 if len(embeddings) != len(batch):
@@ -131,3 +228,6 @@ def _server_error_message(payload: Any, raw_text: str) -> str:
         if isinstance(error, str) and error:
             return error
     return (raw_text or "")[:300]
+
+
+__all__ = ["OpenRouterEmbedder", "OpenRouterLLM"]

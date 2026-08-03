@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..indexing_cataloging.index_builder import DocumentView, document_from_enriched_data
-from ..indexing_cataloging.lexical import build_corpus_statistics
+from ..chunking_embedding.document_view import DocumentView, document_from_enriched_data
+from ..chunking_embedding.lexical import build_corpus_statistics
 from ..models import DataObject, EnrichedData, ParsedData, PipelineState
-from ..reading_order import reading_order_from_rows
 from ..utils.paths import portable_path
 from .manifests import build_stage_metadata
 from .writer import LocalArtifactWriter
@@ -159,8 +158,8 @@ def write_embedded_artifacts(
             schemas={
                 "retrieval": _compact_retrieval_schema(),
                 "source_reference": _source_reference_schema(),
-                "index_record_types": sorted(
-                    {record.index_type for record in state.index_records}
+                "retrieval_record_types": sorted(
+                    {record.retrieval_type for record in state.retrieval_records}
                 ),
                 "vector_dimension": state.embedding_report.get("dimension"),
             },
@@ -185,55 +184,41 @@ def write_output_artifacts(
 ) -> ArtifactOutput:
     """Write one consumer-facing JSON per document plus common metadata.
 
-    Stage directories retain the complete parser and processing payloads.  The
-    final output deliberately exposes only stable semantic content, retrieval
-    items, and compact lineage references.
+    Keep the run metadata common, while making every document's stage boundary
+    explicit.  Each stage retains its native data contract; retrieval keeps the
+    existing compact chunk and embedding contract.
     """
     writer = LocalArtifactWriter(output_dir, project_root=project_root)
     parsed_by_id = {record.object_id: record for record in state.parsed_data}
-    initial_schema_by_id = {
-        record.source_object_id: record for record in state.initial_schemas
-    }
-    cleaned_schema_by_id = {
-        record.source_object_id: record for record in state.cleaned_schemas
+    cleaned_by_id = {
+        record.source_object_id: record for record in state.cleaned_data
     }
     enriched_by_id = {
         record.source_object_id: record for record in state.enriched_data
-    }
-    enriched_schema_by_id = {
-        record.source_object_id: record for record in state.enriched_schemas
     }
     paths: dict[str, Path] = {}
 
     for data_object in state.data_objects:
         document_id = data_object.object_id
-        initial_schema = initial_schema_by_id.get(document_id)
-        cleaned_schema = cleaned_schema_by_id.get(document_id)
-        enriched_schema = enriched_schema_by_id.get(document_id)
+        cleaned = cleaned_by_id.get(document_id)
         parsed = parsed_by_id.get(document_id)
         enriched = enriched_by_id.get(document_id)
         document = document_from_enriched_data(enriched) if enriched else None
         paths[f"output_document:{document_id}"] = writer.write_json(
             f"documents/{document_id}.json",
             {
-                "contract_version": "output-document-v4",
                 "document": _output_document(data_object, document, enriched),
-                "content": _output_content(document, enriched, parsed),
+                "ingest": _stage_data(
+                    parsed,
+                    source=data_object,
+                ),
+                "clean": _stage_data(cleaned),
+                "enrich": _stage_data(enriched),
                 "retrieval": _compact_retrieval(
                     state,
                     document_id,
                     parsed.metadata.get("image_files", []) if parsed else [],
                 ),
-                "lineage": {
-                    "run_id": state.run_id,
-                    "status": "succeeded",
-                    "schema_ids": {
-                        "ingested": initial_schema.schema_id if initial_schema else None,
-                        "cleaned": cleaned_schema.schema_id if cleaned_schema else None,
-                        "enriched": enriched_schema.schema_id if enriched_schema else None,
-                    },
-                    "completed_stages": list(state.completed_modules),
-                },
             },
             sort_keys=False,
         )
@@ -245,21 +230,18 @@ def write_output_artifacts(
             stage="output",
             document_summaries=_document_summaries(state),
             schemas={
-                "content_fields": _output_content_fields(state),
                 "source_reference": _source_reference_schema(),
-                "index_record_types": sorted(
-                    {record.index_type for record in state.index_records}
+                "retrieval_record_types": sorted(
+                    {record.retrieval_type for record in state.retrieval_records}
                 ),
                 "vector_dimension": state.embedding_report.get("dimension"),
             },
             document_schema={
-                "contract_version": "string",
                 "document": "consumer-facing document identity and source summary",
-                "content": (
-                    "semantic content plus ordered source blocks and reading-order provenance"
-                ),
+                "ingest": "source object and parsed data",
+                "clean": "cleaned data",
+                "enrich": "enriched data",
                 "retrieval": _compact_retrieval_schema(),
-                "lineage": "run, status, stage, and schema references",
             },
             extra={
                 "summary": _run_summary(state),
@@ -314,48 +296,15 @@ def _output_document(
     return _without_none(payload)
 
 
-def _output_content(
-    document: DocumentView | None,
-    enriched: EnrichedData | None,
-    parsed: ParsedData | None = None,
+def _stage_data(
+    data: Any,
+    *,
+    source: DataObject | None = None,
 ) -> dict[str, Any]:
-    if document is None:
-        return {
-            "main_text": "",
-            "tables": [],
-            "figures": [],
-            "formulas": [],
-            "blocks": [],
-            "reading_order": [],
-            "reading_order_meta": {
-                "source": "unavailable",
-                "complete": False,
-                "block_count": 0,
-            },
-        }
-    if enriched is not None:
-        source_rows = enriched.rows
-    elif parsed is not None:
-        source_rows = parsed.rows
-    else:
-        source_rows = []
-    blocks, reading_order, reading_order_meta = reading_order_from_rows(source_rows)
-    payload: dict[str, Any] = {
-        "main_text": document.main_text,
-        "tables": _strip_parser_audit(document.tables),
-        "figures": _strip_parser_audit(document.figures),
-        "formulas": _strip_parser_audit(document.formulas),
-        "blocks": blocks,
-        "reading_order": reading_order,
-        "reading_order_meta": reading_order_meta,
-    }
-    if enriched and enriched.annotations:
-        payload["annotations"] = _strip_parser_audit(enriched.annotations)
-    if enriched and enriched.profile:
-        payload["profile"] = _strip_parser_audit(enriched.profile)
-    source_refs = _extraction_source_refs(enriched, ("main_text", "formulas"))
-    if source_refs:
-        payload["source_refs"] = source_refs
+    """Wrap one native stage result without reshaping its data payload."""
+    payload: dict[str, Any] = {"data": data}
+    if source is not None:
+        payload["source"] = source
     return payload
 
 
@@ -364,11 +313,11 @@ def _compact_retrieval(
     document_id: str,
     image_files: Any,
 ) -> dict[str, Any]:
-    index_records = [
+    retrieval_records = [
         record
-        for record in state.index_records
+        for record in state.retrieval_records
         if record.source_object_id == document_id
-        and record.index_type in RETRIEVAL_ITEM_TYPES
+        and record.retrieval_type in RETRIEVAL_ITEM_TYPES
     ]
     vectors_by_record: dict[str, list[dict[str, Any]]] = {}
     for vector in state.vector_records:
@@ -385,7 +334,7 @@ def _compact_retrieval(
             vectors_by_record.get(record.record_id, []),
             assets,
         )
-        for record in index_records
+        for record in retrieval_records
     ]
     return {
         "items": items,
@@ -408,15 +357,18 @@ def _compact_retrieval_item(
     content = _strip_parser_audit(_retrieval_item_content(record))
     item: dict[str, Any] = {
         "item_id": _retrieval_item_id(record),
-        "type": RETRIEVAL_ITEM_TYPES[record.index_type],
+        "type": RETRIEVAL_ITEM_TYPES[record.retrieval_type],
         "position": _without_none(_retrieval_item_position(record)),
         "content": content,
         "embeddings": [_compact_embedding(vector) for vector in vectors],
     }
+    component_type = record.metadata.get("component_type")
+    if component_type:
+        item["component_type"] = component_type
     lexical = record.payload.get("lexical")
     if isinstance(lexical, dict):
         item["lexical"] = dict(lexical)
-    if record.index_type == "image":
+    if record.retrieval_type == "image":
         image_index = record.payload.get("image_index")
         if isinstance(image_index, int) and 0 <= image_index < len(image_files):
             asset = image_files[image_index]
@@ -549,13 +501,6 @@ def _without_none(value: dict[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if item is not None}
 
 
-def _output_content_fields(state: PipelineState) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for schema in state.enriched_schemas:
-        fields.update(schema.fields)
-    return fields
-
-
 def _source_reference_schema() -> dict[str, str]:
     return {
         "component_id": "string; parser component path",
@@ -565,14 +510,17 @@ def _source_reference_schema() -> dict[str, str]:
 
 
 def _run_summary(state: PipelineState) -> dict[str, Any]:
-    index_report = state.index_quality_report
+    chunk_report = state.retrieval_quality_report
     embedding_report = state.embedding_report
     return {
-        "indexing": _without_none(
+        "chunking_embedding": _without_none(
             {
-                "status": index_report.get("status"),
-                "record_count": index_report.get("record_count"),
-                "counts_by_type": index_report.get("counts_by_index_type"),
+                "status": chunk_report.get("status"),
+                "document_count": chunk_report.get("document_count"),
+                "embedded_document_count": chunk_report.get("embedded_document_count"),
+                "skipped_document_count": chunk_report.get("skipped_document_count"),
+                "record_count": chunk_report.get("record_count"),
+                "counts_by_type": chunk_report.get("counts_by_retrieval_type"),
             }
         ),
         "embedding": _without_none(
@@ -599,12 +547,19 @@ def _compact_retrieval_schema() -> dict[str, Any]:
             {
                 "item_id": "string; stable component id",
                 "type": "text|table|image",
+                "component_type": "main_text|formula|table|figure",
                 "position": "source position",
                 "content": (
                     "consumer content without parser audit fields; may contain "
                     "normalized source_refs"
                 ),
                 "asset": "object; optional parsed image asset",
+                "lexical": {
+                    "contract_version": "lexical-v1",
+                    "analyzer": "unicode_word_v1",
+                    "tf": "mapping of analyzed term to frequency",
+                    "dl": "integer; analyzed token length",
+                },
                 "embeddings": [
                     {
                         "model": "string",
@@ -613,7 +568,15 @@ def _compact_retrieval_schema() -> dict[str, Any]:
                     }
                 ],
             }
-        ]
+        ],
+        "lexical_stats": {
+            "contract_version": "bm25-corpus-v1",
+            "scope": "document",
+            "analyzer": "unicode_word_v1",
+            "N": "integer; number of lexical retrieval items",
+            "avgdl": "number; average analyzed item length",
+            "df": "mapping of analyzed term to document frequency",
+        },
     }
 
 
@@ -623,7 +586,7 @@ def _retrieval_item_id(record: Any) -> str:
         "text_chunk": "chunk_id",
         "table": "table_id",
         "image": "image_id",
-    }[record.index_type]
+    }[record.retrieval_type]
     return str(payload.get(id_field) or record.record_id)
 
 
@@ -633,9 +596,9 @@ def _retrieval_item_position(record: Any) -> dict[str, Any]:
         "text_chunk": "chunk_index",
         "table": "table_index",
         "image": "image_index",
-    }[record.index_type]
+    }[record.retrieval_type]
     position = {"index": payload.get(index_field)}
-    if record.index_type == "text_chunk":
+    if record.retrieval_type == "text_chunk":
         position.update(
             {
                 "start_char": payload.get("start_char"),
@@ -643,7 +606,7 @@ def _retrieval_item_position(record: Any) -> dict[str, Any]:
             }
         )
     # Which chunking/embedding settings produced this item. It rides in position
-    # because the indexing job persists position verbatim and drops unknown
+    # because the downstream retrieval job persists position verbatim and drops unknown
     # item-level keys; there is no column for it yet. Consumers that do not read
     # it are unaffected. See docs/platform_config_hash_proposal.md.
     if payload.get("config_hash"):
@@ -653,9 +616,9 @@ def _retrieval_item_position(record: Any) -> dict[str, Any]:
 
 def _retrieval_item_content(record: Any) -> dict[str, Any]:
     payload = record.payload
-    if record.index_type == "text_chunk":
+    if record.retrieval_type == "text_chunk":
         return {"text": payload.get("text", "")}
-    if record.index_type == "table":
+    if record.retrieval_type == "table":
         table = payload.get("table")
         return dict(table) if isinstance(table, dict) else {"content": table}
     image = payload.get("image")

@@ -48,7 +48,7 @@
     "ingestion",
     "cleaning",
     "enrichment",
-    "indexing_cataloging",
+    "chunking_embedding",
     "integration",
     "artifacts"
   ],
@@ -125,23 +125,6 @@
       "app_title": "AXIOM_DE-RD"
     },
     "retrieval_profile": "hybrid_default"
-  },
-  "indexing": {
-    "engine": "chunking_embedding",
-    "embeddings": {
-      "enabled": true,
-      "target_index_types": [
-        "text_chunk",
-        "image"
-      ],
-      "provider": "openrouter",
-      "model": "openai/text-embedding-3-small",
-      "dimension": 1536,
-      "batch_size": 32,
-      "fail_on_error": true,
-      "api_key_env": "OPENROUTER_API_KEY",
-      "app_title": "AXIOM_DE-RD"
-    }
   },
   "logging": {
     "level": "INFO"

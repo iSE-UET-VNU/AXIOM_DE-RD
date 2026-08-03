@@ -205,20 +205,9 @@ class EnrichedSchema:
 
 
 @dataclass
-class MetadataRecord:
+class RetrievalRecord:
     record_id: str
-    source_object_id: str
-    title: str
-    schema_id: str | None = None
-    profile: dict[str, Any] = field(default_factory=dict)
-    tags: list[str] = field(default_factory=list)
-    properties: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class IndexRecord:
-    record_id: str
-    index_type: str
+    retrieval_type: str
     source_object_id: str
     payload: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -269,9 +258,8 @@ class PipelineState:
     cleaned_schemas: list[CleanedSchema] = field(default_factory=list)
     enriched_data: list[EnrichedData] = field(default_factory=list)
     enriched_schemas: list[EnrichedSchema] = field(default_factory=list)
-    metadata_records: list[MetadataRecord] = field(default_factory=list)
-    index_records: list[IndexRecord] = field(default_factory=list)
-    index_quality_report: dict[str, Any] = field(default_factory=dict)
+    retrieval_records: list[RetrievalRecord] = field(default_factory=list)
+    retrieval_quality_report: dict[str, Any] = field(default_factory=dict)
     vector_records: list[dict[str, Any]] = field(default_factory=list)
     embedding_report: dict[str, Any] = field(default_factory=dict)
     schema_matches: list[SchemaMatch] = field(default_factory=list)

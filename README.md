@@ -1,7 +1,7 @@
 # AXIOM_DE-RD
 
 AXIOM_DE-RD is a document-processing pipeline that converts documents from S3
-or a local raw path into parsed records, index records, and vector embeddings.
+or a local raw path into parsed content, retrieval chunks, and vector embeddings.
 Spreadsheet workbooks can be delegated to a running TableAgent API and
 normalized into the same final output contract.
 
@@ -17,7 +17,7 @@ AXIOM_DE-RD/
 │   ├── ingested/                     # Provider output and parsed records
 │   ├── cleaned/                      # Cleaning-stage snapshot
 │   ├── enriched/                     # Enrichment-stage snapshot
-│   ├── embedded/                     # Per-document indexes and vectors
+│   ├── embedded/                     # Per-document retrieval chunks and vectors
 │   └── output/                       # Consolidated end-to-end documents
 ├── scripts/
 │   └── run_pipeline.py               # Main pipeline entrypoint
@@ -27,8 +27,7 @@ AXIOM_DE-RD/
 │   ├── ingestion/                    # Local-file parsing and schema inference
 │   ├── cleaning/                     # Cleaning stage
 │   ├── enrichment/                   # Enrichment stage
-│   ├── chunking_embedding/           # Default indexing engine: pluggable chunkers/embedders
-│   ├── indexing_cataloging/          # Legacy indexing engine; also shared lexical/document helpers
+│   ├── chunking_embedding/           # Chunking, embedding, lexical data, and retrieval helpers
 │   ├── integration/                  # Integration stage
 │   ├── artifacts/                    # Per-document artifact writers
 │   ├── models.py                     # Shared pipeline data contracts
@@ -87,34 +86,30 @@ Important settings include:
 | `ingested_dir` | Provider output plus parsed ingestion artifacts |
 | `cleaned_dir` | Cleaning-stage artifacts |
 | `enriched_dir` | Enrichment-stage artifacts |
-| `embedded_dir` | Index, embedding, schema, and report artifacts |
+| `embedded_dir` | Chunk, embedding, schema, and report artifacts |
 | `output_dir` | Final consolidated document artifacts |
 | `enabled_modules` | Pipeline stages to enable; execution follows the order defined by the orchestrator |
 | `parsing` | Parser provider and Lift options |
 | `table_agent` | TableAgent API routing, authentication, timeout, and workbook extensions |
-| `indexing.engine` | Indexing engine: `chunking_embedding` (default) or `indexing_cataloging` |
-| `indexing.embeddings` | Embedding provider, model, dimensions, and targets (`indexing_cataloging` only) |
-| `chunking_embedding` | Chunker, embedder, and their parameters (`chunking_embedding` only) |
+| `chunking_embedding` | Chunker, embedder, retrieval profile, and their parameters |
 
-### Indexing engines
+### Chunking and embedding
 
-`indexing.engine` selects what turns parsed documents into retrieval items.
+The `chunking_embedding` stage consumes `enriched_data`, routes semantic text,
+tables, figures, and formulas independently, then creates retrieval chunks and
+their vectors. Final API documents use a stage-oriented contract, including the
+`lexical` payload corpus-service needs for server-side BM25. Workbooks are
+routed to TableAgent and normalized separately, bypassing this stage.
 
-| | `chunking_embedding` (default) | `indexing_cataloging` (legacy) |
-|---|---|---|
-| Input | `parsed_data` | `enriched_data` + schemas |
-| Chunking | pluggable, one file per chunker | fixed, built in |
-| Embedding | pluggable, one file per embedder | `indexing.embeddings` provider |
-| Configured by | `chunking_embedding` | `indexing.embeddings` |
+The module has one processing path: `stage.run(enriched_data, config)` calls the
+file-system-independent engine. The optional CLI reads only enrichment-stage
+artifacts (`enriched_data.json` or `documents/*.json`) before calling that same
+engine. There is no separate runner or parsed-data adapter.
 
-Both emit the same `output-document-v4` contract, including the `lexical`
-payload corpus-service needs for server-side BM25, so downstream consumers
-cannot tell them apart. Workbooks are unaffected by this setting: they are
-routed to TableAgent and normalized there, bypassing both engines.
-
-Add a chunker or embedder by dropping a file into
-`src/chunking_embedding/chunkers/` or `.../embedders/` and decorating it —
-the registry discovers it at import, and no other file changes:
+Built-in strategies are grouped by responsibility in `chunkers/builtin.py`,
+`embedders/local.py`, and `embedders/openrouter.py`. Additional plugins can
+still be dropped into either package and decorated; the registry discovers
+them automatically:
 
 ```python
 @chunker("my_chunker")
@@ -139,22 +134,22 @@ presigned inventories all use the same extension-based routing:
 - supported Excel workbooks are uploaded to TableAgent's existing
   `/v1/jobs/upload` endpoint with `stage=structure`;
 - non-workbook files continue through the existing document pipeline;
-- both branches are normalized and merged into the existing `metadata` plus
-  `documents` response with `output-document-v4` documents.
+- both branches are normalized and merged into the common `metadata` plus
+  `documents` response with stage-oriented documents.
 
 `src.pipeline.run_pipeline` remains the internal non-table document engine and
 is called by the dispatcher only after workbook inputs have been removed from
 the document branch. This keeps TableAgent state out of document models,
-ingestion, indexing, and persisted intermediate artifacts.
+ingestion, chunking, embedding, and persisted intermediate artifacts.
 
 The Streamlit uploader uses the same routing behavior for local uploads.
 Workbook-only uploads do not require `DATALAB_API_KEY`; mixed batches send
 Excel files to TableAgent and keep PDF/image files on the existing document
 pipeline. For the demo explorer only, Streamlit persists the final normalized
 metadata and document JSON under `data/output/<run_id>/`; it does not create
-workbook ingestion, cleaning, enrichment, or indexing artifacts. Workbook
-results therefore open in **Explore results** with the same tabs and downloads
-as other final output documents.
+workbook ingestion, cleaning, enrichment, chunking, or embedding artifacts.
+Workbook results therefore open in **Explore results** with the same tabs and
+downloads as other final output documents.
 
 The current TableAgent source response does not include temporary retrieval
 artifact files. AXIOM will preserve `retrieval_items` or `retrieval.items` when
@@ -162,7 +157,7 @@ the deployed API returns them; otherwise it builds retrieval items from the
 returned structures with empty `embeddings` arrays.
 
 Normalization consumes known TableAgent fields into their canonical
-`output-document-v4` locations instead of copying the complete source response.
+stage-oriented locations instead of copying the complete source response.
 Unmapped response, table, retrieval-item, and embedding fields are retained
 once under an `extensions` mapping at the corresponding level. This avoids a
 duplicated `raw_response` while allowing future or deployment-specific
@@ -270,10 +265,11 @@ curl -X POST http://localhost:8000/v1/dataeng \
   }'
 ```
 
-The response groups the existing final artifacts without changing their
-contracts: `metadata` contains `data/output/<run_id>/metadata.json`, and
-`documents` contains the corresponding `output-document-v4` JSON objects.
-The existing CLI and all other input modes remain available.
+The response contains one common `metadata` object and a `documents` array.
+Each document element separates `document`, `ingest`, `clean`, `enrich`, and
+`retrieval`; native stage data is kept under each stage's `data` field. Schema
+objects stay in internal stage artifacts and are not returned by the public
+API. The existing CLI and all other input modes remain available.
 
 Health checks are exposed at `/health/live` and `/health/ready`. Interactive
 OpenAPI documentation is available at `/docs`.
@@ -293,7 +289,7 @@ Each parsed document is persisted immediately before ingestion continues with
 the next input. A document is quarantined when the parser returns
 `page_count=0`, a null Lift extraction, or no usable text/structured component.
 Quarantined documents remain under `data/ingested` with failure reasons but do
-not continue into cleaning, enrichment, indexing, embedding, or final output.
+not continue into cleaning, enrichment, chunking, embedding, or final output.
 `metadata.json` reports `in_progress` during a batch and changes to `completed`
 or `completed_with_errors` after all expected documents are parsed. With the
 default configuration, one run is organized as follows:
@@ -322,27 +318,27 @@ data/enriched/<run_id>/
 
 data/embedded/<run_id>/
 ├── documents/
-│   └── <document_id>.json              # Compact retrieval items with nested vectors
+│   └── <document_id>.json              # Compact retrieval chunks with nested vectors
 └── metadata.json                       # Retrieval schema and compact run summary
 
 data/output/<run_id>/
 ├── documents/
-│   └── <document_id>.json              # Semantic content, retrieval items, and per-document BM25 inputs
+│   └── <document_id>.json              # Ingest, clean, enrich, and retrieval data
 └── metadata.json                       # Common document schema and compact run summary
 ```
 
-`output-document-v4` stores parser-native source components in
-`content.blocks`, their ordered component IDs in `content.reading_order`, and
-provenance/completeness in `content.reading_order_meta`. New Lift runs use JSON
-output so the order includes text, headings, equations, figures, captions, and
-tables. Older artifacts can be reconstructed from structured-extraction
-citations, with `reading_order_meta.complete` set to `false`.
+The response keeps parser output under `ingest.data`, the cleaning and
+enrichment contracts under `clean.data` and `enrich.data`, and chunk/vector
+output under `retrieval`. This removes the separate synthesized `content`
+snapshot that previously repeated enriched and retrieval content.
 
 Each text-bearing `retrieval.items[]` entry also contains a `lexical` object
 with raw term frequencies (`tf`), analyzed token length (`dl`), and analyzer
-name. Each document's `retrieval.lexical_stats` contains `df`, `N`, and
-`avgdl`, calculated only from the chunks in that document. The common
-`metadata.json` does not contain BM25 statistics.
+name. Every item exposes `component_type` (`main_text`, `formula`, `table`, or
+`figure`) independently of its broad retrieval `type`. Each document's
+`retrieval.lexical_stats` contains `df`, `N`, and `avgdl`, calculated only from
+the chunks in that document. The common `metadata.json` does not contain BM25
+statistics.
 
 An ingested quarantine record uses `status: "quarantined"`, has no `schema_id`,
 and includes machine-readable failure reasons such as `zero_page_count`,

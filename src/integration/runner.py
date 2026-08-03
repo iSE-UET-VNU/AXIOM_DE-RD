@@ -6,20 +6,20 @@ from dataclasses import dataclass, field
 
 from ..models import (
     EntityMatch,
-    IndexRecord,
     RelationshipRecord,
+    RetrievalRecord,
     SchemaMatch,
 )
 
 
 @dataclass
 class IntegrationOutput:
-    passed_index_records: list[IndexRecord] = field(default_factory=list)
+    passed_retrieval_records: list[RetrievalRecord] = field(default_factory=list)
     schema_matches: list[SchemaMatch] = field(default_factory=list)
     entity_matches: list[EntityMatch] = field(default_factory=list)
     relationship_records: list[RelationshipRecord] = field(default_factory=list)
 
 
-def run(index_records: list[IndexRecord]) -> IntegrationOutput:
-    """Pass indexing records through until integration logic is implemented."""
-    return IntegrationOutput(passed_index_records=list(index_records))
+def run(retrieval_records: list[RetrievalRecord]) -> IntegrationOutput:
+    """Pass retrieval records through until integration logic is implemented."""
+    return IntegrationOutput(passed_retrieval_records=list(retrieval_records))

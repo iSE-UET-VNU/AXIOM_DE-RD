@@ -3,7 +3,7 @@
 The backend extracts presentation text, native tables, and picture shapes
 without rendering slides or calling an OCR/model provider.  Its output matches
 the semantic ``extraction`` contract used by the document parsers so existing
-validation, image filtering, indexing, and artifact writers can consume it.
+validation, image filtering, chunking, and artifact writers can consume it.
 """
 
 from __future__ import annotations

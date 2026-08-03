@@ -56,7 +56,7 @@ class DataEngRequest(BaseModel):
 
 
 class DataEngResponse(BaseModel):
-    """Existing output artifacts grouped into a single HTTP response."""
+    """Common run metadata plus stage-oriented document results."""
 
     metadata: dict[str, Any]
     documents: list[dict[str, Any]]
@@ -64,4 +64,3 @@ class DataEngResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-

@@ -14,7 +14,6 @@ from . import (
     artifacts,
     cleaning,
     enrichment,
-    indexing_cataloging,
     ingestion,
     integration,
     local_reader,
@@ -29,7 +28,7 @@ MODULE_ORDER = [
     "ingestion",
     "cleaning",
     "enrichment",
-    "indexing_cataloging",
+    "chunking_embedding",
     "integration",
     "artifacts",
 ]
@@ -290,52 +289,46 @@ def run_pipeline(
             len(state.enriched_data),
         )
 
-    if "indexing_cataloging" in enabled_modules:
-        indexing_config = config.get("indexing", {})
-        engine = str(indexing_config.get("engine") or "indexing_cataloging")
-        if engine == "chunking_embedding":
-            # Imported lazily
-            from .chunking_embedding import pipeline_stage
+    if "chunking_embedding" in enabled_modules:
+        from .chunking_embedding.stage import run as run_chunking_embedding
 
-            result = pipeline_stage.run(
-                [asdict(record) for record in state.enriched_data],
-                config.get("chunking_embedding", {}),
-            )
-        elif engine == "indexing_cataloging":
-            result = indexing_cataloging.run(
-                state.enriched_data,
-                state.enriched_schemas,
-                indexing_config=indexing_config,
-            )
-        else:
-            raise ValueError(
-                f"Unknown indexing engine {engine!r}; "
-                "expected 'indexing_cataloging' or 'chunking_embedding'."
-            )
-        state.metadata_records = result.metadata_records
-        state.index_records = result.index_records
-        state.index_quality_report = result.index_quality_report
+        result = run_chunking_embedding(
+            [asdict(record) for record in state.enriched_data],
+            config.get("chunking_embedding", {}),
+        )
+        state.retrieval_records = result.retrieval_records
+        state.retrieval_quality_report = result.quality_report
         state.vector_records = result.vector_records
         state.embedding_report = result.embedding_report
-        state.completed_modules.append("indexing_cataloging")
+        state.errors.extend(
+            {
+                "code": "chunking_embedding_failed",
+                "stage": "chunking_embedding",
+                "status": "failed",
+                "document_id": skipped.get("doc_id"),
+                "source_uri": skipped.get("source_uri"),
+                "message": skipped.get("reason"),
+            }
+            for skipped in result.skipped_docs
+        )
+        state.completed_modules.append("chunking_embedding")
         logger.info(
-            "Built %s metadata record(s), %s index record(s), and %s vector record(s); quality status: %s",
-            len(state.metadata_records),
-            len(state.index_records),
+            "Built %s retrieval record(s) and %s vector record(s); quality status: %s",
+            len(state.retrieval_records),
             len(state.vector_records),
-            state.index_quality_report.get("status", "unknown"),
+            state.retrieval_quality_report.get("status", "unknown"),
         )
 
     if "integration" in enabled_modules:
-        result = integration.run(state.index_records)
-        state.index_records = result.passed_index_records
+        result = integration.run(state.retrieval_records)
+        state.retrieval_records = result.passed_retrieval_records
         state.schema_matches = result.schema_matches
         state.entity_matches = result.entity_matches
         state.relationship_records = result.relationship_records
         state.completed_modules.append("integration")
         logger.info(
-            "Integration pass-through accepted %s index record(s)",
-            len(result.passed_index_records),
+            "Integration pass-through accepted %s retrieval record(s)",
+            len(result.passed_retrieval_records),
         )
 
     if persist_artifacts:
@@ -350,7 +343,7 @@ def run_pipeline(
             output_dir,
             project_root=project_root,
         )
-        logger.info("Wrote embedding and index artifacts to %s", embedded_dir)
+        logger.info("Wrote chunking and embedding artifacts to %s", embedded_dir)
         logger.info("Wrote consolidated output artifacts to %s", output_dir)
 
     if state.errors:
