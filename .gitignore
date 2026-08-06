@@ -13,8 +13,10 @@ venv/
 /configs/*
 !/configs/pipeline.yaml
 !/configs/pipeline.chandra2.yaml
+!/configs/pipeline.vidore-v3-ingest.yaml
 
 # Local benchmark checkouts and generated probe artifacts.
+/experiments/
 /ParseBench/
 /tmp/
 /chandra2_technical_summary_for_codex.md

@@ -115,7 +115,7 @@ class ParsingService:
             provider = backend.provider
             assert isinstance(provider, Chandra2Provider)
             try:
-                parsed_documents = provider.parse_files(
+                parsed_documents = provider.parse_files_with_errors(
                     [(path, data_object) for _, path, data_object in group]
                 )
                 if len(parsed_documents) != len(group):
@@ -132,6 +132,13 @@ class ParsingService:
                 continue
 
             for (index, _, data_object), parsed in zip(group, parsed_documents):
+                if isinstance(parsed, Exception):
+                    results[index] = _document_provider_failure(
+                        backend,
+                        data_object,
+                        parsed,
+                    )
+                    continue
                 parsed.metadata.setdefault("parser", "chandra2")
                 parsed.metadata["backend"] = "chandra2"
                 results[index] = ParseResult.success(
