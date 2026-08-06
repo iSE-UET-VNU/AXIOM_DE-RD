@@ -66,6 +66,13 @@ def resolve_parser_config(
         chandra_config["project_root"] = str(project_root)
         parser_config["chandra2"] = chandra_config
 
+    kdl_config = parser_config.get("kdl")
+    if isinstance(kdl_config, dict):
+        kdl_config = dict(kdl_config)
+        kdl_config["output_dir"] = str(Path(parser_assets_dir))
+        kdl_config["project_root"] = str(project_root)
+        parser_config["kdl"] = kdl_config
+
     pptx_config = parser_config.get("pptx")
     pptx_config = dict(pptx_config) if isinstance(pptx_config, dict) else {}
     pptx_config["output_dir"] = str(Path(parser_assets_dir))
