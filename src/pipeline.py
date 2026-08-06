@@ -129,9 +129,15 @@ def run_pipeline(
             state.raw_dir = batch.source
             expected_document_count = len(batch.inputs)
             if _uses_continuous_chandra_queue(parser_config):
+                chandra_config = parser_config["chandra2"]
                 logger.info(
-                    "Submitting %s local document(s) to the continuous Chandra2 page queue",
+                    "Submitting %s local document(s) to the continuous Chandra2 "
+                    "page queue (%s render process(es), %s rendered-image "
+                    "slot(s), %s image(s) per vLLM request)",
                     len(batch.inputs),
+                    chandra_config.get("render_processes", 4),
+                    chandra_config.get("max_workers", 4),
+                    chandra_config.get("request_batch_size", 1),
                 )
                 partial_result = ingestion.run_many(
                     [
