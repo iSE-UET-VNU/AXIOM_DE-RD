@@ -139,7 +139,7 @@ def run_pipeline(
                     chandra_config.get("max_workers", 4),
                     chandra_config.get("request_batch_size", 1),
                 )
-                partial_result = ingestion.run_many(
+                ingestion.run_many(
                     [
                         ingestion.IngestionInput(
                             path=item.path,
@@ -150,14 +150,16 @@ def run_pipeline(
                     ],
                     parser_config=parser_config,
                     project_root=project_root,
-                )
-                _accept_ingestion_result(
-                    state,
-                    partial_result,
-                    ingested_dir,
-                    project_root,
-                    expected_document_count,
-                    persist_artifacts,
+                    on_document_complete=lambda partial_result: (
+                        _accept_ingestion_result(
+                            state,
+                            partial_result,
+                            ingested_dir,
+                            project_root,
+                            expected_document_count,
+                            persist_artifacts,
+                        )
+                    ),
                 )
             else:
                 for item in batch.inputs:
