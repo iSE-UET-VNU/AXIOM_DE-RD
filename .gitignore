@@ -12,6 +12,7 @@ venv/
 # Keep only the main pipeline configuration under version control.
 /configs/*
 !/configs/pipeline.yaml
+!/configs/pipeline.chandra2.yaml
 
 # Local benchmark checkouts and generated probe artifacts.
 /ParseBench/
@@ -50,11 +51,16 @@ data/subset/
 *.ipynb
 
 # ---------------------------------------------------------------------------
-# Research, not system. Nothing below is needed to run the pipeline. The
-# dependency direction makes this safe: research/ imports src/, never the
-# reverse.
+# research/ is tracked: it holds the evaluation harness -- corpus build,
+# evalset build, retrieval runs, answer generation and judging -- which is how
+# every number we report is produced. Unreviewable measurement code is worse
+# than none. The dependency direction still holds and is what keeps this safe:
+# research/ imports src/, never the reverse.
+#
+# Its *outputs* stay out. data/benchmark/ holds a 92 MB corpus.jsonl plus run
+# files, all derived and rebuildable, and questions.jsonl carries the
+# challenge's gold answers.
 # ---------------------------------------------------------------------------
-research/
 data/benchmark/
 
 # Retrieval artifacts are build output, keyed by config_hash and rebuilt from the
