@@ -64,15 +64,6 @@ def normalize_table_agent_response(
     structures = response.get("structures")
     if not isinstance(structures, list):
         raise RuntimeError("TableAgent response is missing the structures array.")
-    failed = [
-        item
-        for item in structures
-        if isinstance(item, dict) and str(item.get("status") or "") != "good"
-    ]
-    if failed:
-        raise RuntimeError(
-            f"TableAgent returned {len(failed)} unsuccessful workbook structure(s)."
-        )
 
     file_name = str(
         source_metadata.get("file_name")
