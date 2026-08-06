@@ -128,17 +128,29 @@ def run_pipeline(
             state.input_source = batch.source
             state.raw_dir = batch.source
             expected_document_count = len(batch.inputs)
-            if _uses_continuous_chandra_queue(parser_config):
-                chandra_config = parser_config["chandra2"]
-                logger.info(
-                    "Submitting %s local document(s) to the continuous Chandra2 "
-                    "page queue (%s render process(es), %s rendered-image "
-                    "slot(s), %s image(s) per vLLM request)",
-                    len(batch.inputs),
-                    chandra_config.get("render_processes", 4),
-                    chandra_config.get("max_workers", 4),
-                    chandra_config.get("request_batch_size", 1),
-                )
+            continuous_queue = _continuous_document_queue(parser_config)
+            if continuous_queue is not None:
+                queue_provider, queue_config = continuous_queue
+                if queue_provider == "chandra2":
+                    logger.info(
+                        "Submitting %s local document(s) to the continuous Chandra2 "
+                        "page queue (%s render process(es), %s rendered-image "
+                        "slot(s), %s image(s) per vLLM request)",
+                        len(batch.inputs),
+                        queue_config.get("render_processes", 4),
+                        queue_config.get("max_workers", 4),
+                        queue_config.get("request_batch_size", 1),
+                    )
+                else:
+                    logger.info(
+                        "Submitting %s local document(s) to the continuous KDL "
+                        "page queue (%s render process(es), %s concurrent "
+                        "page(s), %s concurrent bbox request(s))",
+                        len(batch.inputs),
+                        queue_config.get("render_processes", 32),
+                        queue_config.get("max_workers", 32),
+                        queue_config.get("bbox_max_workers", 32),
+                    )
                 ingestion.run_many(
                     [
                         ingestion.IngestionInput(
@@ -536,18 +548,36 @@ def _configure_logging(config: dict[str, Any]) -> None:
     )
 
 
-def _uses_continuous_chandra_queue(parser_config: dict[str, Any]) -> bool:
+def _continuous_document_queue(
+    parser_config: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
     provider = str(parser_config.get("provider") or "").strip().lower()
     document_config = parser_config.get("document")
     if provider in {"", "router"} and isinstance(document_config, dict):
         provider = str(document_config.get("provider") or "").strip().lower()
     provider = provider.replace("-", "_")
-    chandra_config = parser_config.get("chandra2")
-    return (
-        provider in {"chandra", "chandra2", "chandra_2"}
-        and isinstance(chandra_config, dict)
-        and bool(chandra_config.get("continuous_page_queue", False))
-    )
+    aliases = {
+        "chandra": "chandra2",
+        "chandra2": "chandra2",
+        "chandra_2": "chandra2",
+        "kdl": "kdl",
+        "kdl_frontier": "kdl",
+        "kdl_frontier_nano": "kdl",
+    }
+    normalized = aliases.get(provider)
+    provider_config = parser_config.get(normalized or "")
+    if (
+        normalized is not None
+        and isinstance(provider_config, dict)
+        and bool(
+            provider_config.get(
+                "continuous_page_queue",
+                normalized == "kdl",
+            )
+        )
+    ):
+        return normalized, provider_config
+    return None
 
 
 def _record_artifact_paths(

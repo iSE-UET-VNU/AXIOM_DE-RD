@@ -14,14 +14,19 @@ venv/
 !/configs/pipeline.yaml
 !/configs/pipeline.chandra2.yaml
 !/configs/pipeline.vidore-v3-ingest.yaml
+!/configs/pipeline.vidore-v3-kdl-ingest.yaml
 
 # Local benchmark checkouts and generated probe artifacts.
 /experiments/
 /ParseBench/
 /tmp/
+/.tmp/
 /chandra2_technical_summary_for_codex.md
 /debug.log
 /tests
+!/tests/
+/tests/*
+!/tests/test_kdl_provider.py
 
 # Local inputs and presigned-URL inventories can contain sensitive data.
 data/raw/
