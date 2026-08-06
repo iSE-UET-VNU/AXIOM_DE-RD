@@ -62,12 +62,19 @@ class RetrieveContextRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_query_or_embedding(self) -> "RetrieveContextRequest":
-       
-        raise NotImplementedError
+        if not self.query and not self.query_embedding:
+            raise ValueError(
+                "context requires 'query', 'query_embedding', or both; got neither."
+            )
+        return self
 
     def filters(self) -> dict[str, object]:
-       
-        raise NotImplementedError
+        out: dict[str, object] = {}
+        for name in ("organization_id", "document_id", "document_ids", "content_type"):
+            value = getattr(self, name)
+            if value is not None:
+                out[name] = value
+        return out
 
 
 # ---------------------------------------------------------------------------
