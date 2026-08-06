@@ -264,6 +264,10 @@ class Chandra2Provider:
     def parse_files_with_errors(
         self,
         documents: list[tuple[str | Path, DataObject]],
+        *,
+        on_document_complete: (
+            Callable[[int, ParsedData | Exception], None] | None
+        ) = None,
     ) -> list[ParsedData | Exception]:
         """Parse a batch while keeping failures scoped to their source document."""
 
@@ -276,12 +280,21 @@ class Chandra2Provider:
                     outcomes.append(self.parse_file(path, data_object))
                 except Exception as exc:
                     outcomes.append(exc)
+                if on_document_complete is not None:
+                    on_document_complete(len(outcomes) - 1, outcomes[-1])
             return outcomes
-        return self._parse_files_continuous(documents)
+        return self._parse_files_continuous(
+            documents,
+            on_document_complete=on_document_complete,
+        )
 
     def _parse_files_continuous(
         self,
         documents: list[tuple[str | Path, DataObject]],
+        *,
+        on_document_complete: (
+            Callable[[int, ParsedData | Exception], None] | None
+        ) = None,
     ) -> list[ParsedData | Exception]:
         """Render and infer one page per worker without limiting active PDFs."""
 
@@ -293,6 +306,7 @@ class Chandra2Provider:
                 documents,
                 runtime,
                 started,
+                on_document_complete=on_document_complete,
             )
 
         prepared = [
@@ -300,8 +314,16 @@ class Chandra2Provider:
             for path, data_object in documents
         ]
         parsed_documents: list[ParsedData | None] = [None] * len(prepared)
+        reported_documents: set[int] = set()
         schedulable_documents: list[int] = []
         round_robin_cursor = 0
+
+        def report(document_index: int, outcome: ParsedData | Exception) -> None:
+            if document_index in reported_documents:
+                return
+            reported_documents.add(document_index)
+            if on_document_complete is not None:
+                on_document_complete(document_index, outcome)
 
         # Counting pages opens each PDF briefly but does not render any page.
         # Every valid document then participates in one global round-robin queue.
@@ -370,6 +392,7 @@ class Chandra2Provider:
 
                 completed, _ = wait(
                     tuple(page_futures),
+                    timeout=0.05,
                     return_when=FIRST_COMPLETED,
                 )
                 for future in completed:
@@ -416,13 +439,33 @@ class Chandra2Provider:
                             job.document_index,
                         )
 
-            for future in as_completed(finalize_futures):
-                document_index = finalize_futures[future]
+                completed_finalizations = [
+                    future
+                    for future in finalize_futures
+                    if future.done()
+                ]
+                for future in completed_finalizations:
+                    document_index = finalize_futures.pop(future)
+                    document = prepared[document_index]
+                    try:
+                        parsed = future.result()
+                    except Exception as exc:
+                        document.failure = exc
+                        report(document_index, exc)
+                    else:
+                        parsed_documents[document_index] = parsed
+                        report(document_index, parsed)
+
+            for future in as_completed(tuple(finalize_futures)):
+                document_index = finalize_futures.pop(future)
                 document = prepared[document_index]
                 try:
                     parsed_documents[document_index] = future.result()
                 except Exception as exc:
                     document.failure = exc
+                    report(document_index, exc)
+                else:
+                    report(document_index, parsed_documents[document_index])
 
         outcomes: list[ParsedData | Exception] = []
         for index, document in enumerate(prepared):
@@ -435,6 +478,7 @@ class Chandra2Provider:
                 outcomes.append(
                     RuntimeError("Chandra2 did not finalize the document.")
                 )
+            report(index, outcomes[-1])
         return outcomes
 
     def _parse_files_multiprocess(
@@ -442,6 +486,10 @@ class Chandra2Provider:
         documents: list[tuple[str | Path, DataObject]],
         runtime: _ChandraRuntime,
         started: float,
+        *,
+        on_document_complete: (
+            Callable[[int, ParsedData | Exception], None] | None
+        ) = None,
     ) -> list[ParsedData | Exception]:
         """Render whole documents in isolated PDFium processes."""
 
@@ -450,6 +498,15 @@ class Chandra2Provider:
             for path, data_object in documents
         ]
         parsed_documents: list[ParsedData | None] = [None] * len(prepared)
+        reported_documents: set[int] = set()
+
+        def report(document_index: int, outcome: ParsedData | Exception) -> None:
+            if document_index in reported_documents:
+                return
+            reported_documents.add(document_index)
+            if on_document_complete is not None:
+                on_document_complete(document_index, outcome)
+
         render_document_indexes: list[int] = []
         for document_index, document in enumerate(prepared):
             try:
@@ -460,11 +517,14 @@ class Chandra2Provider:
                 render_document_indexes.append(document_index)
 
         if not render_document_indexes:
-            return [
+            outcomes = [
                 document.failure
                 or RuntimeError("Chandra2 could not schedule the document.")
                 for document in prepared
             ]
+            for document_index, outcome in enumerate(outcomes):
+                report(document_index, outcome)
+            return outcomes
 
         context = multiprocessing.get_context("spawn")
         task_queue = context.Queue()
@@ -603,6 +663,7 @@ class Chandra2Provider:
                     len(render_done) < len(render_document_indexes)
                     or page_futures
                     or pending_pages
+                    or finalize_futures
                 ):
                     received_event = False
                     try:
@@ -771,13 +832,34 @@ class Chandra2Provider:
                         )
                     )
 
-                for future in as_completed(finalize_futures):
-                    document_index = finalize_futures[future]
+                    completed_finalizations = [
+                        future
+                        for future in finalize_futures
+                        if future.done()
+                    ]
+                    for future in completed_finalizations:
+                        document_index = finalize_futures.pop(future)
+                        document = prepared[document_index]
+                        try:
+                            parsed = future.result()
+                        except Exception as exc:
+                            document.failure = exc
+                            report(document_index, exc)
+                        else:
+                            parsed_documents[document_index] = parsed
+                            report(document_index, parsed)
+
+                for future in as_completed(tuple(finalize_futures)):
+                    document_index = finalize_futures.pop(future)
                     document = prepared[document_index]
                     try:
-                        parsed_documents[document_index] = future.result()
+                        parsed = future.result()
                     except Exception as exc:
                         document.failure = exc
+                        report(document_index, exc)
+                    else:
+                        parsed_documents[document_index] = parsed
+                        report(document_index, parsed)
         finally:
             if batch_client is not None:
                 batch_client.close()
@@ -796,15 +878,19 @@ class Chandra2Provider:
             parsed = parsed_documents[index]
             if parsed is not None:
                 outcomes.append(parsed)
+                report(index, parsed)
                 continue
             if document.failure is not None:
                 self._discard_stream_document(document)
                 outcomes.append(document.failure)
+                report(index, document.failure)
                 continue
             self._discard_stream_document(document)
-            outcomes.append(
-                RuntimeError("Chandra2 did not finalize the document.")
+            error = RuntimeError(
+                "Chandra2 did not finalize the document."
             )
+            outcomes.append(error)
+            report(index, error)
         return outcomes
 
     def _activate_stream_document(

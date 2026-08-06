@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..models import (
     DataObject,
@@ -81,6 +81,7 @@ def run_many(
     *,
     parser_config: dict[str, Any] | None = None,
     project_root: str | Path | None = None,
+    on_document_complete: Callable[[IngestionOutput], None] | None = None,
 ) -> IngestionOutput:
     """Parse multiple inputs through one shared parsing service."""
 
@@ -102,14 +103,33 @@ def run_many(
             )
         )
 
-    parse_results = ParsingService.from_config(parser_config).parse_many(prepared)
-    for (_, data_object), parse_result in zip(prepared, parse_results):
+    partial_outputs: list[IngestionOutput | None] = [None] * len(prepared)
+
+    def accept_result(index: int, parse_result: ParseResult) -> None:
+        if partial_outputs[index] is not None:
+            return
+        partial = IngestionOutput()
+        _, data_object = prepared[index]
         _accept_parse_result(
-            output,
+            partial,
             data_object,
             parse_result,
             project_root=project_root,
         )
+        partial_outputs[index] = partial
+        if on_document_complete is not None:
+            on_document_complete(partial)
+
+    parse_results = ParsingService.from_config(parser_config).parse_many(
+        prepared,
+        on_result=accept_result,
+    )
+    for index, parse_result in enumerate(parse_results):
+        accept_result(index, parse_result)
+    for partial in partial_outputs:
+        if partial is None:
+            raise RuntimeError("Ingestion did not produce every document result.")
+        output.extend(partial)
     return output
 
 

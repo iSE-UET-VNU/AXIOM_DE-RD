@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ...models import DataObject, ParseResult, ParseStatus
 from .backends import (
@@ -85,6 +85,8 @@ class ParsingService:
     def parse_many(
         self,
         documents: list[tuple[str | Path, DataObject]],
+        *,
+        on_result: Callable[[int, ParseResult], None] | None = None,
     ) -> list[ParseResult]:
         """Parse many inputs while sharing a continuous Chandra2 page queue."""
 
@@ -93,6 +95,13 @@ class ParsingService:
             int,
             tuple[DocumentParser, list[tuple[int, str | Path, DataObject]]],
         ] = {}
+
+        def emit(index: int, result: ParseResult) -> None:
+            if results[index] is not None:
+                return
+            results[index] = result
+            if on_result is not None:
+                on_result(index, result)
 
         for index, (path, data_object) in enumerate(documents):
             backend = self.router.resolve(path)
@@ -109,14 +118,43 @@ class ParsingService:
                     chandra_groups[key] = (backend, [])
                 chandra_groups[key][1].append((index, path, data_object))
                 continue
-            results[index] = self.parse(path, data_object)
+            emit(index, self.parse(path, data_object))
 
         for backend, group in chandra_groups.values():
             provider = backend.provider
             assert isinstance(provider, Chandra2Provider)
+
+            def accept_provider_result(
+                group_index: int,
+                parsed: Any,
+            ) -> None:
+                index, _, data_object = group[group_index]
+                if isinstance(parsed, Exception):
+                    emit(
+                        index,
+                        _document_provider_failure(
+                            backend,
+                            data_object,
+                            parsed,
+                        ),
+                    )
+                    return
+                parsed.metadata.setdefault("parser", "chandra2")
+                parsed.metadata["backend"] = "chandra2"
+                emit(
+                    index,
+                    ParseResult.success(
+                        data_object.object_id,
+                        "chandra2",
+                        parsed,
+                        route="document",
+                    ),
+                )
+
             try:
                 parsed_documents = provider.parse_files_with_errors(
-                    [(path, data_object) for _, path, data_object in group]
+                    [(path, data_object) for _, path, data_object in group],
+                    on_document_complete=accept_provider_result,
                 )
                 if len(parsed_documents) != len(group):
                     raise RuntimeError(
@@ -124,29 +162,18 @@ class ParsingService:
                     )
             except Exception as exc:
                 for index, _, data_object in group:
-                    results[index] = _document_provider_failure(
-                        backend,
-                        data_object,
-                        exc,
+                    emit(
+                        index,
+                        _document_provider_failure(
+                            backend,
+                            data_object,
+                            exc,
+                        ),
                     )
                 continue
 
-            for (index, _, data_object), parsed in zip(group, parsed_documents):
-                if isinstance(parsed, Exception):
-                    results[index] = _document_provider_failure(
-                        backend,
-                        data_object,
-                        parsed,
-                    )
-                    continue
-                parsed.metadata.setdefault("parser", "chandra2")
-                parsed.metadata["backend"] = "chandra2"
-                results[index] = ParseResult.success(
-                    data_object.object_id,
-                    "chandra2",
-                    parsed,
-                    route="document",
-                )
+            for group_index, parsed in enumerate(parsed_documents):
+                accept_provider_result(group_index, parsed)
 
         if any(result is None for result in results):
             raise RuntimeError("ParsingService did not produce a result for every input.")
