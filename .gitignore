@@ -16,9 +16,9 @@ venv/
 # Local benchmark checkouts and generated probe artifacts.
 /ParseBench/
 /tmp/
-/tests/
 /chandra2_technical_summary_for_codex.md
 /debug.log
+/tests
 
 # Local inputs and presigned-URL inventories can contain sensitive data.
 data/raw/
@@ -39,30 +39,23 @@ data/processed/*
 .vscode
 .DS_Store
 
-# Isolated interpreter for the local cross-encoder: torch 2.2.2 (the x86-macOS
-# ceiling) needs the numpy 1.x ABI, which conflicts with the main env's numpy 2.
-.venv-reranker/
-
 # Challenge inputs: the data lake is ~2GB of mixed media and must never be
 # committed. Brackets are glob character classes, so the literal name is escaped.
 \[iSE Summer Challenge 2026\] Data Lake/
 \[iSE Summer Challenge 2026\] Questions*.csv
 *.zip
 
-# Archived experiments kept out of the index.
-archive/
+# Local corpora and notebooks. Not needed to run the pipeline.
+data/subset/
+*.ipynb
 
 # ---------------------------------------------------------------------------
 # Research, not system. Nothing below is needed to run the pipeline. The
-# dependency direction makes this safe: benchmark/ imports src/, never the
+# dependency direction makes this safe: research/ imports src/, never the
 # reverse.
 # ---------------------------------------------------------------------------
-benchmark/
+research/
 data/benchmark/
-data/subset/
-scripts/benchmark_report.py
-scripts/chunklab_report.py
-*.ipynb
 
 # Retrieval artifacts are build output, keyed by config_hash and rebuilt from the
 # chunk manifest. The BM25 index over a full corpus is large and derived.
