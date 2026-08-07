@@ -29,6 +29,7 @@ venv/
 !/tests/
 /tests/*
 !/tests/test_kdl_provider.py
+!/tests/test_api_output_paths.py
 
 # Local inputs and presigned-URL inventories can contain sensitive data.
 data/raw/
