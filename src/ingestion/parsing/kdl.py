@@ -30,7 +30,8 @@ KDL_EXTENSIONS = frozenset({".pdf", ".png", ".jpg", ".jpeg", ".jfif"})
 class KDLConfig:
     """Runtime settings for KDL's two-stage vLLM pipeline."""
 
-    endpoint_url: str
+    method: str = "vllm"
+    endpoint_url: str = "http://127.0.0.1:8000/v1"
     model: str = "kdl-frontier-parser-nano"
     dpi: int = 144
     request_timeout_seconds: float = 3600.0
@@ -52,20 +53,22 @@ class KDLConfig:
     @classmethod
     def from_mapping(cls, config: dict[str, Any] | None) -> "KDLConfig":
         values = config or {}
+        method = str(values.get("method", "vllm")).strip().lower()
+        if method != "vllm":
+            raise ValueError("kdl.method must be 'vllm'")
         endpoint = str(
             values.get("endpoint_url")
+            or os.getenv("VLLM_API_BASE")
             or os.getenv("KDL_NANO_ENDPOINT_URL")
-            or ""
+            or "http://127.0.0.1:8000/v1"
         ).strip().rstrip("/")
-        if not endpoint:
-            raise ValueError(
-                "kdl.endpoint_url or KDL_NANO_ENDPOINT_URL is required"
-            )
         max_workers = _positive_int(values, "max_workers", 32)
         return cls(
+            method=method,
             endpoint_url=endpoint,
             model=str(
                 values.get("model")
+                or os.getenv("VLLM_MODEL_NAME")
                 or os.getenv("KDL_NANO_MODEL")
                 or "kdl-frontier-parser-nano"
             ).strip(),
@@ -371,6 +374,7 @@ class KDLProvider:
             text=markdown,
             metadata={
                 "parser": "kdl",
+                "method": self.config.method,
                 "model_name": self.config.model,
                 "inference_mode": "kdl_two_stage_vllm",
                 "continuous_page_queue": self.config.continuous_page_queue,

@@ -85,8 +85,7 @@
       "output_dir": "data/work/chandra2"
     },
     "kdl": {
-      "endpoint_url": "http://127.0.0.1:8000/v1",
-      "model": "kdl-frontier-parser-nano",
+      "method": "vllm",
       "continuous_page_queue": true,
       "max_workers": 64,
       "render_processes": 32,

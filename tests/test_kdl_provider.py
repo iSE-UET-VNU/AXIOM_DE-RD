@@ -82,13 +82,13 @@ class _FakeKDLProvider(KDLProvider):
 
 
 class KDLProviderTests(unittest.TestCase):
-    def test_config_requires_endpoint(self) -> None:
-        with self.assertRaisesRegex(ValueError, "endpoint_url"):
-            KDLConfig.from_mapping({"endpoint_url": ""})
+    def test_config_rejects_non_vllm_method(self) -> None:
+        with self.assertRaisesRegex(ValueError, "method"):
+            KDLConfig.from_mapping({"method": "hf"})
 
     def test_config_uses_chandra_style_defaults(self) -> None:
         config = KDLConfig.from_mapping(
-            {"endpoint_url": "http://127.0.0.1:8000/v1"}
+            {"method": "vllm"}
         )
         self.assertEqual(config.max_workers, 32)
         self.assertEqual(config.render_processes, 32)
