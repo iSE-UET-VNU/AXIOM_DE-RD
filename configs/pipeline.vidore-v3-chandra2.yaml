@@ -2,6 +2,19 @@
   "input": {
     "mode": "local_raw"
   },
+  "s3_input": {
+    "uri_env": "S3_URI",
+    "profile_env": "AWS_PROFILE",
+    "region_env": "AWS_REGION",
+    "endpoint_url_env": "S3_ENDPOINT_URL",
+    "info_file": "data/raw/s3.info.txt",
+    "all_objects": false,
+    "object_key": null,
+    "object_key_env": "S3_OBJECT_KEY",
+    "file_name": null,
+    "max_size_bytes": 536870912,
+    "request_timeout_seconds": 60
+  },
   "local_input": {
     "path": "data/raw/benchmarks/vidore_v3",
     "recursive": true,
@@ -27,9 +40,18 @@
   ],
   "parsing": {
     "provider": "chandra2",
+    "pptx": {
+      "extract_images": true
+    },
+    "word": {
+      "extract_images": true,
+      "soffice_path": null,
+      "conversion_timeout_seconds": 120
+    },
     "chandra2": {
       "method": "vllm",
       "continuous_page_queue": true,
+      "batch_size": 64,
       "max_workers": 256,
       "render_processes": 32,
       "request_batch_size": 1,
@@ -40,8 +62,60 @@
       "include_headers_footers": true,
       "save_raw_outputs": true,
       "refine_tables": false,
+      "table_max_workers": 8,
+      "table_max_output_tokens": 8192,
+      "table_crop_margin_ratio": 0.02,
+      "table_crop_min_short_side": 1536,
+      "table_crop_max_long_side": 3072,
+      "table_crop_max_pixels": 6291456,
       "output_dir": "data/work/benchmarks/vidore-v3-chandra2"
+    },
+    "kdl": {
+      "endpoint_url": "http://127.0.0.1:8000/v1",
+      "model": "kdl-frontier-parser-nano",
+      "continuous_page_queue": true,
+      "max_workers": 64,
+      "render_processes": 32,
+      "bbox_max_workers": 256,
+      "dpi": 144,
+      "request_timeout_seconds": 3600,
+      "max_retries": 2,
+      "max_pages": 400,
+      "layout_max_output_tokens": 6000,
+      "text_max_output_tokens": 2048,
+      "table_max_output_tokens": 5500,
+      "picture_max_output_tokens": 4096,
+      "formula_max_output_tokens": 128,
+      "save_raw_outputs": true,
+      "output_dir": "data/work/benchmarks/vidore-v3-kdl"
+    },
+    "lift_api": {
+      "api_key_env": "DATALAB_API_KEY",
+      "mode": "accurate",
+      "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
+      "fallback_to_local": false,
+      "extract_images": true,
+      "save_raw_outputs": true
     }
+  },
+  "table_agent": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8001",
+    "base_url_env": "TABLE_AGENT_BASE_URL",
+    "upload_path": "/v1/jobs/upload",
+    "api_key_env": "TABLE_AGENT_SERVICE_API_KEY",
+    "timeout_seconds": 1800,
+    "verify_ssl": true,
+    "stage": "structure",
+    "embed": true,
+    "sheets": [],
+    "supported_extensions": [
+      ".xls",
+      ".xlsm",
+      ".xlsx",
+      ".xltm",
+      ".xltx"
+    ]
   },
   "chunking_embedding": {
     "chunker": "fixed_overlap",
