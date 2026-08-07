@@ -19,13 +19,23 @@ def build_dataeng_output(
 ) -> dict[str, Any]:
     """Return common run metadata and one stage-oriented object per document."""
     root = Path(project_root).resolve()
-    metadata_path = _required_artifact_path(state, "output_metadata", root)
+    output_root = Path(state.output_dir)
+    if not output_root.is_absolute():
+        output_root = root / output_root
+    allowed_roots = (root, output_root.resolve())
+    metadata_path = _required_artifact_path(
+        state,
+        "output_metadata",
+        root,
+        allowed_roots=allowed_roots,
+    )
     documents = [
         _read_json(
             _required_artifact_path(
                 state,
                 f"output_document:{data_object.object_id}",
                 root,
+                allowed_roots=allowed_roots,
             )
         )
         for data_object in state.data_objects
@@ -78,6 +88,8 @@ def _required_artifact_path(
     state: PipelineState,
     name: str,
     project_root: Path,
+    *,
+    allowed_roots: tuple[Path, ...] | None = None,
 ) -> Path:
     value = state.artifact_paths.get(name)
     if not value:
@@ -89,11 +101,18 @@ def _required_artifact_path(
     if not path.is_absolute():
         path = project_root / path
     resolved = path.resolve()
-    try:
-        resolved.relative_to(project_root)
-    except ValueError:
+    roots = allowed_roots or (project_root,)
+    if not any(_is_within(resolved, root) for root in roots):
         raise RuntimeError(f"Artifact path is outside the project root: {name!r}.") from None
     return resolved
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _read_json(path: Path) -> dict[str, Any]:
