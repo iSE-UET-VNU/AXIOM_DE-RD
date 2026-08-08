@@ -1,6 +1,6 @@
 """Build the evaluation set from the question sheet.
 
-    python -m research.harness.build_evalset [--questions CSV --lake DIR --out DIR]
+    python -m src.evaluation.build_evalset [--questions CSV --lake DIR --out DIR]
 
 Writes ``questions.jsonl`` (every question, with resolution state) plus a
 coverage report. Selection of scored subsets happens at run time from the
@@ -11,13 +11,15 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+
+from src.utils.paths import repo_root
 import argparse
 import json
 
 from .evalset import load_questions, write_jsonl
 from .lake import Lake
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = repo_root(__file__)
 DEFAULT_LAKE = PROJECT_ROOT / "[iSE Summer Challenge 2026] Data Lake"
 DEFAULT_QUESTIONS = PROJECT_ROOT / "[iSE Summer Challenge 2026] Questions - Q&A(1).csv"
 DEFAULT_OUT = PROJECT_ROOT / "data" / "benchmark"

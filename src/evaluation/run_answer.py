@@ -1,6 +1,6 @@
 """Score one experiment arm at the answer level.
 
-    python -m research.harness.run_answer --run runs/vlm_fixed_rrf.jsonl --arm vlm_fixed_rrf
+    python -m src.evaluation.run_answer --run runs/vlm_fixed_rrf.jsonl --arm vlm_fixed_rrf
 
 Input is a retrieval run: one JSON object per line, ``{"qid", "chunks": [...]}``,
 where each chunk carries ``chunk_id``, ``doc_id``, ``text`` and ``score`` in rank
@@ -25,6 +25,8 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import asdict
 from pathlib import Path
+
+from src.utils.paths import repo_root
 from typing import Any
 import argparse
 import json
@@ -32,11 +34,19 @@ import time
 
 from .benchmarks import load as load_benchmark
 from .benchmarks.base import check_single_taxonomy
-from .generate import GENERATOR_MODEL, MAX_CONTEXT_CHARS, ContextChunk, generate
-from .judge import JUDGE_MODEL, judge
+from .generate import MAX_CONTEXT_CHARS, ContextChunk, generate
+from .judge import judge
+from .model_guard import assert_real
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = repo_root(__file__)
 DATA = PROJECT_ROOT / "data" / "benchmark"
+
+# Same reason as run_retrieval: config must not depend on which shell launched
+# the run. Harmless when the model service needs no key, load-bearing the
+# moment a generator or judge routes to a keyed provider.
+from src.utils.env import load_dotenv_file  # noqa: E402
+
+load_dotenv_file(PROJECT_ROOT)
 
 
 def load_run(path: Path) -> dict[str, list[ContextChunk]]:
@@ -64,8 +74,15 @@ def main() -> None:
     parser.add_argument("--benchmark", default="ise", help="Benchmark adapter name.")
     parser.add_argument("--questions", default=str(DATA / "questions.jsonl"))
     parser.add_argument("--out", default=str(DATA / "answers"))
-    parser.add_argument("--generator", default=GENERATOR_MODEL)
-    parser.add_argument("--judge", default=JUDGE_MODEL)
+    parser.add_argument(
+        "--generator", required=True, metavar="ALIAS",
+        help="Model Service alias to generate with. Required, no default.",
+    )
+    parser.add_argument(
+        "--judge", required=True, metavar="ALIAS",
+        help="Model Service alias to judge with. Required, and must differ from "
+        "--generator: LLM judges prefer their own outputs.",
+    )
     parser.add_argument("--max-context-chars", type=int, default=MAX_CONTEXT_CHARS)
     parser.add_argument(
         "--subset",
@@ -75,6 +92,9 @@ def main() -> None:
         "resolvable set; answer scoring is bounded by what the arm can parse.",
     )
     args = parser.parse_args()
+
+    # Resolve both aliases and refuse a mock before the first question is asked.
+    resolved = assert_real([args.generator, args.judge])
 
     benchmark = _load(args)
     questions = list(benchmark.questions())
@@ -121,7 +141,9 @@ def main() -> None:
             }
         )
 
-    report = summarize(args.arm, records, missing, args, time.perf_counter() - started)
+    report = summarize(
+        args.arm, records, missing, args, time.perf_counter() - started, resolved
+    )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{args.arm}.json").write_text(
@@ -181,6 +203,7 @@ def summarize(
     missing: list[str],
     args: argparse.Namespace,
     seconds: float,
+    resolved: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     n = len(records) or 1
 
@@ -212,6 +235,15 @@ def summarize(
         "arm": arm,
         "generator": args.generator,
         "judge": args.judge,
+        # Aliases can be repointed; the upstream string is what makes a result attributable.
+        "models_resolved": {
+            alias: {
+                "provider": r.provider,
+                "adapter_type": r.adapter_type,
+                "upstream_model_id": r.upstream_model_id,
+            }
+            for alias, r in (resolved or {}).items()
+        },
         "max_context_chars": args.max_context_chars,
         "subset": args.subset,
         "scored": len(records),

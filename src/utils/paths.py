@@ -50,3 +50,16 @@ def _looks_like_path(value: str) -> bool:
         or (len(value) >= 3 and value[1:3] == ":\\")
         or (len(value) >= 3 and value[1:3] == ":/")
     )
+
+
+def repo_root(start: str | Path | None = None) -> Path:
+    """Walk up to the directory holding pyproject.toml.
+
+    A hardcoded ``parents[N]`` breaks silently on any directory move and surfaces
+    as a missing data file rather than as a path error.
+    """
+    here = Path(start or __file__).resolve()
+    for candidate in [here, *here.parents]:
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    raise RuntimeError(f"No pyproject.toml above {here}; cannot locate the repo root.")
