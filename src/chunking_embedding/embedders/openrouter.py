@@ -178,12 +178,18 @@ class OpenRouterEmbedder:
             if attempt:
                 self.stats["retries"] += 1
                 self._sleep(min(2.0 * 2 ** (attempt - 1), 30.0))
-            response = requests.post(
-                f"{self.base_url}/embeddings",
-                headers=headers,
-                json={"model": self.model, "input": batch},
-                timeout=self.timeout,
-            )
+            # Retried like the chat client above: an uncaught ReadTimeout here
+            # aborts the whole run and every later arm loses its embeddings.
+            try:
+                response = requests.post(
+                    f"{self.base_url}/embeddings",
+                    headers=headers,
+                    json={"model": self.model, "input": batch},
+                    timeout=self.timeout,
+                )
+            except requests.RequestException as error:
+                last_error = f"{type(error).__name__}: {error}"
+                continue
             self.stats["api_calls"] += 1
             try:
                 payload = response.json()

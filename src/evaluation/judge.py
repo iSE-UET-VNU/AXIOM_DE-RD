@@ -20,7 +20,7 @@ import unicodedata
 from .generate import ABSTAIN, Generation
 from .llm import complete
 
-JUDGE_MODEL = "llm-judge"
+# No default judge: ``llm-judge`` named an alias the gateway does not have.
 TEMPERATURE = 0.0
 
 PROMPT = """You are grading one answer against a reference answer.
@@ -74,7 +74,7 @@ def judge(
     generation: Generation,
     answer_type: str,
     *,
-    model: str = JUDGE_MODEL,
+    model: str,
     generator_model: str,
 ) -> Verdict:
     if model == generator_model:

@@ -19,7 +19,7 @@ from typing import Sequence
 
 from .llm import complete
 
-GENERATOR_MODEL = "llm-default"
+# No default generator: ``llm-default`` was never registered and every run 404'd.
 TEMPERATURE = 0.0
 MAX_CONTEXT_CHARS = 12000
 MAX_OUTPUT_TOKENS = 512
@@ -95,7 +95,7 @@ def generate(
     question: str,
     chunks: Sequence[ContextChunk],
     *,
-    model: str = GENERATOR_MODEL,
+    model: str,
     max_chars: int = MAX_CONTEXT_CHARS,
 ) -> Generation:
     packed = pack_context(chunks, max_chars)
