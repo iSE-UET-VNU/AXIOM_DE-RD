@@ -1,7 +1,7 @@
 """Run retrieval arms over a benchmark and emit run records.
 
-    python -m research.harness.run_retrieval --benchmark mmdocir --arms bm25,dense,rrf
-    python -m research.harness.run_retrieval --benchmark ise --arms bm25 --embedder openrouter_te3s
+    python -m src.evaluation.run_retrieval --benchmark mmdocir --arms bm25,dense,rrf
+    python -m src.evaluation.run_retrieval --benchmark ise --arms bm25 --embedder openrouter_te3s
 
 Output is the run-record JSONL that ``run_answer.py`` consumes, so the same file
 feeds retrieval metrics and answer metrics. Runs are cached on
@@ -18,15 +18,27 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+
+from src.utils.paths import repo_root
+from dataclasses import replace
 from typing import Any, Sequence
 import argparse
+import hashlib
 import json
 import sys
 import time
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = repo_root(__file__)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.utils.env import load_dotenv_file  # noqa: E402
+
+# Every entry point that can reach a keyed API must load .env the same way.
+# Loading it in some and not others makes a run succeed or fail on which shell
+# it was launched from, and the failure surfaces deep in the embedder as
+# "OPENROUTER_API_KEY is not set" rather than as a missing config file.
+load_dotenv_file(PROJECT_ROOT)
 
 from src.retrieval import runs  # noqa: E402
 from src.retrieval.index import LocalIndex  # noqa: E402
@@ -35,49 +47,68 @@ from src.retrieval.sparse import BM25Index  # noqa: E402
 from src.retrieval import retrievers  # noqa: E402
 
 from .benchmarks import load as load_benchmark  # noqa: E402
+from .corpus_source import BenchmarkCorpus, PipelineRunCorpus, content_identity  # noqa: E402
 
 DATA = PROJECT_ROOT / "data" / "benchmark"
 DEFAULT_ARMS = ("bm25", "dense", "rrf")
 
 
+def index_identity(args: Any, benchmark: Any) -> str:
+    """Everything that changes the index; asserted distinct in test_identity_keys."""
+    parts = [
+        args.benchmark,
+        args.level,
+        args.text_source,
+        args.chunker or "nochunk",
+        args.embedder or "noembed",
+        corpus_token(benchmark),
+    ]
+    chunk_params = _kv(getattr(args, "chunk_param", []))
+    if chunk_params:
+        parts.append(f"cp-{runs.stable_hash(chunk_params, 8)}")
+    embed_params = _kv(getattr(args, "embedder_param", []))
+    if embed_params:
+        parts.append(f"ep-{runs.stable_hash(embed_params, 8)}")
+    if args.prefix:
+        parts.append("prefix")
+    if args.rerank:
+        parts.append(f"rr-{args.rerank}-{args.rerank_model}-d{args.rerank_depth}")
+    return ".".join(parts)
+
+
+def _kv(items: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for item in items or []:
+        if "=" in item:
+            key, value = item.split("=", 1)
+            out[key] = int(value) if value.lstrip("-").isdigit() else value
+    return out
+
+
+def corpus_token(benchmark: Any) -> str:
+    return content_identity(benchmark)
+
+
 def build_index(
-    benchmark: Any, embedder: Any, index_id: str, chunker: str = "", params: dict | None = None
+    benchmark: Any, embedder: Any, index_id: str, chunker: str = "",
+    params: dict | None = None, prefix: bool = False, analyzer: str = "auto",
 ) -> LocalIndex:
-    """Index a benchmark's units, chunking them first if asked.
+    """Index a corpus source's units.
 
     MMDocIR ships pages and layouts -- already the retrieval granularity, so no
     chunking. The iSE lake ships whole documents, where the chunker is an
-    experimental variable rather than a property of the source, so it is applied
-    here and named in the index_id.
+    experimental variable rather than a property of the source.
     """
-    if chunker:
-        from .chunking import chunk_corpus
-
-        documents = [
-            {
-                "doc_id": doc.doc_id,
-                "title": doc.meta.get("title", ""),
-                "text": doc.text or "",
-                "blocks": doc.meta.get("blocks") or [],
-            }
-            for doc in benchmark.corpus()
-        ]
-        records = [
-            ChunkRecord(chunk_id=c.chunk_id, doc_id=c.doc_id, text=c.index_text)
-            for c in chunk_corpus(documents, chunker, params or {})
-        ]
-    else:
-        records = [
-            ChunkRecord(
-                chunk_id=doc.doc_id,
-                doc_id=doc.doc_id,
-                text=doc.text or "",
-                page=doc.page,
-                meta={"modality": doc.modality, **dict(doc.meta)},
-            )
-            for doc in benchmark.corpus()
-        ]
-    records = [r for r in records if r.text.strip()]
+    source = benchmark if hasattr(benchmark, "units") \
+        else BenchmarkCorpus(benchmark, chunker, params, prefix)
+    records = list(source.units())
+    if not records:
+        raise SystemExit(
+            f"{index_id}: no indexable text from {source.corpus_identity()}"
+            + (f" via chunker {chunker!r}" if chunker else "")
+            + ". An empty index scores 0.0 on every question without erroring, so "
+            "it is refused here rather than reported as a result."
+        )
     payload = [{"chunk_id": r.chunk_id, "doc_id": r.doc_id, "text": r.text} for r in records]
 
     vectors = None
@@ -92,7 +123,7 @@ def build_index(
         if vectors.shape[0] != len(records):
             raise ValueError("Embedder returned a different number of vectors than chunks.")
 
-    bm25 = BM25Index(analyzer_name="auto").build(payload)
+    bm25 = BM25Index(analyzer_name=analyzer).build(payload)
     return LocalIndex(
         index_id=f"{index_id}.{bm25.analyzer_name}",
         records=records,
@@ -119,6 +150,35 @@ def reachability(benchmark: Any, corpus_doc_ids: set[str], qids: Sequence[str]) 
         groups_ok = all(any(doc in corpus_doc_ids for doc in g) for g in gold.any_of)
         out[str(qid)] = bool(gold.required) and named_ok and groups_ok
     return out
+
+
+def graded_ndcg(benchmark: Any, records: list[runs.RunRecord], k: int) -> dict[str, Any]:
+    """NDCG@k over graded relevance, for benchmarks that publish it.
+
+    Computed here rather than in a side script: a metric needing a manual second
+    step is one that eventually gets reported from a stale file.
+    """
+    qrels = getattr(benchmark, "qrels", None)
+    if not callable(qrels):
+        return {}
+    try:
+        import pytrec_eval
+    except ImportError:
+        return {f"ndcg@{k}": None, "ndcg_note": "pip install pytrec_eval-terrier"}
+
+    gold = {q: dict(v) for q, v in qrels().items() if v}
+    run = {
+        r.qid: {c["doc_id"]: float(c["score"]) for c in r.chunks}
+        for r in records if r.qid in gold
+    }
+    if not run:
+        return {}
+    scores = pytrec_eval.RelevanceEvaluator(gold, {f"ndcg_cut_{k}"}).evaluate(run)
+    values = [v[f"ndcg_cut_{k}"] for v in scores.values()]
+    return {
+        f"ndcg@{k}": round(100 * sum(values) / len(values), 2),
+        f"ndcg@{k}_n": len(values),
+    }
 
 
 def evaluate(
@@ -199,6 +259,7 @@ def evaluate(
 
     return {
         f"recall@{k}": mean(doc_recall),
+        **graded_ndcg(benchmark, records, k),
         f"page_recall@{k}": mean(page_recall),
         # At page level this is "was the containing page retrieved", NOT the
         # paper's layout recall. The name says so, because a reader comparing it
@@ -246,10 +307,47 @@ def main() -> None:
     parser.add_argument("--embedder", default="", help="Enables the dense and fusion arms.")
     parser.add_argument("--embedder-param", action="append", default=[], metavar="K=V")
     parser.add_argument("--root", default="", help="Benchmark data root, if it needs one.")
+    parser.add_argument(
+        "--corpus", default="", metavar="PATH",
+        help="Corpus file for adapters that read one (ise). Names the arm and "
+        "enters the index_id, so two parsers never share a run cache.",
+    )
+    parser.add_argument(
+        "--analyzer", default="auto", choices=["auto", "plain", "cjk_bigram"],
+        help="'auto' picks per corpus by CJK presence, so two parsers can resolve "
+        "differently and a comparison varies tokenizer as well as parser. Pin it "
+        "when comparing corpora.",
+    )
+    parser.add_argument(
+        "--parsed-run", default="", metavar="DIR",
+        help="Index a pipeline run directory instead of the benchmark's own text. "
+        "The benchmark still supplies questions and gold.",
+    )
+    parser.add_argument(
+        "--granularity", default="page", choices=["page", "content"],
+        help="Unit for --parsed-run: page text, or page text keeping table/list HTML.",
+    )
+    parser.add_argument("--subset", default="", help="ViDoRe V3 subset, e.g. physics.")
+    parser.add_argument(
+        "--language", default="", help="ViDoRe V3 query language. Required for that benchmark."
+    )
     parser.add_argument("--level", default="page", choices=["page", "layout"])
     parser.add_argument("--text-source", default="vlm_text", choices=["vlm_text", "ocr_text"])
     parser.add_argument("--out", default=str(DATA / "runs"))
     parser.add_argument("--chunker", default="", help="Chunk document-level units, e.g. fixed_overlap.")
+    parser.add_argument(
+        "--prefix", action="store_true",
+        help="Prepend the document title/filename to each chunk before indexing. "
+        "Gives every chunk its provenance, which lexical matching otherwise loses "
+        "when a chunk from the middle of a document carries no identifying text.",
+    )
+    parser.add_argument(
+        "--rerank", default="", choices=["", "llm"],
+        help="Rerank retrieved hits. 'llm' scores the best chunk of each distinct "
+        "document via model-service.",
+    )
+    parser.add_argument("--rerank-model", default="llm-rerank")
+    parser.add_argument("--rerank-depth", type=int, default=20)
     parser.add_argument("--chunk-param", action="append", default=[], metavar="K=V")
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
@@ -259,6 +357,12 @@ def main() -> None:
         kwargs = {"level": args.level, "text_source": args.text_source}
         if args.root:
             kwargs["root"] = args.root
+    elif args.benchmark == "vidore_v3":
+        kwargs = {"subset": args.subset, "language": args.language}
+        if args.root:
+            kwargs["root"] = args.root
+    elif args.benchmark == "ise" and args.corpus:
+        kwargs = {"corpus_path": args.corpus}
     benchmark = load_benchmark(args.benchmark, **kwargs)
 
     embedder = None
@@ -274,11 +378,23 @@ def main() -> None:
             key, value = item.split("=", 1)
             chunk_params[key] = int(value) if value.lstrip("-").isdigit() else value
 
-    identity = ".".join(
-        [args.benchmark, args.level, args.text_source,
-         args.chunker or "nochunk", args.embedder or "noembed"]
-    )
-    index = build_index(benchmark, embedder, identity, args.chunker, chunk_params)
+    if args.parsed_run:
+        source: Any = PipelineRunCorpus(
+            args.parsed_run, subset=args.subset, granularity=args.granularity,
+            chunker=args.chunker, params=chunk_params, prefix=args.prefix,
+        )
+    else:
+        source = BenchmarkCorpus(benchmark, args.chunker, chunk_params, args.prefix)
+
+    # Any two arms we compare must differ here, or the second reports the first's cache.
+    identity = index_identity(args, source)
+    index = build_index(source, embedder, identity, analyzer=args.analyzer)
+
+    reranker = None
+    if args.rerank == "llm":
+        from .llm_rerank import LLMReranker
+
+        reranker = LLMReranker(model=args.rerank_model, depth=args.rerank_depth)
 
     questions = list(benchmark.questions())
     if args.limit:
@@ -312,7 +428,9 @@ def main() -> None:
                 print(f"  {name:9} skipped (needs --embedder)")
                 continue
         arm = retrievers.build(name, index)
-        path = runs.cache_path(out_root, index.index_id, arm.retriever_id, arm.params(), qids)
+        # ``depth`` changes what each record carries, so it belongs in the run key.
+        arm_params = {**dict(arm.params()), "depth": args.depth}
+        path = runs.cache_path(out_root, index.index_id, arm.retriever_id, arm_params, qids)
         if path.exists():
             records = runs.read(path)
             print(f"  {arm.retriever_id:9} cached ({len(records)} records)")
@@ -328,10 +446,31 @@ def main() -> None:
                 )
                 started = time.perf_counter()
                 hits = arm.retrieve(question.query, args.depth, scope=scope)
+                if reranker is not None and hits:
+                    # Document-level budget: rerank the best chunk of each of
+                    # `depth` distinct documents rather than `depth` chunks that
+                    # may all come from two. Measured +5 R@1 at identical cost.
+                    order = reranker.rerank(
+                        question.query,
+                        [(i, h.score) for i, h in enumerate(hits)],
+                        [h.text for h in hits],
+                        [h.doc_id for h in hits],
+                    )
+                    if order:
+                        ranked = [hits[i] for i, _ in order if 0 <= i < len(hits)]
+                        seen = {id(h) for h in ranked}
+                        # A reranker may only reorder: anything it dropped keeps
+                        # its retrieved order behind what it ranked, so recall
+                        # can never fall below the first stage.
+                        ranked.extend(h for h in hits if id(h) not in seen)
+                        hits = [
+                            replace(h, rank=position, score=float(len(ranked) - position))
+                            for position, h in enumerate(ranked, start=1)
+                        ]
                 records.append(
                     runs.RunRecord.build(
                         question.qid, question.query, arm.retriever_id, index.index_id,
-                        runs.params_hash(arm.params()), hits,
+                        runs.params_hash(arm_params), hits,
                         scope_doc_ids=scope,
                         latency_ms=(time.perf_counter() - started) * 1000,
                     )
