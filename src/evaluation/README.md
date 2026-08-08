@@ -1,0 +1,75 @@
+# src/evaluation
+
+Scores retrieval and answer quality against a benchmark. Reads parser output;
+parses nothing itself. Previously `research/harness/`.
+
+## Setup
+
+    pip install -e .
+    python research/experiments/fetch_corpus.py   # gold queries + qrels, not in the repo
+
+`.env` needs `OPENROUTER_API_KEY` for any dense arm.
+
+## Run
+
+Parse first — the existing pipeline, unchanged:
+
+    python scripts/run_pipeline.py \
+        --config configs/pipeline.vidore-v3-chandra2.yaml \
+        --local-raw <dir-of-pdfs>
+    # writes data/output/benchmarks/<run>/<run_id>/documents/*.json
+
+### Parsing on Colab
+
+chandra2 and KDL need a GPU with vLLM on localhost, so the parse runs where the
+GPU is. `Chandra_serving_de.ipynb` and `KDL_serving_de.ipynb` start vLLM, patch
+the config at runtime, and call the same `scripts/run_pipeline.py` above.
+
+1. Open the notebook in Colab, GPU runtime.
+2. Set `VLLM_API_KEY` in Colab **Secrets** — the cells read it via
+   `userdata.get("VLLM_API_KEY")`, never a literal.
+3. Run the cells in order. vLLM must report ready before the pipeline cell.
+4. Download `data/output/benchmarks/<run>/<run_id>/` back to your machine and
+   point `--parsed-run` at it.
+
+Both configs set `include_extensions: [".pdf"]`, so anything else in the input
+directory is skipped without a warning. Neither notebook is tracked in this
+repo — ask for them.
+
+Then retrieve. The benchmark supplies questions and gold; `--parsed-run` only
+changes where the text comes from.
+
+    # baseline: the benchmark's own text
+    python -m src.evaluation.run_retrieval \
+        --benchmark vidore_v3 --subset physics --language french \
+        --analyzer plain --arms bm25,dense,rrf --embedder openrouter_te3s --k 10
+
+    # your parse: same command, one extra flag
+    python -m src.evaluation.run_retrieval \
+        --benchmark vidore_v3 --subset physics --language french \
+        --parsed-run data/output/benchmarks/<run>/<run_id> \
+        --analyzer plain --arms bm25,dense,rrf --embedder openrouter_te3s --k 10
+
+Compare the arms:
+
+    python -m src.evaluation.compare_arms data/benchmark/runs/*.report.json
+
+## Flags that matter
+
+| Flag | Why |
+|---|---|
+| `--language` | required, no default — a multilingual average is not a number to report by accident |
+| `--parsed-run DIR` | index a pipeline run instead of the benchmark's text |
+| `--granularity page\|content` | `page` joins block text; `content` keeps table and list HTML |
+| `--analyzer plain` | **pin it when comparing corpora** — `auto` picks per corpus by CJK presence, so two parsers can get different tokenizers |
+| `--chunker`, `--prefix`, `--rerank` | optional index variations; each enters the run cache key |
+
+## Check it works
+
+    python -c "from src.evaluation.benchmarks import _ADAPTERS; import importlib; \
+      [importlib.import_module(f'src.evaluation.benchmarks.{n}') for n in _ADAPTERS]; print('OK')"
+
+Adapters load by string, so a broken import path fails at run time, not import.
+
+The test suite is not tracked here — ask for `tests/` before changing anything in
+this module.
