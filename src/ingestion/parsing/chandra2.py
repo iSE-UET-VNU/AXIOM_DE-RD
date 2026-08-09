@@ -404,6 +404,14 @@ class Chandra2Provider:
                     try:
                         result, retained_image = future.result()
                         if document.failure is None:
+                            _write_stream_page_artifacts(
+                                self.config,
+                                document.file_path,
+                                document.data_object,
+                                job.page_index,
+                                document.page_count,
+                                result,
+                            )
                             document.results[job.page_index] = result
                             if self.config.refine_tables:
                                 document.pages[job.page_index] = retained_image
@@ -774,6 +782,14 @@ class Chandra2Provider:
                                         "Chandra2 marked the page as failed"
                                     )
                                 if document.failure is None:
+                                    _write_stream_page_artifacts(
+                                        self.config,
+                                        document.file_path,
+                                        document.data_object,
+                                        job.page_index,
+                                        document.page_count,
+                                        result,
+                                    )
                                     document.results[job.page_index] = result
                                     if self.config.refine_tables:
                                         document.pages[job.page_index] = image
@@ -2158,6 +2174,58 @@ def _table_shape(value: str) -> tuple[int, int] | None:
         ]
         max_columns = max(max_columns, max(row_columns, default=0))
     return len(parser.rows), max_columns
+
+
+def _write_stream_page_artifacts(
+    config: Chandra2Config,
+    file_path: Path,
+    data_object: DataObject,
+    page_index: int,
+    page_count: int,
+    result: Any,
+) -> None:
+    """Checkpoint one completed page before the whole document is ready."""
+
+    if not config.save_raw_outputs or not config.output_dir:
+        return
+    bundle_dir = Path(config.output_dir) / (
+        f"{_safe_slug(file_path.stem)}--{data_object.object_id}"
+    )
+    pages_dir = bundle_dir / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"page_{page_index + 1:04d}"
+    page_payloads, _ = _page_payloads([result])
+    page_payload = page_payloads[0]
+    page_payload["page_number"] = page_index + 1
+
+    _atomic_write_text(
+        pages_dir / f"{prefix}.raw.html",
+        str(getattr(result, "raw", "") or ""),
+    )
+    _atomic_write_text(
+        pages_dir / f"{prefix}.clean.html",
+        str(getattr(result, "html", "") or ""),
+    )
+    _atomic_write_text(
+        pages_dir / f"{prefix}.first-pass.md",
+        str(getattr(result, "markdown", "") or ""),
+    )
+    _atomic_write_text(
+        pages_dir / f"{prefix}.chunks.json",
+        _json_text(page_payload),
+    )
+    logger.info(
+        "Persisted completed Chandra page %s/%s: %s",
+        page_index + 1,
+        page_count,
+        file_path.name,
+    )
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(value, encoding="utf-8")
+    temporary.replace(path)
 
 
 def _write_raw_outputs(
