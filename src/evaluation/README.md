@@ -6,7 +6,8 @@ parses nothing itself. Previously `research/harness/`.
 ## Setup
 
     pip install -e .
-    python research/experiments/fetch_corpus.py   # gold queries + qrels, not in the repo
+    python research/experiments/fetch_corpus.py                                  # queries + qrels
+
 
 `.env` needs `OPENROUTER_API_KEY` for any dense arm.
 
@@ -29,8 +30,11 @@ the config at runtime, and call the same `scripts/run_pipeline.py` above.
 2. Set `VLLM_API_KEY` in Colab **Secrets** — the cells read it via
    `userdata.get("VLLM_API_KEY")`, never a literal.
 3. Run the cells in order. vLLM must report ready before the pipeline cell.
-4. Download `data/output/benchmarks/<run>/<run_id>/` back to your machine and
-   point `--parsed-run` at it.
+4. Download **both** `data/output/benchmarks/<run>/<run_id>/` and the matching
+   `data/ingested/...` back to your machine, keeping the same relative layout,
+   then point `--parsed-run` at the output one. Parser settings live in the
+   ingested stage; with only `output/` the run is refused for missing parser
+   metadata, because every corpus would otherwise hash to the same identity.
 
 Both configs set `include_extensions: [".pdf"]`, so anything else in the input
 directory is skipped without a warning. Neither notebook is tracked in this

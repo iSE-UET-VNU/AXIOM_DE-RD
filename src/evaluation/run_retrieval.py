@@ -42,7 +42,7 @@ load_dotenv_file(PROJECT_ROOT)
 
 from src.retrieval import runs  # noqa: E402
 from src.retrieval.index import LocalIndex  # noqa: E402
-from src.retrieval.protocol import ChunkRecord  # noqa: E402
+from src.retrieval.protocol import ChunkRecord, ScoredChunk  # noqa: E402
 from src.retrieval.sparse import BM25Index  # noqa: E402
 from src.retrieval import retrievers  # noqa: E402
 
@@ -131,6 +131,31 @@ def build_index(
         vectors=vectors,
         embedder=embedder,
     )
+
+
+def oracle_records(benchmark: Any, questions: Sequence[Any], index: Any, depth: int) -> list:
+    """Gold units as a perfect ranking: the ceiling generation is read against.
+
+    Emitted as an ordinary run so the same ``run_answer`` scores it. Graded qrels
+    rank by descending relevance, and a gold unit absent from the index is
+    dropped rather than faked -- an empty passage scores as a generator failure
+    when it is really a corpus gap.
+    """
+    by_id = {record.chunk_id: record for record in index.records}
+    qrels = benchmark.qrels()
+    out = []
+    for question in questions:
+        gold = sorted(qrels.get(question.qid, {}).items(), key=lambda kv: -kv[1])
+        hits = [
+            ScoredChunk(chunk_id=unit, doc_id=by_id[unit].doc_id, score=float(grade),
+                        rank=rank, text=by_id[unit].text)
+            for rank, (unit, grade) in enumerate(gold[:depth], start=1)
+            if unit in by_id
+        ]
+        out.append(runs.RunRecord.build(
+            question.qid, question.query, "oracle", index.index_id,
+            runs.params_hash({"depth": depth}), hits))
+    return out
 
 
 def reachability(benchmark: Any, corpus_doc_ids: set[str], qids: Sequence[str]) -> dict[str, bool]:
@@ -423,6 +448,18 @@ def main() -> None:
     }
     out_root = Path(args.out)
     for name in [a.strip() for a in args.arms.split(",") if a.strip()]:
+        if name == "oracle":
+            path = runs.cache_path(out_root, index.index_id, "oracle",
+                                   {"depth": args.depth}, qids)
+            if path.exists():
+                records = runs.read(path)
+                print(f"  {'oracle':9} cached ({len(records)} records)")
+            else:
+                records = oracle_records(benchmark, questions, index, args.depth)
+                runs.write(path, records)
+                print(f"  {'oracle':9} {len(records)} records -> {path.name}")
+            report["arms"]["oracle"] = evaluate(benchmark, records, args.k, reachable)
+            continue
         if name in {"dense", "rrf"} or name.startswith("alpha"):
             if embedder is None:
                 print(f"  {name:9} skipped (needs --embedder)")
