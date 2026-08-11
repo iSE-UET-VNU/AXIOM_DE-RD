@@ -115,6 +115,7 @@ class _KDLDocument:
     started: float = field(default_factory=time.monotonic)
     pages: list[list[dict[str, Any]] | None] = field(default_factory=list)
     remaining: int = 0
+    routing_context: Any | None = None
     failure: Exception | None = None
     reported: bool = False
 
@@ -123,10 +124,12 @@ class KDLProvider:
     """Run ParseBench's complete KDL pipeline and emit canonical ParsedData."""
 
     provider_name = "kdl"
+    inference_mode = "kdl_two_stage_vllm"
     supported_extensions = KDL_EXTENSIONS
 
-    def __init__(self, config: KDLConfig) -> None:
+    def __init__(self, config: KDLConfig, *, text_router: Any | None = None) -> None:
         self.config = config
+        self._text_router = text_router
 
     def parse_file(self, path: str | Path, data_object: DataObject) -> ParsedData:
         outcome = self.parse_files_with_errors([(path, data_object)])[0]
@@ -170,16 +173,26 @@ class KDLProvider:
         started = time.monotonic()
         file_path = _validate_path(path)
         page_count = _page_count(file_path, self.config.max_pages)
+        routing_context = self._prepare_routing_context(file_path)
         images = [
             _render_page(str(file_path), page_index, self.config.dpi)
             for page_index in range(page_count)
         ]
         engine = self._engine()
         try:
-            raw = asyncio.run(engine.parse_pages(images))
+            if self._text_router is None:
+                raw = asyncio.run(engine.parse_pages(images))
+            else:
+                raw = asyncio.run(
+                    engine.parse_pages(
+                        images,
+                        routing_context=routing_context,
+                    )
+                )
         finally:
             for image in images:
                 image.close()
+        self._attach_routing_metadata(raw, routing_context)
         return self._to_parsed_data(
             file_path, data_object, raw, started, page_count
         )
@@ -195,6 +208,7 @@ class KDLProvider:
             try:
                 file_path = _validate_path(file_path)
                 count = _page_count(file_path, self.config.max_pages)
+                routing_context = self._prepare_routing_context(file_path)
             except Exception as exc:
                 prepared.append(_KDLDocument(file_path, data_object, 0, failure=exc))
                 continue
@@ -205,6 +219,7 @@ class KDLProvider:
                     count,
                     pages=[None] * count,
                     remaining=count,
+                    routing_context=routing_context,
                 )
             )
 
@@ -238,6 +253,7 @@ class KDLProvider:
             ]
             try:
                 raw = engine.finalize_elements(elements)
+                self._attach_routing_metadata(raw, document.routing_context)
                 parsed = self._to_parsed_data(
                     document.path,
                     document.data_object,
@@ -290,13 +306,23 @@ class KDLProvider:
                                 page_index,
                                 self.config.dpi,
                             )
-                            document.pages[page_index] = await engine._parse_page(
-                                client,
-                                layout_semaphore,
-                                bbox_semaphore,
-                                image,
-                                page_index + 1,
-                            )
+                            if self._text_router is None:
+                                document.pages[page_index] = await engine._parse_page(
+                                    client,
+                                    layout_semaphore,
+                                    bbox_semaphore,
+                                    image,
+                                    page_index + 1,
+                                )
+                            else:
+                                document.pages[page_index] = await engine._parse_page(
+                                    client,
+                                    layout_semaphore,
+                                    bbox_semaphore,
+                                    image,
+                                    page_index + 1,
+                                    routing_context=document.routing_context,
+                                )
                     except Exception as exc:
                         if document.failure is None:
                             document.failure = RuntimeError(
@@ -342,7 +368,22 @@ class KDLProvider:
                 "picture": self.config.picture_max_output_tokens,
                 "formula": self.config.formula_max_output_tokens,
             },
+            text_router=self._text_router,
         )
+
+    def _prepare_routing_context(self, file_path: Path) -> Any | None:
+        if self._text_router is None:
+            return None
+        return self._text_router.prepare_document(file_path)
+
+    def _attach_routing_metadata(
+        self,
+        raw: dict[str, Any],
+        routing_context: Any | None,
+    ) -> None:
+        if self._text_router is None:
+            return
+        raw["_routing"] = self._text_router.routing_metadata(routing_context)
 
     def _to_parsed_data(
         self,
@@ -357,6 +398,41 @@ class KDLProvider:
         extraction = _build_extraction(markdown, source_blocks)
         raw_paths = self._write_raw_outputs(file_path, data_object, raw)
         label_counts = Counter(str(block["raw_label"]) for block in source_blocks)
+        metadata: dict[str, Any] = {
+            "parser": self.provider_name,
+            "method": self.config.method,
+            "model_name": self.config.model,
+            "inference_mode": self.inference_mode,
+            "continuous_page_queue": self.config.continuous_page_queue,
+            "max_workers": self.config.max_workers,
+            "render_processes": self.config.render_processes,
+            "bbox_max_workers": self.config.bbox_max_workers,
+            "request_timeout_seconds": self.config.request_timeout_seconds,
+            "max_retries": self.config.max_retries,
+            "max_output_tokens": {
+                "layout": self.config.layout_max_output_tokens,
+                "text": self.config.text_max_output_tokens,
+                "table": self.config.table_max_output_tokens,
+                "picture": self.config.picture_max_output_tokens,
+                "formula": self.config.formula_max_output_tokens,
+            },
+            "page_count": page_count,
+            "latency_seconds": round(time.monotonic() - started, 3),
+            "raw_kdl_outputs": raw_paths,
+            "raw_output_path": raw_paths.get("result_markdown"),
+            "raw_metadata_path": raw_paths.get("result_json"),
+            "label_counts": dict(sorted(label_counts.items())),
+            "source_block_count": len(source_blocks),
+            "table_count": len(extraction["tables"]),
+            "figure_count": len(extraction["figures"]),
+            "formula_count": len(extraction["formulas"]),
+            "reading_order_source": "kdl_layout",
+            "reading_order_complete": bool(source_blocks),
+        }
+        routing_metadata = raw.get("_routing")
+        if isinstance(routing_metadata, dict):
+            metadata.update(routing_metadata)
+
         return ParsedData(
             object_id=data_object.object_id,
             source_uri=data_object.uri,
@@ -372,37 +448,7 @@ class KDLProvider:
                 }
             ],
             text=markdown,
-            metadata={
-                "parser": "kdl",
-                "method": self.config.method,
-                "model_name": self.config.model,
-                "inference_mode": "kdl_two_stage_vllm",
-                "continuous_page_queue": self.config.continuous_page_queue,
-                "max_workers": self.config.max_workers,
-                "render_processes": self.config.render_processes,
-                "bbox_max_workers": self.config.bbox_max_workers,
-                "request_timeout_seconds": self.config.request_timeout_seconds,
-                "max_retries": self.config.max_retries,
-                "max_output_tokens": {
-                    "layout": self.config.layout_max_output_tokens,
-                    "text": self.config.text_max_output_tokens,
-                    "table": self.config.table_max_output_tokens,
-                    "picture": self.config.picture_max_output_tokens,
-                    "formula": self.config.formula_max_output_tokens,
-                },
-                "page_count": page_count,
-                "latency_seconds": round(time.monotonic() - started, 3),
-                "raw_kdl_outputs": raw_paths,
-                "raw_output_path": raw_paths.get("result_markdown"),
-                "raw_metadata_path": raw_paths.get("result_json"),
-                "label_counts": dict(sorted(label_counts.items())),
-                "source_block_count": len(source_blocks),
-                "table_count": len(extraction["tables"]),
-                "figure_count": len(extraction["figures"]),
-                "formula_count": len(extraction["formulas"]),
-                "reading_order_source": "kdl_layout",
-                "reading_order_complete": bool(source_blocks),
-            },
+            metadata=metadata,
         )
 
     def _write_raw_outputs(
@@ -495,6 +541,8 @@ def _source_blocks(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "html": content if content.lstrip().startswith("<table") else "",
                 "section_hierarchy": {},
             }
+            if element.get("recognition_source"):
+                block["recognition_source"] = str(element["recognition_source"])
             bbox = element.get("bbox")
             if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
                 numeric = [float(value) for value in bbox]

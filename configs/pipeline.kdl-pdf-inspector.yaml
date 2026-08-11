@@ -1,0 +1,67 @@
+{
+  "input": {
+    "mode": "local_raw"
+  },
+  "local_input": {
+    "path": "data/raw",
+    "recursive": true,
+    "include_hidden": false,
+    "include_extensions": [
+      ".pdf",
+      ".png",
+      ".jpg",
+      ".jpeg"
+    ],
+    "max_files": null
+  },
+  "raw_dir": "data/raw",
+  "ingested_dir": "data/ingested/kdl-pdf-inspector",
+  "cleaned_dir": "data/cleaned/kdl-pdf-inspector",
+  "enriched_dir": "data/enriched/kdl-pdf-inspector",
+  "embedded_dir": "data/embedded/kdl-pdf-inspector",
+  "output_dir": "data/output/kdl-pdf-inspector",
+  "enabled_modules": [
+    "ingestion",
+    "cleaning",
+    "enrichment",
+    "chunking_embedding",
+    "integration",
+    "artifacts"
+  ],
+  "parsing": {
+    "provider": "kdl_pdf_inspector",
+    "kdl": {
+      "method": "vllm",
+      "endpoint_url": null,
+      "model": null,
+      "continuous_page_queue": true,
+      "max_workers": 16,
+      "render_processes": 8,
+      "bbox_max_workers": 32,
+      "dpi": 144,
+      "request_timeout_seconds": 3600,
+      "max_retries": 2,
+      "max_pages": 400,
+      "layout_max_output_tokens": 6000,
+      "text_max_output_tokens": 2048,
+      "table_max_output_tokens": 5500,
+      "picture_max_output_tokens": 4096,
+      "formula_max_output_tokens": 128,
+      "save_raw_outputs": true
+    }
+  },
+  "chunking_embedding": {
+    "chunker": "fixed_overlap",
+    "chunker_params": {
+      "n_words": 512,
+      "overlap": 128
+    },
+    "embedder": "local_hash",
+    "embedder_params": {
+      "dimension": 384
+    }
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}

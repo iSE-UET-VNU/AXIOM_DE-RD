@@ -17,6 +17,7 @@ venv/
 !/configs/pipeline.vidore-v3-kdl-ingest.yaml
 !/configs/pipeline.vidore-v3-chandra2.yaml
 !/configs/pipeline.vidore-v3-kdl.yaml
+!/configs/pipeline.kdl-pdf-inspector.yaml
 
 # Local benchmark checkouts and generated probe artifacts.
 /experiments/
@@ -29,6 +30,7 @@ venv/
 !/tests/
 /tests/*
 !/tests/test_kdl_provider.py
+!/tests/test_kdl_pdf_inspector_provider.py
 !/tests/test_api_output_paths.py
 
 # Local inputs and presigned-URL inventories can contain sensitive data.

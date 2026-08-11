@@ -3015,6 +3015,7 @@ class _NanoEngine:
         page_max_concurrent: int = 1,
         max_retries: int = 2,
         max_output_tokens: dict[str, int] | None = None,
+        text_router: Any | None = None,
     ):
         base = endpoint_url.rstrip("/")
         self._url = (
@@ -3028,8 +3029,17 @@ class _NanoEngine:
         self._timeout_s = timeout_s
         self._max_retries = max_retries
         self._max_output_tokens = max_output_tokens
+        # Optional async component invoked after layout grouping and before
+        # KDL text recognition. It returns indices in the text bucket whose
+        # content it supplied. With the default None, pure KDL is unchanged.
+        self._text_router = text_router
 
-    async def parse_pages(self, page_images: List[Image.Image]) -> dict:
+    async def parse_pages(
+        self,
+        page_images: List[Image.Image],
+        *,
+        routing_context: Any | None = None,
+    ) -> dict:
         page_semaphore = asyncio.Semaphore(self._page_max_concurrent)
         layout_semaphore = asyncio.Semaphore(self._page_max_concurrent)
         bbox_semaphore = asyncio.Semaphore(self._bbox_max_concurrent)
@@ -3046,6 +3056,7 @@ class _NanoEngine:
                     bbox_semaphore,
                     normalize_image_mode(image, "RGB"),
                     page_no,
+                    routing_context=routing_context,
                 )
 
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
@@ -3074,14 +3085,15 @@ class _NanoEngine:
 
         pages_payload: Dict[int, List[Dict[str, Any]]] = {}
         for el in elements:
-            pages_payload.setdefault(el["page_number"], []).append(
-                {
-                    "category": el.get("category", "Text"),
-                    "bbox": el.get("bbox"),
-                    "content": el.get("content") or "",
-                    "layout_order": el.get("layout_order", 0),
-                }
-            )
+            payload = {
+                "category": el.get("category", "Text"),
+                "bbox": el.get("bbox"),
+                "content": el.get("content") or "",
+                "layout_order": el.get("layout_order", 0),
+            }
+            if el.get("recognition_source"):
+                payload["recognition_source"] = el["recognition_source"]
+            pages_payload.setdefault(el["page_number"], []).append(payload)
         return {
             "markdown": full_md,
             "markdown_pages": markdown_pages,
@@ -3098,6 +3110,8 @@ class _NanoEngine:
         bbox_semaphore: asyncio.Semaphore,
         image: Image.Image,
         page_no: int,
+        *,
+        routing_context: Any | None = None,
     ) -> List[Dict[str, Any]]:
         w, h = image.size
         if min(w, h) < 32:
@@ -3137,15 +3151,39 @@ class _NanoEngine:
             preprocess_for_vlm(image) if len(buckets["table"]) == 1 else None
         )
 
+        routed_text_indices: set[int] = set()
+        if self._text_router is not None and buckets["text"]:
+            try:
+                routed = await self._text_router.route_text_regions(
+                    routing_context,
+                    page_no,
+                    buckets["text"],
+                )
+                routed_text_indices = {
+                    int(index) for index in (routed or set())
+                }
+            except Exception as exc:
+                # Native extraction is an optimization. A router failure must
+                # leave every element eligible for the normal KDL fallback.
+                logger.warning(
+                    "page %d: native text routing failed; using KDL: %s",
+                    page_no,
+                    exc,
+                )
+
         tasks = []
 
         async def recognize(stage: str, el: Dict[str, Any]) -> None:
             pre = el.get("preprocessed_image")
             if pre is None:
                 el["content"] = ""
+                if self._text_router is not None:
+                    el["recognition_source"] = f"kdl_{stage}"
                 return
             if stage == "picture" and (pre.width < 25 or pre.height < 25):
                 el["content"] = ""
+                if self._text_router is not None:
+                    el["recognition_source"] = f"kdl_{stage}"
                 return
             content = await _nano_chat(
                 client,
@@ -3163,6 +3201,8 @@ class _NanoEngine:
                 _nano_apply_picture_result(el, content)
             else:
                 el["content"] = content if content is not None else ""
+            if self._text_router is not None:
+                el["recognition_source"] = f"kdl_{stage}"
 
         async def recognize_table_fullpage(el: Dict[str, Any]) -> None:
             content = await _nano_chat(
@@ -3179,11 +3219,14 @@ class _NanoEngine:
             )
             if content is not None and _nano_is_single_clean_otsl(content):
                 el["content"] = content
+                if self._text_router is not None:
+                    el["recognition_source"] = "kdl_table"
                 return
             await recognize("table", el)
 
-        for el in buckets["text"]:
-            tasks.append(recognize("text", el))
+        for index, el in enumerate(buckets["text"]):
+            if index not in routed_text_indices:
+                tasks.append(recognize("text", el))
         for i, el in enumerate(buckets["table"]):
             if fullpage_table is not None and i == 0:
                 tasks.append(recognize_table_fullpage(el))

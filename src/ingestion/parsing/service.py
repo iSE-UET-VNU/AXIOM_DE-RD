@@ -16,6 +16,7 @@ from .backends import (
 )
 from .chandra2 import Chandra2Config, Chandra2Provider
 from .kdl import KDLConfig, KDLProvider
+from .kdl_pdf_inspector import KdlPdfInspectorProvider
 from .lift import LiftAPIConfig, LiftAPIParserClient
 from .router import ParserRouter
 
@@ -205,10 +206,16 @@ def _build_document_parser(
                 _provider_config(parser_config, "kdl")
             )
             provider = KDLProvider(provider_config)
+        case "kdl_pdf_inspector":
+            provider_config = KDLConfig.from_mapping(
+                _provider_config(parser_config, "kdl")
+            )
+            provider = KdlPdfInspectorProvider(provider_config)
         case _:
             raise ValueError(
                 "Unsupported document provider "
-                f"{provider_name!r}. Expected deferred, lift_api, chandra2, or kdl."
+                f"{provider_name!r}. Expected deferred, lift_api, chandra2, "
+                "kdl, or kdl_pdf_inspector."
             )
     return DocumentParser(
         provider,
