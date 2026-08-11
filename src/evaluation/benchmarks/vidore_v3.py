@@ -225,6 +225,12 @@ class ViDoreV3(Benchmark):
         """The whole subset: retrieval is open-corpus, unlike MMDocIR."""
         return [d.doc_id for d in self.corpus()]
 
+    def answer_style(self):
+        """Graded, not binary: the harness default would drop partial credit."""
+        from .vidore_v3_judge import ViDoreStyle
+
+        return ViDoreStyle()
+
 
 def _regions_from(row: Mapping[str, Any], unit: str, page: str) -> list[Region]:
     modality = modalities_of(row.get("content_type"))[0]
