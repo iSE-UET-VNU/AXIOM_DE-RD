@@ -55,6 +55,37 @@ python scripts/run_pipeline.py \
 Writes to `data/{ingested,cleaned,enriched,embedded,output}/<run_id>/`. Success
 looks like `Built N retrieval record(s) and N vector record(s)`.
 
+### KDL with native PDF text routing
+
+Install the optional native parser and select the hybrid document provider:
+
+```bash
+pip install -e ".[pdf-inspector]"
+```
+
+```yaml
+parsing:
+  provider: kdl_pdf_inspector
+  kdl:
+    endpoint_url: https://<host>/v1  # or set VLLM_API_BASE
+    model: kdl-frontier-parser-nano # or set VLLM_MODEL_NAME
+```
+
+The provider classifies each PDF once. Scanned pages and non-PDF images use
+the full KDL pipeline. On native-text pages, KDL still performs layout, while
+pdf-inspector fills text-category regions in one page-level batch; empty,
+unsafe, or failed regions fall back to KDL recognition. Use `provider: kdl`
+to retain the pure KDL route.
+
+The ready-to-run `configs/pipeline.kdl-pdf-inspector.yaml` leaves endpoint and
+model as `null` so the environment variables take precedence. For PowerShell:
+
+```powershell
+$env:VLLM_API_BASE="https://<host>/v1"
+$env:VLLM_MODEL_NAME="kdl-frontier-parser-nano"
+python scripts/run_pipeline.py --config configs/pipeline.kdl-pdf-inspector.yaml --local-raw <pdf-or-directory>
+```
+
 **Why `pipeline.mock.yaml`.** The default config parses with `lift_api`, which
 currently returns `402 Payment Required` — Datalab is out of credit — and every
 PDF is quarantined. `chandra2` is the other real parser and needs a hosted vLLM
