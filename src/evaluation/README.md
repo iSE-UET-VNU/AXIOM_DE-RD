@@ -58,6 +58,24 @@ Compare the arms:
 
     python -m src.evaluation.compare_arms data/benchmark/runs/*.report.json
 
+Then answer and judge. `--run` is a JSONL written by the retrieval step above;
+the benchmark supplies its own prompt and label set, so nothing here is edited
+per subset.
+
+    python -m src.evaluation.run_answer \
+        --benchmark vidore_v3 --subset physics --language french \
+        --arm chandra2_alpha0.7 \
+        --run data/benchmark/runs/<index_id>/alpha0.7__<hash>.jsonl \
+        --generator deepseek/deepseek-v4-flash --judge openai/gpt-4o
+
+Add `--arms oracle` to the retrieval step for the gold-context ceiling; it emits
+an ordinary run, so the same command scores it.
+
+Reports `accuracy` (Correct) and `accuracy_credited` (Correct + Partially
+Correct). Quote both — the only significant end-to-end effect we have measured
+sits in the gap between them. Retrieval caches, generation does not: a failed
+arm re-spends on the next attempt.
+
 ## Flags that matter
 
 | Flag | Why |
@@ -67,6 +85,8 @@ Compare the arms:
 | `--granularity page\|content` | `page` joins block text; `content` keeps table and list HTML |
 | `--analyzer plain` | **pin it when comparing corpora** — `auto` picks per corpus by CJK presence, so two parsers can get different tokenizers |
 | `--chunker`, `--prefix`, `--rerank` | optional index variations; each enters the run cache key |
+| `--arms oracle` | gold pages as a perfect ranking — the ceiling retrieved arms are read against |
+| `--generator`, `--judge` | a gateway alias, or a provider id like `deepseek/deepseek-v4-flash` to call OpenRouter directly; they must differ |
 
 ## Check it works
 
