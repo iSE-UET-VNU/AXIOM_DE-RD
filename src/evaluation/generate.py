@@ -15,7 +15,7 @@ which is itself a result.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .llm import complete
 
@@ -86,8 +86,12 @@ def pack_context(
     return packed
 
 
+def render_texts(texts: Sequence[str]) -> str:
+    return "\n\n".join(f"[{i + 1}] {text}" for i, text in enumerate(texts))
+
+
 def render_context(chunks: Sequence[ContextChunk]) -> str:
-    return "\n\n".join(f"[{i + 1}] {chunk.text}" for i, chunk in enumerate(chunks))
+    return render_texts([chunk.text for chunk in chunks])
 
 
 def generate(
@@ -97,6 +101,7 @@ def generate(
     *,
     model: str,
     max_chars: int = MAX_CONTEXT_CHARS,
+    render_prompt: Callable[[str, Sequence[str]], str] | None = None,
 ) -> Generation:
     packed = pack_context(chunks, max_chars)
     doc_ids: list[str] = []
@@ -108,8 +113,10 @@ def generate(
     if not packed:
         return Generation(qid, ABSTAIN, True, 0, 0, doc_ids)
 
-    prompt = PROMPT.format(
-        abstain=ABSTAIN, context=render_context(packed), question=question
+    prompt = (
+        render_prompt(question, [chunk.text for chunk in packed])
+        if render_prompt is not None
+        else PROMPT.format(abstain=ABSTAIN, context=render_context(packed), question=question)
     )
     try:
         answer = complete(

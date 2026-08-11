@@ -115,6 +115,31 @@ def render_documents(texts: Sequence[str]) -> str:
     return "\n\n".join(f"[{i + 1}] {text}" for i, text in enumerate(texts))
 
 
+class ViDoreStyle:
+    """The paper's Figure 24/25 prompts and its three-way label.
+
+    ``credited`` is Correct+Partially Correct: the only significant end-to-end
+    effect we have measured sits in that band, so collapsing it to a bool at
+    grading time would discard the result rather than report it.
+    """
+
+    name = "vidore_three_way"
+
+    def render_prompt(self, query: str, texts: Sequence[str]) -> str:
+        return ANSWER_PROMPT.format(documents=render_documents(texts), query=query)
+
+    def judge(self, question, gold, generation, answer_type, *, model, generator_model):
+        from ..answer_style import Judged
+
+        if generation.error:
+            return Judged("Incorrect", False, False, "error", error=generation.error)
+        verdict = judge_answer(generation.qid, question, gold, generation.answer,
+                               model=model, generator_model=generator_model)
+        return Judged(verdict.judgment, verdict.judgment == "Correct",
+                      verdict.judgment in ("Correct", "Partially Correct"),
+                      "llm_judge", error=verdict.error)
+
+
 def score(verdicts: Iterable[ViDoreVerdict]) -> dict[str, float]:
     """Both aggregations from one judge pass; report both, always."""
     items = list(verdicts)

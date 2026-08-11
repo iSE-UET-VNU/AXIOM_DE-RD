@@ -32,10 +32,10 @@ import argparse
 import json
 import time
 
+from .answer_style import style_for
 from .benchmarks import load as load_benchmark
 from .benchmarks.base import check_single_taxonomy
 from .generate import MAX_CONTEXT_CHARS, ContextChunk, generate
-from .judge import judge
 from .model_guard import assert_real
 
 PROJECT_ROOT = repo_root(__file__)
@@ -87,10 +87,15 @@ def main() -> None:
     parser.add_argument("--max-context-chars", type=int, default=MAX_CONTEXT_CHARS)
     parser.add_argument(
         "--subset",
-        default="resolvable",
-        choices=("resolvable", "text_only", "all"),
-        help="Which questions to score. Stage-1 file recall uses the full "
-        "resolvable set; answer scoring is bounded by what the arm can parse.",
+        default="",
+        help="iSE: which questions to score (resolvable, text_only, all). Other "
+        "benchmarks: the data subset, e.g. physics. Same flag, because the "
+        "adapter owns what a subset means.",
+    )
+    parser.add_argument(
+        "--language", default="",
+        help="Benchmarks that ship several, e.g. vidore_v3. No default: a "
+        "multilingual average is not a number to report by accident.",
     )
     args = parser.parse_args()
 
@@ -98,6 +103,7 @@ def main() -> None:
     resolved = assert_real([args.generator, args.judge])
 
     benchmark = _load(args)
+    style = style_for(benchmark)
     questions = list(benchmark.questions())
     runs = load_run(Path(args.run))
     scored = [q for q in questions if q.qid in runs]
@@ -112,8 +118,9 @@ def main() -> None:
             runs[question.qid],
             model=args.generator,
             max_chars=args.max_context_chars,
+            render_prompt=style.render_prompt,
         )
-        verdict = judge(
+        verdict = style.judge(
             question.query,
             question.answer,
             generation,
@@ -126,6 +133,8 @@ def main() -> None:
             {
                 **asdict(generation),
                 "correct": verdict.correct,
+                "credited": verdict.credited,
+                "judgment": verdict.label,
                 "grader": verdict.grader,
                 "judge_error": verdict.error,
                 "answer_type": question.answer_type,
@@ -156,7 +165,9 @@ def main() -> None:
 
     print(f"arm              : {args.arm}")
     print(f"scored           : {report['scored']}  (missing from run: {len(missing)})")
-    print(f"accuracy         : {report['accuracy']}")
+    print(f"style            : {style.name}")
+    print(f"accuracy         : {report['accuracy']}  (credited {report['accuracy_credited']})")
+    print(f"judgments        : {report['judgments']}")
     print(f"  abstained      : {report['abstain_rate']}")
     print(f"  errors         : {report['error_rate']}")
     print(f"context recall   : {report['context_recall']}  (hit {report['context_hit']})")
@@ -167,10 +178,19 @@ def main() -> None:
     print(f"artifacts        : {out_dir}")
 
 
+ISE_SUBSETS = ("resolvable", "text_only", "all")
+
+
 def _load(args: argparse.Namespace) -> Any:
     if args.benchmark == "ise":
-        return load_benchmark("ise", questions_path=args.questions, subset=args.subset)
-    return load_benchmark(args.benchmark)
+        subset = args.subset or "resolvable"
+        if subset not in ISE_SUBSETS:
+            raise SystemExit(f"--subset {subset!r} is not one of {list(ISE_SUBSETS)} for ise")
+        return load_benchmark("ise", questions_path=args.questions, subset=subset)
+    # Passed through only when given: an adapter that takes neither would reject
+    # an empty string, and one that requires them should say so itself.
+    extra = {k: v for k, v in (("subset", args.subset), ("language", args.language)) if v}
+    return load_benchmark(args.benchmark, **extra)
 
 
 def _finer_granularities(
@@ -251,6 +271,10 @@ def summarize(
         "missing_from_run": missing,
         "seconds": round(seconds, 1),
         "accuracy": mean("correct"),
+        # Strict and lenient side by side: on a graded benchmark these differ,
+        # and reporting one alone lets the choice pick the conclusion.
+        "accuracy_credited": mean("credited"),
+        "judgments": dict(Counter(row.get("judgment", "") for row in records).most_common()),
         "abstain_rate": mean("abstained"),
         "error_rate": round(sum(1 for row in records if row["error"]) / n, 4),
         "context_recall": mean("context_recall"),
