@@ -56,8 +56,26 @@ def _items(payload: Any) -> list[dict]:
     return []
 
 
+def _openrouter_ids(timeout: float) -> set[str]:
+    payload = _get("https://openrouter.ai/api/v1/models", timeout)
+    return {str(m.get("id") or "") for m in _items(payload)}
+
+
 def resolve(alias: str, *, base_url: str = "", timeout: float = 15.0) -> Resolution:
-    """Alias -> provider and upstream model. Gateway-routed aliases only."""
+    """Alias -> provider and upstream model, or a provider id checked as-is."""
+    if "/" in alias:
+        # Direct ids skip the registry, so the registry's typo check goes with
+        # them; an unlisted id would otherwise 404 partway through a paid run.
+        available = _openrouter_ids(timeout)
+        if alias not in available:
+            near = sorted(i for i in available if i.split("/")[-1][:8] in alias)
+            raise UnknownAlias(
+                f"{alias!r} is not an OpenRouter model id. Closest listed: {near[:5]}. "
+                "A run would fail partway through rather than at startup."
+            )
+        return Resolution(alias=alias, capability="chat", provider="openrouter",
+                          adapter_type="openrouter", upstream_model_id=alias)
+
     root = (base_url or os.getenv("AXIOM_MODEL_SERVICE_URL") or MODEL_SERVICE_URL).rstrip("/")
     registry = f"{root}/model-registry"
 

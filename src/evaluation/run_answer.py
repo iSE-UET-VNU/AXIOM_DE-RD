@@ -75,13 +75,14 @@ def main() -> None:
     parser.add_argument("--questions", default=str(DATA / "questions.jsonl"))
     parser.add_argument("--out", default=str(DATA / "answers"))
     parser.add_argument(
-        "--generator", required=True, metavar="ALIAS",
-        help="Model Service alias to generate with. Required, no default.",
+        "--generator", required=True, metavar="MODEL",
+        help="Gateway alias, or a provider id like deepseek/deepseek-v4-flash "
+        "to call OpenRouter directly. Required, no default.",
     )
     parser.add_argument(
-        "--judge", required=True, metavar="ALIAS",
-        help="Model Service alias to judge with. Required, and must differ from "
-        "--generator: LLM judges prefer their own outputs.",
+        "--judge", required=True, metavar="MODEL",
+        help="Gateway alias or provider id to judge with. Required, and must "
+        "differ from --generator: LLM judges prefer their own outputs.",
     )
     parser.add_argument("--max-context-chars", type=int, default=MAX_CONTEXT_CHARS)
     parser.add_argument(
