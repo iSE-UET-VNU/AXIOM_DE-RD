@@ -60,6 +60,7 @@ ANSWER_PROMPT = (
 )
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+_JUDGMENT = re.compile(r'"judgment"\s*:\s*"([^"]+)"')
 
 
 @dataclass(frozen=True)
@@ -79,9 +80,16 @@ def parse_judgment(reply: str) -> str:
         payload = json.loads(text)
         label = str(payload["judgment"]).strip()
     except (ValueError, KeyError, TypeError) as error:
-        raise ValueError(
-            f"could not read a judgment from the judge reply {reply!r}: {error}"
-        ) from error
+        # LaTeX in the explanation -- "\(", "\frac" -- is not valid JSON escaping
+        # and physics answers produce it constantly. The judgment is a plain
+        # quoted literal, so read it directly; still raise when it is absent,
+        # because a default would shift every unparsed reply the same way.
+        match = _JUDGMENT.search(text)
+        if not match:
+            raise ValueError(
+                f"could not read a judgment from the judge reply {reply!r}: {error}"
+            ) from error
+        label = match.group(1).strip()
     if label not in LABELS:
         raise ValueError(f"judgment {label!r} is not one of {list(LABELS)}")
     return label
