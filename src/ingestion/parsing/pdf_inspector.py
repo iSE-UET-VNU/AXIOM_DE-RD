@@ -82,6 +82,43 @@ class PdfInspectorRegionExtractor:
             for region in page_results[0].regions
         ]
 
+    def extract_pages(
+        self,
+        path: str | Path,
+        page_regions: Sequence[tuple[int, Sequence[Sequence[float]]]],
+    ) -> list[list[PdfInspectorRegionText]]:
+        """Extract every requested page in one pdf-inspector document call."""
+
+        requests = [
+            (
+                int(page_index),
+                [[float(value) for value in box] for box in boxes],
+            )
+            for page_index, boxes in page_regions
+        ]
+        if not requests:
+            return []
+        page_results = self._api.extract_text_in_regions(str(path), requests)
+        if len(page_results) != len(requests):
+            raise ValueError(
+                "pdf-inspector returned a different number of pages than requested"
+            )
+        return [
+            [
+                PdfInspectorRegionText(
+                    text=str(region.text or ""),
+                    needs_ocr=bool(region.needs_ocr),
+                    ocr_reason=(
+                        str(region.ocr_reason)
+                        if getattr(region, "ocr_reason", None) is not None
+                        else None
+                    ),
+                )
+                for region in page_result.regions
+            ]
+            for page_result in page_results
+        ]
+
 
 def ensure_pdf_inspector_available() -> None:
     """Fail early with an actionable message when the optional extra is absent."""

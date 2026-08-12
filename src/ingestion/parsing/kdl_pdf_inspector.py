@@ -209,6 +209,124 @@ class _PdfInspectorTextRouter:
         stats.native_text_regions += len(routed)
         return routed
 
+    async def route_document_text_regions(
+        self,
+        context: _DocumentRoutingContext | None,
+        page_buckets: dict[int, list[dict[str, Any]]],
+    ) -> dict[int, set[int]]:
+        """Route all native-text pages through one document-level API call."""
+
+        routed_by_page = {page: set() for page in page_buckets}
+        if context is None:
+            return routed_by_page
+        stats = context.stats
+        pending: list[
+            tuple[int, list[tuple[int, dict[str, Any]]], list[list[float]]]
+        ] = []
+        for page_number, bucket in sorted(page_buckets.items()):
+            stats.text_candidates += len(bucket)
+            page_index = page_number - 1
+            if not context.native_routing_enabled:
+                stats.kdl_text_fallback_regions += len(bucket)
+                stats.fallback_reasons["native_routing_disabled"] += len(bucket)
+                continue
+            if page_index in context.pages_needing_ocr:
+                stats.kdl_text_fallback_regions += len(bucket)
+                stats.fallback_reasons["page_needs_ocr"] += len(bucket)
+                continue
+            if page_index < 0 or page_index >= len(context.page_dimensions):
+                stats.kdl_text_fallback_regions += len(bucket)
+                stats.fallback_reasons["missing_page_dimensions"] += len(bucket)
+                continue
+            page_width, page_height = context.page_dimensions[page_index]
+            candidates: list[tuple[int, dict[str, Any]]] = []
+            boxes: list[list[float]] = []
+            for bucket_index, element in enumerate(bucket):
+                bbox = element.get("bbox")
+                if not _valid_normalized_bbox(bbox):
+                    stats.kdl_text_fallback_regions += 1
+                    stats.fallback_reasons["invalid_bbox"] += 1
+                    continue
+                x1, y1, x2, y2 = (float(value) for value in bbox)
+                boxes.append(
+                    [
+                        x1 * page_width,
+                        y1 * page_height,
+                        x2 * page_width,
+                        y2 * page_height,
+                    ]
+                )
+                candidates.append((bucket_index, element))
+            if boxes:
+                pending.append((page_number, candidates, boxes))
+        if not pending:
+            return routed_by_page
+
+        extract_started = perf_counter()
+        try:
+            if hasattr(self._extractor, "extract_pages"):
+                page_results = await asyncio.to_thread(
+                    self._extractor.extract_pages,
+                    context.source_path,
+                    [(page - 1, boxes) for page, _, boxes in pending],
+                )
+            else:
+                page_results = await asyncio.to_thread(
+                    lambda: [
+                        self._extractor.extract(
+                            context.source_path, page - 1, boxes
+                        )
+                        for page, _, boxes in pending
+                    ]
+                )
+        except Exception as exc:
+            stats.region_extraction_latency_ms += (
+                perf_counter() - extract_started
+            ) * 1000.0
+            failed = sum(len(candidates) for _, candidates, _ in pending)
+            stats.kdl_text_fallback_regions += failed
+            stats.fallback_reasons["region_extraction_error"] += failed
+            logger.warning(
+                "pdf-inspector document region extraction failed for %s; "
+                "using KDL: %s",
+                context.source_path,
+                exc,
+            )
+            return routed_by_page
+        stats.region_extraction_latency_ms += (
+            perf_counter() - extract_started
+        ) * 1000.0
+
+        if len(page_results) != len(pending):
+            failed = sum(len(candidates) for _, candidates, _ in pending)
+            stats.kdl_text_fallback_regions += failed
+            stats.fallback_reasons["region_count_mismatch"] += failed
+            return routed_by_page
+        for (page_number, candidates, _), regions in zip(
+            pending, page_results, strict=True
+        ):
+            if len(regions) != len(candidates):
+                stats.kdl_text_fallback_regions += len(candidates)
+                stats.fallback_reasons["region_count_mismatch"] += len(candidates)
+                continue
+            routed = routed_by_page[page_number]
+            for (bucket_index, element), region in zip(
+                candidates, regions, strict=True
+            ):
+                text = str(region.text or "").strip()
+                if bool(region.needs_ocr):
+                    stats.kdl_text_fallback_regions += 1
+                    stats.fallback_reasons["region_needs_ocr"] += 1
+                elif not text:
+                    stats.kdl_text_fallback_regions += 1
+                    stats.fallback_reasons["empty_region"] += 1
+                else:
+                    element["content"] = text
+                    element["recognition_source"] = "pdf_inspector_region"
+                    routed.add(bucket_index)
+            stats.native_text_regions += len(routed)
+        return routed_by_page
+
     def routing_metadata(
         self,
         context: _DocumentRoutingContext | None,
