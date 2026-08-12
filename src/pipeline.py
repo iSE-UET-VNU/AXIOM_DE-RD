@@ -113,6 +113,7 @@ def run_pipeline(
         )
         state.ingestion_config = parser_config
         expected_document_count = 1
+        continuous_queue = _continuous_document_queue(parser_config)
 
         if input_mode == "local_raw":
             if s3_object_key:
@@ -128,7 +129,6 @@ def run_pipeline(
             state.input_source = batch.source
             state.raw_dir = batch.source
             expected_document_count = len(batch.inputs)
-            continuous_queue = _continuous_document_queue(parser_config)
             if continuous_queue is not None:
                 queue_provider, queue_config = continuous_queue
                 if queue_provider == "chandra2":
@@ -142,15 +142,34 @@ def run_pipeline(
                         queue_config.get("request_batch_size", 1),
                     )
                 else:
-                    logger.info(
-                        "Submitting %s local document(s) to the continuous KDL "
-                        "page queue (%s render process(es), %s concurrent "
-                        "page(s), %s concurrent bbox request(s))",
-                        len(batch.inputs),
-                        queue_config.get("render_processes", 32),
-                        queue_config.get("max_workers", 32),
-                        queue_config.get("bbox_max_workers", 32),
+                    scheduler = queue_config.get(
+                        "scheduler", "parsebench_document"
                     )
+                    if scheduler == "global_two_phase":
+                        logger.info(
+                            "Submitting %s local document(s) to the global two-phase "
+                            "KDL scheduler (%s render process(es), %s shared request "
+                            "worker(s), %s sequence(s) per batch, strict layout "
+                            "barrier)",
+                            len(batch.inputs),
+                            queue_config.get("render_processes", 32),
+                            queue_config.get("request_workers", 8),
+                            queue_config.get("request_batch_size", 1),
+                        )
+                    else:
+                        logger.info(
+                            "Submitting %s local document(s) to the ParseBench-style "
+                            "KDL document queue (%s render process(es), %s concurrent "
+                            "document(s), one active KDL request per document, %s "
+                            "sequence(s) per batch)",
+                            len(batch.inputs),
+                            queue_config.get("render_processes", 32),
+                            min(
+                                queue_config.get("max_workers", 32),
+                                queue_config.get("bbox_max_workers", 32),
+                            ),
+                            queue_config.get("request_batch_size", 1),
+                        )
                 ingestion.run_many(
                     [
                         ingestion.IngestionInput(
@@ -252,6 +271,10 @@ def run_pipeline(
                 )
         state.completed_modules.append("ingestion")
         if persist_artifacts:
+            rewrite_completed_documents = bool(
+                continuous_queue is not None
+                and continuous_queue[1].get("scheduler") == "global_two_phase"
+            )
             _record_artifact_paths(
                 state,
                 artifacts.write_ingested_artifacts(
@@ -264,7 +287,7 @@ def run_pipeline(
                         else "completed"
                     ),
                     expected_document_count=expected_document_count,
-                    document_ids=[],
+                    document_ids=(None if rewrite_completed_documents else []),
                 ),
                 project_root,
             )
@@ -563,6 +586,7 @@ def _continuous_document_queue(
         "kdl": "kdl",
         "kdl_frontier": "kdl",
         "kdl_frontier_nano": "kdl",
+        "kdl_pdf_inspector": "kdl",
     }
     normalized = aliases.get(provider)
     provider_config = parser_config.get(normalized or "")

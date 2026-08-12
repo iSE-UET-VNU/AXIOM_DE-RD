@@ -10,7 +10,12 @@ from PIL import Image
 
 from src.ingestion.parsing.backends import DocumentParser
 from src.ingestion.parsing.kdl import KDLConfig, KDLProvider
-from src.ingestion.parsing.kdl_frontier_engine import NanoEngine
+from src.ingestion.parsing.kdl_frontier_engine import (
+    NanoEngine,
+    NanoUsage,
+    SequenceLimiter,
+    _nano_chat_batch,
+)
 from src.ingestion.parsing.kdl_pdf_inspector import (
     KdlPdfInspectorProvider,
     _PdfInspectorTextRouter,
@@ -58,8 +63,219 @@ class _FakeExtractor:
         )
         return list(self.results)
 
+    def extract_pages(self, path, page_regions):
+        return [
+            self.extract(path, page_index, boxes)
+            for page_index, boxes in page_regions
+        ]
+
 
 class KdlPdfInspectorRoutingTests(unittest.TestCase):
+    def test_batch_transport_maps_choices_and_records_sequence_usage(self) -> None:
+        class Response:
+            status_code = 200
+            text = ""
+
+            @staticmethod
+            def json():
+                return {
+                    "choices": [
+                        {"index": 1, "message": {"content": "second"}},
+                        {"index": 0, "message": {"content": "first"}},
+                    ]
+                }
+
+        class Client:
+            def __init__(self) -> None:
+                self.calls = []
+
+            async def post(self, url, *, json, headers=None):
+                self.calls.append((url, json, headers))
+                return Response()
+
+        client = Client()
+        usage = NanoUsage()
+        results = asyncio.run(
+            _nano_chat_batch(
+                client,
+                "https://example.test/v1/chat/completions/batch",
+                [
+                    {"model": "model", "messages": [[{"content": "one"}]]},
+                    {"model": "model", "messages": [[{"content": "two"}]]},
+                ],
+                asyncio.Semaphore(1),
+                stage="text",
+                usage=usage,
+                sequence_limiter=SequenceLimiter(2),
+            )
+        )
+
+        self.assertEqual(results, ["first", "second"])
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(len(client.calls[0][1]["messages"]), 2)
+        snapshot = usage.snapshot()
+        self.assertEqual(snapshot["stage_calls"], {"text": 1})
+        self.assertEqual(snapshot["stage_sequences"], {"text": 2})
+        self.assertEqual(snapshot["batch_size_counts"], {"2": 1})
+
+    def test_engine_chunks_recognition_by_stage_batch_size(self) -> None:
+        image = Image.new("RGB", (64, 64), "white")
+        buckets = {
+            "text": [
+                {
+                    "category": "Text",
+                    "bbox": [0.1, 0.1, 0.9, 0.2],
+                    "layout_order": index,
+                    "page_number": 1,
+                    "preprocessed_image": image,
+                }
+                for index in range(5)
+            ],
+            "table": [],
+            "picture": [],
+            "formula": [],
+        }
+        chat = AsyncMock(return_value="layout tokens")
+        batch_chat = AsyncMock(side_effect=[["a", "b", "c", "d"], ["e"]])
+        engine = NanoEngine(
+            "http://localhost:8000/v1",
+            "model",
+            2,
+            10,
+            request_batch_size=4,
+            max_model_sequences=8,
+        )
+
+        with (
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.analyze_page_content",
+                return_value=SimpleNamespace(is_blank=False),
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.prepare_native_layout_image",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine._nano_chat",
+                chat,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine._nano_chat_batch",
+                batch_chat,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.is_native_layout_response",
+                return_value=True,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.parse_native_layout_tokens",
+                return_value=[],
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine._nano_group_by_bucket",
+                return_value=buckets,
+            ),
+        ):
+            elements = asyncio.run(
+                engine._parse_page(
+                    SimpleNamespace(),
+                    asyncio.Semaphore(1),
+                    asyncio.Semaphore(2),
+                    image,
+                    1,
+                )
+            )
+
+        self.assertEqual(chat.await_count, 1)
+        self.assertEqual(batch_chat.await_count, 2)
+        batch_lengths = sorted(
+            len(call.args[2]) for call in batch_chat.await_args_list
+        )
+        self.assertEqual(batch_lengths, [1, 4])
+        self.assertEqual([element["content"] for element in elements], ["a", "b", "c", "d", "e"])
+
+    def test_engine_falls_back_missing_batch_choices_to_single_requests(self) -> None:
+        image = Image.new("RGB", (64, 64), "white")
+        buckets = {
+            "text": [
+                {
+                    "category": "Text",
+                    "bbox": [0.1, 0.1, 0.9, 0.2],
+                    "layout_order": index,
+                    "page_number": 1,
+                    "preprocessed_image": image,
+                }
+                for index in range(2)
+            ],
+            "table": [],
+            "picture": [],
+            "formula": [],
+        }
+        chat = AsyncMock(side_effect=["layout tokens", "recovered"])
+        batch_chat = AsyncMock(return_value=["first", None])
+        usage = NanoUsage()
+        engine = NanoEngine(
+            "http://localhost:8000/v1",
+            "model",
+            2,
+            10,
+            request_batch_size=4,
+            max_model_sequences=8,
+        )
+
+        with (
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.analyze_page_content",
+                return_value=SimpleNamespace(is_blank=False),
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.prepare_native_layout_image",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine._nano_chat",
+                chat,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine._nano_chat_batch",
+                batch_chat,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.is_native_layout_response",
+                return_value=True,
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine.parse_native_layout_tokens",
+                return_value=[],
+            ),
+            patch(
+                "src.ingestion.parsing.kdl_frontier_engine._nano_group_by_bucket",
+                return_value=buckets,
+            ),
+        ):
+            elements = asyncio.run(
+                engine._parse_page(
+                    SimpleNamespace(),
+                    asyncio.Semaphore(1),
+                    asyncio.Semaphore(2),
+                    image,
+                    1,
+                    usage=usage,
+                )
+            )
+
+        self.assertEqual(chat.await_count, 2)
+        self.assertEqual([element["content"] for element in elements], ["first", "recovered"])
+        self.assertEqual(
+            usage.snapshot()["batch_fallback_sequences"],
+            {"text": 1},
+        )
+        self.assertEqual(
+            usage.snapshot()["batch_fallback_recovered_sequences"],
+            {"text": 1},
+        )
+        self.assertEqual(usage.snapshot()["unrecovered_sequences"], {})
+
     def test_service_registers_hybrid_without_changing_pure_kdl(self) -> None:
         fake_api = SimpleNamespace()
         with patch(
@@ -110,6 +326,40 @@ class KdlPdfInspectorRoutingTests(unittest.TestCase):
         self.assertEqual(metadata["native_text_regions"], 1)
         self.assertEqual(metadata["kdl_text_fallback_regions"], 1)
         self.assertEqual(metadata["pages_needing_ocr"], [1])
+
+    def test_document_router_extracts_all_native_pages_in_one_call(self) -> None:
+        class DocumentExtractor:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def extract_pages(self, path, page_regions):
+                self.calls.append((Path(path), list(page_regions)))
+                return [
+                    [PdfInspectorRegionText(f"page-{page_index}", False)]
+                    for page_index, _ in page_regions
+                ]
+
+        extractor = DocumentExtractor()
+        router = _PdfInspectorTextRouter(_FakeClassifier(), extractor)
+        with patch(
+            "src.ingestion.parsing.kdl_pdf_inspector._pdf_page_dimensions",
+            return_value=((100.0, 200.0), (300.0, 400.0)),
+        ):
+            context = router.prepare_document(Path("text.pdf"))
+        buckets = {
+            1: [{"category": "Text", "bbox": [0.1, 0.1, 0.9, 0.2]}],
+            2: [{"category": "Title", "bbox": [0.2, 0.2, 0.8, 0.3]}],
+        }
+
+        routed = asyncio.run(
+            router.route_document_text_regions(context, buckets)
+        )
+
+        self.assertEqual(routed, {1: {0}, 2: {0}})
+        self.assertEqual(len(extractor.calls), 1)
+        self.assertEqual([page for page, _ in extractor.calls[0][1]], [0, 1])
+        self.assertEqual(buckets[1][0]["content"], "page-0")
+        self.assertEqual(buckets[2][0]["content"], "page-1")
 
     def test_region_level_empty_and_needs_ocr_results_fall_back(self) -> None:
         extractor = _FakeExtractor(

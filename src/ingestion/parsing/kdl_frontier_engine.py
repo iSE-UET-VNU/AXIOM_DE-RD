@@ -46,8 +46,10 @@ import logging
 import math
 import os
 import re
+import time
 import unicodedata
 from collections import Counter
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Match, Tuple, Union, cast
 
@@ -57,6 +59,83 @@ from PIL import Image
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 logger = logging.getLogger("kdl_frontier_nano")
+
+
+class NanoUsage:
+    """Per-document request telemetry for the KDL model stages."""
+
+    def __init__(self) -> None:
+        self.stage_calls: Counter[str] = Counter()
+        self.stage_sequences: Counter[str] = Counter()
+        self.stage_latency_ms_sum: Counter[str] = Counter()
+        self.stage_failures: Counter[str] = Counter()
+        self.stage_retries: Counter[str] = Counter()
+        self.batch_size_counts: Counter[str] = Counter()
+        self.batch_fallback_sequences: Counter[str] = Counter()
+        self.batch_fallback_recovered_sequences: Counter[str] = Counter()
+        self.unrecovered_sequences: Counter[str] = Counter()
+
+    def record(
+        self,
+        stage: str,
+        *,
+        sequences: int,
+        latency_ms: float,
+        failures: int = 0,
+        retries: int = 0,
+    ) -> None:
+        self.stage_calls[stage] += 1
+        self.stage_sequences[stage] += sequences
+        self.stage_latency_ms_sum[stage] += latency_ms
+        self.stage_failures[stage] += failures
+        self.stage_retries[stage] += retries
+        self.batch_size_counts[str(sequences)] += 1
+
+    def snapshot(self) -> dict[str, dict[str, int | float]]:
+        return {
+            "stage_calls": dict(self.stage_calls),
+            "stage_sequences": dict(self.stage_sequences),
+            "stage_latency_ms_sum": {
+                key: round(float(value), 3)
+                for key, value in self.stage_latency_ms_sum.items()
+            },
+            "stage_failures": dict(self.stage_failures),
+            "stage_retries": dict(self.stage_retries),
+            "batch_size_counts": dict(self.batch_size_counts),
+            "batch_fallback_sequences": dict(self.batch_fallback_sequences),
+            "batch_fallback_recovered_sequences": dict(
+                self.batch_fallback_recovered_sequences
+            ),
+            "unrecovered_sequences": dict(self.unrecovered_sequences),
+        }
+
+
+class SequenceLimiter:
+    """Weighted limiter matching client work to vLLM's max-num-seqs."""
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 1:
+            raise ValueError("SequenceLimiter capacity must be positive")
+        self.capacity = capacity
+        self._available = capacity
+        self._condition = asyncio.Condition()
+
+    @asynccontextmanager
+    async def hold(self, sequences: int):
+        weight = max(1, int(sequences))
+        if weight > self.capacity:
+            raise ValueError(
+                f"Request needs {weight} sequences but capacity is {self.capacity}"
+            )
+        async with self._condition:
+            await self._condition.wait_for(lambda: self._available >= weight)
+            self._available -= weight
+        try:
+            yield
+        finally:
+            async with self._condition:
+                self._available += weight
+                self._condition.notify_all()
 
 # vendored modules below were written against `from enum import Enum`-style
 # imports; provide the same names without the original package layout.
@@ -2705,16 +2784,26 @@ async def _nano_chat(
     payload: dict,
     semaphore: asyncio.Semaphore,
     max_retries: int = 2,
+    *,
+    stage: str | None = None,
+    usage: NanoUsage | None = None,
+    sequence_limiter: SequenceLimiter | None = None,
+    headers: dict[str, str] | None = None,
 ) -> str | None:
     """POST a chat/completions request. Returns content, or None on failure
     (the orchestrator keeps failed elements with content='')."""
     last_exc: Exception | None = None
-    async with semaphore:
+    result: str | None = None
+    retries = 0
+    started = time.perf_counter()
+    limiter = sequence_limiter or SequenceLimiter(1)
+    async with semaphore, limiter.hold(1):
         for attempt in range(max_retries + 1):
             try:
                 resp = await client.post(
                     url,
                     json={**payload, "chat_template_kwargs": {"enable_thinking": False}},
+                    headers=headers,
                 )
                 if resp.status_code >= 500:
                     raise httpx.HTTPStatusError(
@@ -2722,14 +2811,90 @@ async def _nano_chat(
                     )
                 if resp.status_code >= 400:
                     logger.warning("4xx from endpoint (not retried): %s", resp.text[:200])
-                    return None
+                    break
                 data = resp.json()
-                return data["choices"][0]["message"]["content"]
+                result = data["choices"][0]["message"]["content"]
+                break
             except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as e:
                 last_exc = e
-                await asyncio.sleep(min(10.0, 2.0 * (2 ** attempt)))
-    logger.warning("stage request failed after retries: %s", last_exc)
-    return None
+                if attempt < max_retries:
+                    retries += 1
+                    await asyncio.sleep(min(10.0, 2.0 * (2 ** attempt)))
+    if result is None and last_exc is not None:
+        logger.warning("stage request failed after retries: %s", last_exc)
+    if usage is not None and stage is not None:
+        usage.record(
+            stage,
+            sequences=1,
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+            failures=int(result is None),
+            retries=retries,
+        )
+    return result
+
+
+async def _nano_chat_batch(
+    client: httpx.AsyncClient,
+    url: str,
+    payloads: List[dict],
+    semaphore: asyncio.Semaphore,
+    max_retries: int = 2,
+    *,
+    stage: str | None = None,
+    usage: NanoUsage | None = None,
+    sequence_limiter: SequenceLimiter | None = None,
+    headers: dict[str, str] | None = None,
+) -> List[str | None]:
+    """Send homogeneous independent conversations through the batch endpoint."""
+
+    if not payloads:
+        return []
+    batch_payload = {
+        **payloads[0],
+        "messages": [payload["messages"] for payload in payloads],
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    results: List[str | None] = [None] * len(payloads)
+    retries = 0
+    last_exc: Exception | None = None
+    started = time.perf_counter()
+    limiter = sequence_limiter or SequenceLimiter(len(payloads))
+    async with semaphore, limiter.hold(len(payloads)):
+        for attempt in range(max_retries + 1):
+            try:
+                resp = await client.post(url, json=batch_payload, headers=headers)
+                if resp.status_code >= 500:
+                    raise httpx.HTTPStatusError(
+                        f"{resp.status_code}", request=resp.request, response=resp
+                    )
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "4xx from batch endpoint (not retried): %s",
+                        resp.text[:200],
+                    )
+                    break
+                choices = resp.json().get("choices") or []
+                for fallback_index, choice in enumerate(choices):
+                    index = int(choice.get("index", fallback_index))
+                    if 0 <= index < len(results):
+                        results[index] = (choice.get("message") or {}).get("content")
+                break
+            except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as exc:
+                last_exc = exc
+                if attempt < max_retries:
+                    retries += 1
+                    await asyncio.sleep(min(10.0, 2.0 * (2 ** attempt)))
+    if all(result is None for result in results) and last_exc is not None:
+        logger.warning("batch request failed after retries: %s", last_exc)
+    if usage is not None and stage is not None:
+        usage.record(
+            stage,
+            sequences=len(payloads),
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+            failures=sum(result is None for result in results),
+            retries=retries,
+        )
+    return results
 
 
 def _nano_group_by_bucket(
@@ -2773,11 +2938,46 @@ def _nano_group_by_bucket(
             "page_number": item.get("page_number", 1),
             "preprocessed_image": preprocessed_img,
         }
+        if "job_id" in item:
+            element_info["job_id"] = item["job_id"]
         if "angle" in item:
             element_info["angle"] = item.get("angle")
         if mapped_cat == "picture":
             element_info["cropped_image"] = cropped_img
         result[mapped_cat].append(element_info)
+    return result
+
+
+def _nano_group_layout_items(
+    content: List[Dict[str, Any]],
+    page_number: int,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Group layout output without retaining or cropping a rendered page."""
+
+    result: Dict[str, List[Dict[str, Any]]] = {
+        "text": [], "table": [], "picture": [], "formula": [],
+    }
+    for item in content:
+        bbox = item.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        try:
+            numeric_bbox = [float(value) for value in bbox]
+        except (TypeError, ValueError):
+            continue
+        x1, y1, x2, y2 = numeric_bbox
+        if not (x1 < x2 and y1 < y2):
+            continue
+        category = str(item.get("category") or "Text")
+        element: Dict[str, Any] = {
+            "bbox": numeric_bbox,
+            "category": category,
+            "layout_order": int(item.get("layout_order", 0)),
+            "page_number": page_number,
+        }
+        if "angle" in item:
+            element["angle"] = item.get("angle")
+        result[layout_recognition_bucket(category)].append(element)
     return result
 
 
@@ -3016,6 +3216,8 @@ class _NanoEngine:
         max_retries: int = 2,
         max_output_tokens: dict[str, int] | None = None,
         text_router: Any | None = None,
+        request_batch_size: int = 1,
+        max_model_sequences: int = 32,
     ):
         base = endpoint_url.rstrip("/")
         self._url = (
@@ -3029,10 +3231,236 @@ class _NanoEngine:
         self._timeout_s = timeout_s
         self._max_retries = max_retries
         self._max_output_tokens = max_output_tokens
+        self._request_batch_size = max(1, int(request_batch_size))
+        self._max_model_sequences = max(1, int(max_model_sequences))
+        if self._request_batch_size > self._max_model_sequences:
+            raise ValueError(
+                "request_batch_size must not exceed max_model_sequences"
+            )
+        self._batch_url = self._url + "/batch"
+        self._headers = {"ngrok-skip-browser-warning": "true"}
+        api_key = (
+            os.getenv("KDL_NANO_API_KEY")
+            or os.getenv("VLLM_API_KEY")
+        )
+        if api_key:
+            self._headers["Authorization"] = f"Bearer {api_key}"
         # Optional async component invoked after layout grouping and before
         # KDL text recognition. It returns indices in the text bucket whose
         # content it supplied. With the default None, pure KDL is unchanged.
         self._text_router = text_router
+
+    async def layout_batch(
+        self,
+        client: httpx.AsyncClient,
+        pages: List[tuple[Image.Image, int]],
+        request_semaphore: asyncio.Semaphore,
+        *,
+        sequence_limiter: SequenceLimiter,
+        usage: NanoUsage,
+    ) -> List[Dict[str, List[Dict[str, Any]]]]:
+        """Run homogeneous layout requests and return image-free descriptors."""
+
+        grouped: List[Dict[str, List[Dict[str, Any]]]] = [
+            {"text": [], "table": [], "picture": [], "formula": []}
+            for _ in pages
+        ]
+        eligible: List[tuple[int, Image.Image, int]] = []
+        for index, (image, page_number) in enumerate(pages):
+            if min(image.size) < 32:
+                continue
+            try:
+                if analyze_page_content(image).is_blank:
+                    continue
+            except Exception:
+                pass
+            eligible.append((index, image, page_number))
+        if not eligible:
+            return grouped
+
+        payloads = [
+            _nano_payload(
+                "layout",
+                self._model,
+                prepare_native_layout_image(image),
+                self._max_output_tokens,
+            )
+            for _, image, _ in eligible
+        ]
+        if len(payloads) == 1 and self._request_batch_size <= 1:
+            contents = [
+                await _nano_chat(
+                    client,
+                    self._url,
+                    payloads[0],
+                    request_semaphore,
+                    self._max_retries,
+                    stage="layout",
+                    usage=usage,
+                    sequence_limiter=sequence_limiter,
+                    headers=self._headers,
+                )
+            ]
+        else:
+            contents = await _nano_chat_batch(
+                client,
+                self._batch_url,
+                payloads,
+                request_semaphore,
+                self._max_retries,
+                stage="layout",
+                usage=usage,
+                sequence_limiter=sequence_limiter,
+                headers=self._headers,
+            )
+
+        missing_indexes = [
+            index for index, content in enumerate(contents) if content is None
+        ]
+        if missing_indexes:
+            usage.batch_fallback_sequences["layout"] += len(missing_indexes)
+            fallback_contents = await asyncio.gather(
+                *(
+                    _nano_chat(
+                        client,
+                        self._url,
+                        payloads[index],
+                        request_semaphore,
+                        self._max_retries,
+                        stage="layout",
+                        usage=usage,
+                        sequence_limiter=sequence_limiter,
+                        headers=self._headers,
+                    )
+                    for index in missing_indexes
+                )
+            )
+            for index, content in zip(
+                missing_indexes, fallback_contents, strict=True
+            ):
+                contents[index] = content
+            usage.batch_fallback_recovered_sequences["layout"] += sum(
+                content is not None for content in fallback_contents
+            )
+
+        for (output_index, _, page_number), content in zip(
+            eligible, contents, strict=True
+        ):
+            if not content or not content.strip():
+                continue
+            if not is_native_layout_response(content):
+                logger.warning(
+                    "page %d: layout response has no <|box_start|> tokens",
+                    page_number,
+                )
+                continue
+            grouped[output_index] = _nano_group_layout_items(
+                parse_native_layout_tokens(content),
+                page_number,
+            )
+        return grouped
+
+    async def recognize_prepared_batch(
+        self,
+        client: httpx.AsyncClient,
+        stage: str,
+        elements: List[Dict[str, Any]],
+        request_semaphore: asyncio.Semaphore,
+        *,
+        sequence_limiter: SequenceLimiter,
+        usage: NanoUsage,
+        image_key: str = "preprocessed_image",
+        fullpage_table: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Recognize one global same-stage batch.
+
+        Returns table elements that require the normal cropped-table fallback.
+        """
+
+        if not elements:
+            return []
+        payloads = [
+            _nano_payload(
+                stage,
+                self._model,
+                element[image_key],
+                self._max_output_tokens,
+            )
+            for element in elements
+        ]
+        if len(payloads) == 1 and self._request_batch_size <= 1:
+            contents = [
+                await _nano_chat(
+                    client,
+                    self._url,
+                    payloads[0],
+                    request_semaphore,
+                    self._max_retries,
+                    stage=stage,
+                    usage=usage,
+                    sequence_limiter=sequence_limiter,
+                    headers=self._headers,
+                )
+            ]
+        else:
+            contents = await _nano_chat_batch(
+                client,
+                self._batch_url,
+                payloads,
+                request_semaphore,
+                self._max_retries,
+                stage=stage,
+                usage=usage,
+                sequence_limiter=sequence_limiter,
+                headers=self._headers,
+            )
+
+        missing_indexes = [
+            index for index, content in enumerate(contents) if content is None
+        ]
+        if missing_indexes:
+            usage.batch_fallback_sequences[stage] += len(missing_indexes)
+            fallback_contents = await asyncio.gather(
+                *(
+                    _nano_chat(
+                        client,
+                        self._url,
+                        payloads[index],
+                        request_semaphore,
+                        self._max_retries,
+                        stage=stage,
+                        usage=usage,
+                        sequence_limiter=sequence_limiter,
+                        headers=self._headers,
+                    )
+                    for index in missing_indexes
+                )
+            )
+            for index, content in zip(
+                missing_indexes, fallback_contents, strict=True
+            ):
+                contents[index] = content
+            usage.batch_fallback_recovered_sequences[stage] += sum(
+                content is not None for content in fallback_contents
+            )
+
+        table_fallbacks: List[Dict[str, Any]] = []
+        for element, content in zip(elements, contents, strict=True):
+            if fullpage_table:
+                if content is not None and _nano_is_single_clean_otsl(content):
+                    element["content"] = content
+                    element["recognition_source"] = "kdl_table"
+                else:
+                    table_fallbacks.append(element)
+                continue
+            if stage == "picture":
+                _nano_apply_picture_result(element, content)
+            else:
+                element["content"] = content if content is not None else ""
+            element["recognition_source"] = f"kdl_{stage}"
+            if content is None:
+                usage.unrecovered_sequences[stage] += 1
+        return table_fallbacks
 
     async def parse_pages(
         self,
@@ -3043,6 +3471,8 @@ class _NanoEngine:
         page_semaphore = asyncio.Semaphore(self._page_max_concurrent)
         layout_semaphore = asyncio.Semaphore(self._page_max_concurrent)
         bbox_semaphore = asyncio.Semaphore(self._bbox_max_concurrent)
+        sequence_limiter = SequenceLimiter(self._max_model_sequences)
+        usage = NanoUsage()
 
         async def parse_page(
             client: httpx.AsyncClient,
@@ -3057,6 +3487,8 @@ class _NanoEngine:
                     normalize_image_mode(image, "RGB"),
                     page_no,
                     routing_context=routing_context,
+                    sequence_limiter=sequence_limiter,
+                    usage=usage,
                 )
 
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
@@ -3068,7 +3500,9 @@ class _NanoEngine:
             )
         elements = [element for page in pages for element in page]
 
-        return self.finalize_elements(elements)
+        raw = self.finalize_elements(elements)
+        raw["usage"] = usage.snapshot()
+        return raw
 
     def finalize_elements(self, elements: List[Dict[str, Any]]) -> dict:
         """Apply the original KDL deterministic post-processing and assembly."""
@@ -3112,6 +3546,8 @@ class _NanoEngine:
         page_no: int,
         *,
         routing_context: Any | None = None,
+        sequence_limiter: SequenceLimiter | None = None,
+        usage: NanoUsage | None = None,
     ) -> List[Dict[str, Any]]:
         w, h = image.size
         if min(w, h) < 32:
@@ -3134,6 +3570,10 @@ class _NanoEngine:
             ),
             layout_semaphore,
             self._max_retries,
+            stage="layout",
+            usage=usage,
+            sequence_limiter=sequence_limiter,
+            headers=self._headers,
         )
         if not layout_content or not layout_content.strip():
             return []
@@ -3196,13 +3636,106 @@ class _NanoEngine:
                 ),
                 bbox_semaphore,
                 self._max_retries,
+                stage=stage,
+                usage=usage,
+                sequence_limiter=sequence_limiter,
+                headers=self._headers,
             )
             if stage == "picture":
                 _nano_apply_picture_result(el, content)
             else:
                 el["content"] = content if content is not None else ""
+            if content is None and usage is not None:
+                usage.unrecovered_sequences[stage] += 1
             if self._text_router is not None:
                 el["recognition_source"] = f"kdl_{stage}"
+
+        async def recognize_batch(
+            stage: str,
+            elements: List[Dict[str, Any]],
+        ) -> None:
+            eligible: List[Dict[str, Any]] = []
+            for el in elements:
+                pre = el.get("preprocessed_image")
+                if pre is None:
+                    el["content"] = ""
+                    if self._text_router is not None:
+                        el["recognition_source"] = f"kdl_{stage}"
+                    continue
+                if stage == "picture" and (pre.width < 25 or pre.height < 25):
+                    el["content"] = ""
+                    if self._text_router is not None:
+                        el["recognition_source"] = f"kdl_{stage}"
+                    continue
+                eligible.append(el)
+            if not eligible:
+                return
+
+            contents = await _nano_chat_batch(
+                client,
+                self._batch_url,
+                [
+                    _nano_payload(
+                        stage,
+                        self._model,
+                        el["preprocessed_image"],
+                        self._max_output_tokens,
+                    )
+                    for el in eligible
+                ],
+                bbox_semaphore,
+                self._max_retries,
+                stage=stage,
+                usage=usage,
+                sequence_limiter=sequence_limiter,
+                headers=self._headers,
+            )
+            missing_indexes = [
+                index for index, content in enumerate(contents) if content is None
+            ]
+            if missing_indexes:
+                if usage is not None:
+                    usage.batch_fallback_sequences[stage] += len(missing_indexes)
+                fallback_contents = await asyncio.gather(
+                    *(
+                        _nano_chat(
+                            client,
+                            self._url,
+                            _nano_payload(
+                                stage,
+                                self._model,
+                                eligible[index]["preprocessed_image"],
+                                self._max_output_tokens,
+                            ),
+                            bbox_semaphore,
+                            self._max_retries,
+                            stage=stage,
+                            usage=usage,
+                            sequence_limiter=sequence_limiter,
+                            headers=self._headers,
+                        )
+                        for index in missing_indexes
+                    )
+                )
+                for index, content in zip(
+                    missing_indexes,
+                    fallback_contents,
+                    strict=True,
+                ):
+                    contents[index] = content
+                if usage is not None:
+                    usage.batch_fallback_recovered_sequences[stage] += sum(
+                        content is not None for content in fallback_contents
+                    )
+            for el, content in zip(eligible, contents, strict=True):
+                if stage == "picture":
+                    _nano_apply_picture_result(el, content)
+                else:
+                    el["content"] = content if content is not None else ""
+                if content is None and usage is not None:
+                    usage.unrecovered_sequences[stage] += 1
+                if self._text_router is not None:
+                    el["recognition_source"] = f"kdl_{stage}"
 
         async def recognize_table_fullpage(el: Dict[str, Any]) -> None:
             content = await _nano_chat(
@@ -3216,6 +3749,10 @@ class _NanoEngine:
                 ),
                 bbox_semaphore,
                 self._max_retries,
+                stage="table",
+                usage=usage,
+                sequence_limiter=sequence_limiter,
+                headers=self._headers,
             )
             if content is not None and _nano_is_single_clean_otsl(content):
                 el["content"] = content
@@ -3224,18 +3761,36 @@ class _NanoEngine:
                 return
             await recognize("table", el)
 
-        for index, el in enumerate(buckets["text"]):
-            if index not in routed_text_indices:
-                tasks.append(recognize("text", el))
+        def add_recognition_tasks(
+            stage: str,
+            elements: List[Dict[str, Any]],
+        ) -> None:
+            if self._request_batch_size <= 1:
+                tasks.extend(recognize(stage, el) for el in elements)
+                return
+            for start in range(0, len(elements), self._request_batch_size):
+                tasks.append(
+                    recognize_batch(
+                        stage,
+                        elements[start : start + self._request_batch_size],
+                    )
+                )
+
+        text_elements = [
+            el
+            for index, el in enumerate(buckets["text"])
+            if index not in routed_text_indices
+        ]
+        add_recognition_tasks("text", text_elements)
+        remaining_tables: List[Dict[str, Any]] = []
         for i, el in enumerate(buckets["table"]):
             if fullpage_table is not None and i == 0:
                 tasks.append(recognize_table_fullpage(el))
             else:
-                tasks.append(recognize("table", el))
-        for el in buckets["picture"]:
-            tasks.append(recognize("picture", el))
-        for el in buckets["formula"]:
-            tasks.append(recognize("formula", el))
+                remaining_tables.append(el)
+        add_recognition_tasks("table", remaining_tables)
+        add_recognition_tasks("picture", buckets["picture"])
+        add_recognition_tasks("formula", buckets["formula"])
         await asyncio.gather(*tasks)
 
         page_elements: List[Dict[str, Any]] = []
@@ -3263,4 +3818,4 @@ class _NanoEngine:
 
 NanoEngine = _NanoEngine
 
-__all__ = ["NanoEngine"]
+__all__ = ["NanoEngine", "NanoUsage", "SequenceLimiter"]
