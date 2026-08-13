@@ -18,6 +18,7 @@ venv/
 !/configs/pipeline.vidore-v3-chandra2.yaml
 !/configs/pipeline.vidore-v3-kdl.yaml
 !/configs/pipeline.kdl-pdf-inspector.yaml
+!/configs/pipeline.vidore-v3-physics-kdl-pdf-inspector.yaml
 
 # Local benchmark checkouts and generated probe artifacts.
 /experiments/
