@@ -2,7 +2,7 @@
 
 Example:
 
-    python -m experiments.data_discovery.cli \
+    python -m research.data_discovery.cli \
         --input data/raw/my-lake \
         --index-dir data/work/page-discovery \
         --query "revenue recognition" \
