@@ -19,9 +19,16 @@ venv/
 !/configs/pipeline.vidore-v3-kdl.yaml
 !/configs/pipeline.kdl-pdf-inspector.yaml
 !/configs/pipeline.vidore-v3-physics-kdl-pdf-inspector.yaml
+!/configs/pipeline.vidore-v3-physics-discovery-pages-global-two-phase.yaml
+!/configs/pipeline.vidore-v3-industrial-discovery-pages-global-two-phase.yaml
 
-# Local benchmark checkouts and generated probe artifacts.
-/experiments/
+# Local benchmark checkouts and generated probe artifacts. The data-discovery
+# experiment is versioned so it can be developed on its own branch.
+/experiments/*
+!/experiments/data_discovery/
+!/experiments/data_discovery/**
+/experiments/data_discovery/**/__pycache__/
+/experiments/data_discovery/**/*.py[cod]
 /ParseBench/
 /tmp/
 /.tmp/

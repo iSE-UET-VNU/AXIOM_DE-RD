@@ -129,7 +129,7 @@ class Benchmark(Protocol):
 
 
 def iter_parquet(path: Any, columns: Sequence[str], batch_size: int = 2048) -> Iterator[dict]:
-    """Stream a parquet file row by row, never holding the whole table.
+    """Stream parquet file(s) row by row, never holding the whole table.
 
     ``read_table(...).to_pylist()`` materializes twice -- once as Arrow buffers,
     once as Python objects -- which killed the process on MMDocIR's 170,338
@@ -141,10 +141,21 @@ def iter_parquet(path: Any, columns: Sequence[str], batch_size: int = 2048) -> I
     """
     import pyarrow.parquet as pq
 
-    reader = pq.ParquetFile(path)
-    for batch in reader.iter_batches(batch_size=batch_size, columns=list(columns)):
-        for row in batch.to_pylist():
-            yield row
+    from pathlib import Path
+
+    if isinstance(path, (list, tuple)):
+        paths = [Path(item) for item in path]
+    else:
+        source = Path(path)
+        paths = sorted(source.glob("*.parquet")) if source.is_dir() else [source]
+    if not paths:
+        raise FileNotFoundError(f"No parquet files found at {path}")
+
+    for parquet_path in paths:
+        reader = pq.ParquetFile(parquet_path)
+        for batch in reader.iter_batches(batch_size=batch_size, columns=list(columns)):
+            for row in batch.to_pylist():
+                yield row
 
 
 class MixedTaxonomy(ValueError):

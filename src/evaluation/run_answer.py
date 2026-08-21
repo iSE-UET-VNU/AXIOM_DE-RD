@@ -23,6 +23,7 @@ An arm that does not move accuracy has either failed to retrieve more gold
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 
@@ -35,7 +36,7 @@ import time
 from .answer_style import style_for
 from .benchmarks import load as load_benchmark
 from .benchmarks.base import check_single_taxonomy
-from .generate import MAX_CONTEXT_CHARS, ContextChunk, generate
+from .generate import MAX_CONTEXT_CHARS, MAX_OUTPUT_TOKENS, ContextChunk, generate
 from .model_guard import assert_real
 
 PROJECT_ROOT = repo_root(__file__)
@@ -47,6 +48,14 @@ DATA = PROJECT_ROOT / "data" / "benchmark"
 from src.utils.env import load_dotenv_file  # noqa: E402
 
 load_dotenv_file(PROJECT_ROOT)
+
+
+def _write_json(path: Path, value: Any) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
 
 
 def load_run(path: Path) -> dict[str, list[ContextChunk]]:
@@ -73,6 +82,7 @@ def main() -> None:
     parser.add_argument("--arm", required=True, help="Arm name, used in the output file.")
     parser.add_argument("--benchmark", default="ise", help="Benchmark adapter name.")
     parser.add_argument("--questions", default=str(DATA / "questions.jsonl"))
+    parser.add_argument("--root", default="", help="Benchmark data root, if it needs one.")
     parser.add_argument("--out", default=str(DATA / "answers"))
     parser.add_argument(
         "--generator", required=True, metavar="MODEL",
@@ -85,6 +95,18 @@ def main() -> None:
         "differ from --generator: LLM judges prefer their own outputs.",
     )
     parser.add_argument("--max-context-chars", type=int, default=MAX_CONTEXT_CHARS)
+    parser.add_argument(
+        "--max-output-tokens", type=int, default=MAX_OUTPUT_TOKENS,
+        help="Generator completion budget, including reasoning tokens where applicable.",
+    )
+    parser.add_argument(
+        "--top-k-context", type=int, default=None,
+        help="Use only the first K retrieved chunks before applying the character budget.",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Concurrent generator+judge calls. Default 1 preserves legacy behavior.",
+    )
     parser.add_argument(
         "--subset",
         default="",
@@ -108,16 +130,57 @@ def main() -> None:
     runs = load_run(Path(args.run))
     scored = [q for q in questions if q.qid in runs]
     missing = [q.qid for q in questions if q.qid not in runs]
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = out_dir / f"{args.arm}.checkpoint.json"
+    checkpoint_identity = {
+        "run": str(Path(args.run).resolve()),
+        "generator": args.generator,
+        "judge": args.judge,
+        "max_context_chars": args.max_context_chars,
+        "max_output_tokens": args.max_output_tokens,
+        "top_k_context": args.top_k_context,
+        "subset": args.subset,
+        "language": args.language,
+    }
+    records_by_qid: dict[str, dict[str, Any]] = {}
+    if checkpoint_path.exists():
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        if checkpoint.get("identity") != checkpoint_identity:
+            raise ValueError(
+                f"Checkpoint {checkpoint_path} belongs to a different QA configuration"
+            )
+        records_by_qid = {
+            str(record["qid"]): record
+            for record in checkpoint.get("records", [])
+            if not record.get("error") and not record.get("judge_error")
+        }
 
-    records: list[dict[str, Any]] = []
+    def save_checkpoint() -> None:
+        _write_json(
+            checkpoint_path,
+            {
+                "identity": checkpoint_identity,
+                "records": [
+                    records_by_qid[q.qid]
+                    for q in scored
+                    if q.qid in records_by_qid
+                ],
+            },
+        )
+
     started = time.perf_counter()
-    for question in scored:
+    def evaluate_one(question: Any) -> dict[str, Any]:
+        chunks = runs[question.qid]
+        if args.top_k_context is not None:
+            chunks = chunks[:max(0, args.top_k_context)]
         generation = generate(
             question.qid,
             question.query,
-            runs[question.qid],
+            chunks,
             model=args.generator,
             max_chars=args.max_context_chars,
+            max_output_tokens=args.max_output_tokens,
             render_prompt=style.render_prompt,
         )
         verdict = style.judge(
@@ -129,39 +192,61 @@ def main() -> None:
             generator_model=args.generator,
         )
         gold = benchmark.gold_docs(question.qid)
-        records.append(
-            {
-                **asdict(generation),
-                "correct": verdict.correct,
-                "credited": verdict.credited,
-                "judgment": verdict.label,
-                "grader": verdict.grader,
-                "judge_error": verdict.error,
-                "answer_type": question.answer_type,
-                "level": question.level,
-                "modalities": list(question.modalities),
-                "taxonomy": getattr(question, "taxonomy", ""),
-                "gold_doc_ids": gold.flat(),
-                # Set semantics with any-of groups: a directory reference is one
-                # piece of evidence, not one requirement per file underneath it.
-                "context_recall": gold.recall(generation.context_doc_ids),
-                "context_hit": bool(set(gold.flat()) & set(generation.context_doc_ids)),
-                "multi_gold": gold.required > 1,
-                **_finer_granularities(benchmark, question.qid, generation),
-            }
-        )
+        return {
+            **asdict(generation),
+            "correct": verdict.correct,
+            "credited": verdict.credited,
+            "judgment": verdict.label,
+            "grader": verdict.grader,
+            "judge_error": verdict.error,
+            "answer_type": question.answer_type,
+            "level": question.level,
+            "modalities": list(question.modalities),
+            "taxonomy": getattr(question, "taxonomy", ""),
+            "gold_doc_ids": gold.flat(),
+            # Set semantics with any-of groups: a directory reference is one
+            # piece of evidence, not one requirement per file underneath it.
+            "context_recall": gold.recall(generation.context_doc_ids),
+            "context_hit": bool(set(gold.flat()) & set(generation.context_doc_ids)),
+            "multi_gold": gold.required > 1,
+            **_finer_granularities(benchmark, question.qid, generation),
+        }
+
+    pending = [question for question in scored if question.qid not in records_by_qid]
+    workers = max(1, args.workers)
+    completed = 0
+    try:
+        if workers == 1:
+            for question in pending:
+                records_by_qid[question.qid] = evaluate_one(question)
+                completed += 1
+                if completed % 10 == 0 or completed == len(pending):
+                    save_checkpoint()
+                    print(f"QA progress: {completed}/{len(pending)}", flush=True)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(evaluate_one, question): question.qid
+                    for question in pending
+                }
+                for future in as_completed(futures):
+                    qid = futures[future]
+                    records_by_qid[qid] = future.result()
+                    completed += 1
+                    if completed % 10 == 0 or completed == len(pending):
+                        save_checkpoint()
+                        print(f"QA progress: {completed}/{len(pending)}", flush=True)
+    except BaseException:
+        save_checkpoint()
+        raise
+
+    records = [records_by_qid[question.qid] for question in scored]
 
     report = summarize(
         args.arm, records, missing, args, time.perf_counter() - started, resolved
     )
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{args.arm}.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (out_dir / f"{args.arm}.per_question.json").write_text(
-        json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _write_json(out_dir / f"{args.arm}.json", report)
+    _write_json(out_dir / f"{args.arm}.per_question.json", records)
 
     print(f"arm              : {args.arm}")
     print(f"scored           : {report['scored']}  (missing from run: {len(missing)})")
@@ -189,7 +274,11 @@ def _load(args: argparse.Namespace) -> Any:
         return load_benchmark("ise", questions_path=args.questions, subset=subset)
     # Passed through only when given: an adapter that takes neither would reject
     # an empty string, and one that requires them should say so itself.
-    extra = {k: v for k, v in (("subset", args.subset), ("language", args.language)) if v}
+    extra = {
+        k: v
+        for k, v in (("subset", args.subset), ("language", args.language), ("root", args.root))
+        if v
+    }
     return load_benchmark(args.benchmark, **extra)
 
 
@@ -266,6 +355,8 @@ def summarize(
             for alias, r in (resolved or {}).items()
         },
         "max_context_chars": args.max_context_chars,
+        "max_output_tokens": args.max_output_tokens,
+        "top_k_context": args.top_k_context,
         "subset": args.subset,
         "scored": len(records),
         "missing_from_run": missing,

@@ -1,0 +1,53 @@
+{
+  "input": {
+    "mode": "local_raw"
+  },
+  "local_input": {
+    "path": "data/raw/benchmarks/vidore_v3/vidore_v3_physics/pdfs",
+    "recursive": true,
+    "include_hidden": false,
+    "include_extensions": [
+      ".pdf"
+    ],
+    "max_files": null
+  },
+  "raw_dir": "data/raw",
+  "ingested_dir": "data/ingested/benchmarks/vidore-v3-physics-discovery-pages",
+  "cleaned_dir": "data/cleaned/benchmarks/vidore-v3-physics-discovery-pages",
+  "enriched_dir": "data/enriched/benchmarks/vidore-v3-physics-discovery-pages",
+  "output_dir": "data/output/benchmarks/vidore-v3-physics-discovery-pages",
+  "enabled_modules": [
+    "ingestion",
+    "cleaning",
+    "enrichment"
+  ],
+  "parsing": {
+    "provider": "kdl_pdf_inspector",
+    "kdl": {
+      "method": "vllm",
+      "endpoint_url": null,
+      "model": null,
+      "continuous_page_queue": true,
+      "scheduler": "global_two_phase",
+      "max_workers": 8,
+      "render_processes": 8,
+      "request_workers": 24,
+      "request_batch_size": 8,
+      "max_model_sequences": 128,
+      "dpi": 144,
+      "request_timeout_seconds": 3600,
+      "max_retries": 2,
+      "max_pages": 1024,
+      "layout_max_output_tokens": 6000,
+      "text_max_output_tokens": 2048,
+      "table_max_output_tokens": 5500,
+      "picture_max_output_tokens": 4096,
+      "formula_max_output_tokens": 128,
+      "save_raw_outputs": true,
+      "output_dir": "data/work/benchmarks/vidore-v3-physics-discovery-pages"
+    }
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}
