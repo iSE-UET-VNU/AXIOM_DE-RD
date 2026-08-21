@@ -50,9 +50,6 @@ def run_pipeline(
     config_file = _resolve_config_path(project_root, config_path)
     config = load_config(config_file)
 
-    _configure_logging(config)
-    logger = logging.getLogger(__name__)
-
     raw_root = resolve_project_path(project_root, config.get("raw_dir", "data/raw"))
     ingested_root = resolve_project_path(project_root, config.get("ingested_dir", "data/ingested"))
     cleaned_root = resolve_project_path(project_root, config.get("cleaned_dir", "data/cleaned"))
@@ -69,6 +66,9 @@ def run_pipeline(
     embedded_dir = embedded_root / run_id
     output_dir = output_root / run_id
 
+    log_path = _configure_logging(config, project_root=project_root, run_id=run_id)
+    logger = logging.getLogger(__name__)
+
     state = PipelineState(
         run_id=run_id,
         input_source=None,
@@ -80,7 +80,7 @@ def run_pipeline(
         output_dir=portable_path(output_dir, project_root),
     )
 
-    logger.info("Starting pipeline run %s", state.run_id)
+    logger.info("Starting pipeline run %s (log_file=%s)", state.run_id, log_path)
 
     if "ingestion" in enabled_modules:
         input_config = config.get("input", {})
@@ -560,15 +560,54 @@ def _resolve_input_mode(
     return mode
 
 
-def _configure_logging(config: dict[str, Any]) -> None:
+def _configure_logging(
+    config: dict[str, Any], *, project_root: Path, run_id: str
+) -> Path | None:
     logging_config = config.get("logging", {})
     level_name = "INFO"
+    console = True
+    file_template: str | None = "data/logs/pipeline-{run_id}.log"
     if isinstance(logging_config, dict):
         level_name = str(logging_config.get("level", level_name))
-    logging.basicConfig(
-        level=getattr(logging, level_name.upper(), logging.INFO),
-        format="%(levelname)s %(name)s - %(message)s",
+        console = bool(logging_config.get("console", console))
+        configured_file = logging_config.get("file", file_template)
+        file_template = str(configured_file) if configured_file else None
+
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    root = logging.getLogger()
+    root.setLevel(level)
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s - %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
     )
+
+    if console and not any(
+        isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+        for handler in root.handlers
+    ):
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        console_handler.setLevel(level)
+        root.addHandler(console_handler)
+
+    if file_template is None:
+        return None
+    file_name = file_template.format(run_id=run_id)
+    file_path = Path(file_name)
+    if not file_path.is_absolute():
+        file_path = project_root / file_path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    for handler in list(root.handlers):
+        if getattr(handler, "_axiom_run_log", False):
+            root.removeHandler(handler)
+            handler.close()
+    file_handler = logging.FileHandler(file_path, encoding="utf-8")
+    file_handler._axiom_run_log = True
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(level)
+    root.addHandler(file_handler)
+    return file_path
 
 
 def _continuous_document_queue(

@@ -86,14 +86,13 @@ ParseBench KDL adapter. `max_model_sequences` is a shared weighted budget for
 layout and recognition requests, so batches do not overload vLLM's configured
 sequence capacity.
 
-The default `scheduler: parsebench_document` reproduces the ParseBench request
-scheduler: `max_workers` documents run concurrently, while each document sends
-only one KDL request at a time. Layout completes before recognition begins;
-recognition batches then run serially within that document.
+The default `scheduler: global_two_phase` uses corpus-wide batching. KDL first
+renders and batches every layout page, waits at a strict barrier, then routes
+native text and globally batches same-stage bbox crops across pages and
+documents.
 
-Set `scheduler: global_two_phase` for corpus-wide batching. KDL first renders
-and batches every layout page, waits at a strict barrier, then routes native
-text and globally batches same-stage bbox crops across pages and documents.
+The legacy ParseBench-style scheduler remains available in
+`configs/pipeline.kdl-pdf-inspector-backup.yaml`.
 `request_workers` controls the shared HTTP request pool used by both phases;
 `render_processes` controls document render/crop processes. In this mode a KDL
 PDF is opened once for the layout render pass and, only when KDL recognition is
@@ -107,6 +106,13 @@ $env:VLLM_API_BASE="https://<host>/v1"
 $env:VLLM_MODEL_NAME="kdl-frontier-parser-nano"
 python scripts/run_pipeline.py --config configs/pipeline.kdl-pdf-inspector.yaml --local-raw <pdf-or-directory>
 ```
+
+Each run writes a timestamped console-style log to
+`data/logs/kdl-pdf-inspector-<run_id>.log`. Set
+`parsing.kdl.progress_every_batches` to control how often layout and
+recognition progress is emitted. The log includes phase boundaries, submitted
+and completed batches, queue sizes, failures, phase latency, and final raw
+output persistence timing.
 
 **Why `pipeline.mock.yaml`.** The default config parses with `lift_api`, which
 currently returns `402 Payment Required` — Datalab is out of credit — and every

@@ -52,6 +52,7 @@ class KDLConfig:
     request_workers: int = 8
     request_batch_size: int = 1
     max_model_sequences: int = 32
+    progress_every_batches: int = 10
     layout_max_output_tokens: int = 6000
     text_max_output_tokens: int = 2048
     table_max_output_tokens: int = 5500
@@ -123,6 +124,9 @@ class KDLConfig:
             request_workers=_positive_int(values, "request_workers", 8),
             request_batch_size=request_batch_size,
             max_model_sequences=max_model_sequences,
+            progress_every_batches=_positive_int(
+                values, "progress_every_batches", 10
+            ),
             layout_max_output_tokens=_positive_int(
                 values, "layout_max_output_tokens", 6000
             ),
@@ -440,9 +444,16 @@ class KDLProvider:
             "scheduler": "global_two_phase",
             "request_workers": self.config.request_workers,
             "queue_capacity": self.config.max_model_sequences,
+            "progress_every_batches": self.config.progress_every_batches,
             "layout_rendered_pages": 0,
+            "layout_batches_submitted": 0,
+            "layout_batches_completed": 0,
+            "layout_batch_failures": 0,
             "recognition_rendered_pages": 0,
             "recognition_jobs": 0,
+            "recognition_batches_submitted": 0,
+            "recognition_batches_completed": 0,
+            "recognition_batch_failures": 0,
             "queue_peak": 0,
             "documents_finalized_during_recognition": 0,
             "persistence_queue_peak": 0,
@@ -486,6 +497,18 @@ class KDLProvider:
             persistence_task = asyncio.create_task(persist_completed_documents())
 
         recognition_active = False
+        total_pages = sum(
+            prepared[index].page_count for index in range(len(prepared))
+        )
+        logger.info(
+            "KDL global_two_phase started: documents=%s pages=%s "
+            "request_workers=%s batch_size=%s sequence_capacity=%s",
+            len(prepared),
+            total_pages,
+            self.config.request_workers,
+            self.config.request_batch_size,
+            self.config.max_model_sequences,
+        )
 
         def publish(index: int, outcome: ParsedData | Exception) -> None:
             document = prepared[index]
@@ -549,6 +572,15 @@ class KDLProvider:
             telemetry["layout_phase_latency_ms"] = round(
                 (time.perf_counter() - layout_started) * 1000.0, 3
             )
+            logger.info(
+                "KDL layout phase completed: pages=%s batches=%s failures=%s "
+                "queue_peak=%s elapsed_ms=%s",
+                telemetry["layout_rendered_pages"],
+                telemetry["layout_batches_completed"],
+                telemetry["layout_batch_failures"],
+                telemetry["queue_peak"],
+                telemetry["layout_phase_latency_ms"],
+            )
 
             routing_started = time.perf_counter()
             job_map, crop_tasks = await self._prepare_global_recognition(
@@ -559,6 +591,11 @@ class KDLProvider:
                 (time.perf_counter() - routing_started) * 1000.0, 3
             )
             telemetry["recognition_jobs"] = len(job_map)
+            logger.info(
+                "KDL recognition routing completed: jobs=%s elapsed_ms=%s",
+                telemetry["recognition_jobs"],
+                telemetry["routing_phase_latency_ms"],
+            )
 
             remaining_jobs = {index: 0 for index in valid_indexes}
             completed_job_ids: set[str] = set()
@@ -600,6 +637,16 @@ class KDLProvider:
             recognition_active = False
             telemetry["recognition_phase_latency_ms"] = round(
                 (time.perf_counter() - recognition_started) * 1000.0, 3
+            )
+            logger.info(
+                "KDL recognition phase completed: pages=%s batches=%s "
+                "failures=%s documents_finalized=%s queue_peak=%s elapsed_ms=%s",
+                telemetry["recognition_rendered_pages"],
+                telemetry["recognition_batches_completed"],
+                telemetry["recognition_batch_failures"],
+                telemetry["documents_finalized_during_recognition"],
+                telemetry["queue_peak"],
+                telemetry["recognition_phase_latency_ms"],
             )
 
         telemetry["end_to_end_latency_ms"] = round(
@@ -647,6 +694,15 @@ class KDLProvider:
         telemetry["provider_end_to_end_latency_ms"] = round(
             (time.perf_counter() - wall_started) * 1000.0,
             3,
+        )
+        logger.info(
+            "KDL global_two_phase finished: documents=%s layout_pages=%s "
+            "recognition_jobs=%s elapsed_ms=%s raw_write_ms=%s",
+            len(prepared),
+            telemetry["layout_rendered_pages"],
+            telemetry["recognition_jobs"],
+            telemetry["provider_end_to_end_latency_ms"],
+            telemetry["raw_output_write_latency_ms"],
         )
 
         if persistence_executor is not None:
@@ -729,6 +785,7 @@ class KDLProvider:
                         )
                     )
                     in_flight[task] = batch
+                    telemetry["layout_batches_submitted"] += 1
 
             try:
                 while (
@@ -782,17 +839,37 @@ class KDLProvider:
                         try:
                             grouped_pages = task.result()
                         except Exception as exc:
+                            telemetry["layout_batch_failures"] += 1
                             grouped_pages = [
                                 {"text": [], "table": [], "picture": [], "formula": []}
                                 for _ in batch
                             ]
                             logger.warning("global layout batch failed: %s", exc)
+                        telemetry["layout_batches_completed"] += 1
                         for (document_index, page_index, image), grouped in zip(
                             batch, grouped_pages, strict=True
                         ):
                             prepared[document_index].layout_pages[page_index] = grouped
                             image.close()
                             image_slots.release()
+                        completed_batches = telemetry["layout_batches_completed"]
+                        if (
+                            completed_batches % self.config.progress_every_batches == 0
+                            or not pending and not in_flight
+                        ):
+                            logger.info(
+                                "KDL layout progress: pages=%s/%s batches_completed=%s "
+                                "batches_submitted=%s pending=%s in_flight=%s",
+                                telemetry["layout_rendered_pages"],
+                                sum(
+                                    prepared[index].page_count
+                                    for index in document_indexes
+                                ),
+                                completed_batches,
+                                telemetry["layout_batches_submitted"],
+                                len(pending),
+                                len(in_flight),
+                            )
                     await submit(force=force)
             finally:
                 for _, _, image in pending:
@@ -992,6 +1069,7 @@ class KDLProvider:
                         )
                     )
                     in_flight[task] = (selected, elements)
+                    telemetry["recognition_batches_submitted"] += 1
 
             try:
                 while (
@@ -1075,6 +1153,7 @@ class KDLProvider:
                         try:
                             table_fallbacks = task.result()
                         except Exception as exc:
+                            telemetry["recognition_batch_failures"] += 1
                             logger.warning("global recognition batch failed: %s", exc)
                             table_fallbacks = []
                             for element in elements:
@@ -1093,7 +1172,24 @@ class KDLProvider:
                             _close_job_images(element)
                             crop_slots.release()
                             completed_elements.append(element)
+                        telemetry["recognition_batches_completed"] += 1
                         on_jobs_completed(completed_elements)
+                        completed_batches = telemetry["recognition_batches_completed"]
+                        if (
+                            completed_batches % self.config.progress_every_batches == 0
+                            or not any(queues.values()) and not in_flight
+                        ):
+                            logger.info(
+                                "KDL recognition progress: pages=%s/%s "
+                                "batches_completed=%s batches_submitted=%s "
+                                "queued_elements=%s in_flight=%s",
+                                telemetry["recognition_rendered_pages"],
+                                sum(len(pages) for pages in crop_tasks.values()),
+                                completed_batches,
+                                telemetry["recognition_batches_submitted"],
+                                sum(len(queue) for queue in queues.values()),
+                                len(in_flight),
+                            )
                     await submit(force=force)
             finally:
                 for queue in queues.values():

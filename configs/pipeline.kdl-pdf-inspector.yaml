@@ -35,22 +35,25 @@
       "endpoint_url": null,
       "model": null,
       "continuous_page_queue": true,
-      "scheduler": "parsebench_document",
+      "scheduler": "global_two_phase",
       "max_workers": 8,
       "render_processes": 8,
       "bbox_max_workers": 8,
+      "request_workers": 8,
       "request_batch_size": 4,
       "max_model_sequences": 32,
+      "progress_every_batches": 10,
       "dpi": 144,
       "request_timeout_seconds": 3600,
       "max_retries": 2,
-      "max_pages": 400,
+      "max_pages": 1024,
       "layout_max_output_tokens": 6000,
       "text_max_output_tokens": 2048,
       "table_max_output_tokens": 5500,
       "picture_max_output_tokens": 4096,
       "formula_max_output_tokens": 128,
-      "save_raw_outputs": true
+      "save_raw_outputs": true,
+      "output_dir": "data/work/kdl-pdf-inspector"
     }
   },
   "chunking_embedding": {
@@ -59,12 +62,21 @@
       "n_words": 512,
       "overlap": 128
     },
-    "embedder": "local_hash",
+    "max_rows_per_chunk": 20,
+    "embedder": "openrouter_te3s",
     "embedder_params": {
-      "dimension": 384
-    }
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "api_key_env": "OPENROUTER_API_KEY",
+      "batch_size": 64,
+      "cache_dir": "data/work/embedding_cache/text-embedding-3-small",
+      "app_title": "AXIOM_DE-RD"
+    },
+    "retrieval_profile": "hybrid_default"
   },
   "logging": {
-    "level": "INFO"
+    "level": "INFO",
+    "console": true,
+    "file": "data/logs/kdl-pdf-inspector-{run_id}.log"
   }
 }
