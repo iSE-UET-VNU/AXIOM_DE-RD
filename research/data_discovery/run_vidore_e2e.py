@@ -680,7 +680,7 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument(
         "--parser-config",
         type=Path,
-        default=ROOT / "configs/pipeline.vidore-v3-physics-kdl-pdf-inspector.yaml",
+        default=ROOT / "configs/pipeline.data-discovery.yaml",
     )
     parser.add_argument("--chunking-config", type=Path, default=ROOT / "configs/pipeline.yaml")
     parser.add_argument("--work-dir", type=Path, default=ROOT / "data/work/vidore_v3/physics/discovery_e2e")
