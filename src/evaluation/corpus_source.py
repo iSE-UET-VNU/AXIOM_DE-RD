@@ -120,6 +120,15 @@ def _parser_metadata(path: Path) -> dict:
     """Settings live in the ingested stage; later stages drop the parsed block."""
     payload = json.loads(path.read_text(encoding="utf-8"))
     meta = ((payload.get("parsed") or {}).get("metadata") or {})
+    if not meta:
+        # Consolidated output documents retain the complete ingestion payload.
+        # Prefer it before requiring a separately downloaded ingested-stage
+        # artifact; retrieval only needs these settings to build a collision-safe
+        # corpus identity.
+        meta = (
+            (((payload.get("ingest") or {}).get("data") or {}).get("metadata"))
+            or {}
+        )
     if meta:
         return meta
     parts = list(path.parts)

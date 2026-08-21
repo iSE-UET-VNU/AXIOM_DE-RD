@@ -103,13 +103,25 @@ class ViDoreV3(Benchmark):
     # -- source ------------------------------------------------------------
 
     def _path(self, name: str) -> Path:
-        path = self.root / self.subset / f"{name}.parquet"
-        if not path.exists():
-            raise FileNotFoundError(
-                f"{path} not found. Download the ViDoRe V3 {self.subset} subset into "
-                f"{self.root / self.subset} (see docs/vidore_v3_setup.md)."
-            )
-        return path
+        # Evaluation exports use ``<root>/<subset>/<name>.parquet``. The raw
+        # Hugging Face download uses
+        # ``<root>/vidore_v3_<subset>/<name>/test-*.parquet``. Read either layout
+        # directly so the multi-gigabyte image-bearing corpus is never copied just
+        # to consolidate its shards.
+        roots = (self.root / self.subset, self.root / f"vidore_v3_{self.subset}")
+        for subset_root in roots:
+            flat = subset_root / f"{name}.parquet"
+            if flat.is_file():
+                return flat
+            sharded = subset_root / name
+            if sharded.is_dir() and any(sharded.glob("*.parquet")):
+                return sharded
+        raise FileNotFoundError(
+            f"ViDoRe V3 {self.subset}/{name} not found below {self.root}. Expected "
+            f"either <root>/{self.subset}/{name}.parquet or "
+            f"<root>/vidore_v3_{self.subset}/{name}/*.parquet (see "
+            "docs/vidore_v3_setup.md)."
+        )
 
     def _read_corpus(self) -> dict[int, dict[str, Any]]:
         return {

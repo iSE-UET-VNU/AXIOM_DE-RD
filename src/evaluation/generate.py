@@ -101,6 +101,7 @@ def generate(
     *,
     model: str,
     max_chars: int = MAX_CONTEXT_CHARS,
+    max_output_tokens: int = MAX_OUTPUT_TOKENS,
     render_prompt: Callable[[str, Sequence[str]], str] | None = None,
 ) -> Generation:
     packed = pack_context(chunks, max_chars)
@@ -120,7 +121,8 @@ def generate(
     )
     try:
         answer = complete(
-            model, prompt, temperature=TEMPERATURE, max_output_tokens=MAX_OUTPUT_TOKENS
+            model, prompt, temperature=TEMPERATURE,
+            max_output_tokens=max_output_tokens,
         ).strip()
     except Exception as error:  # noqa: BLE001 - recorded, never scored as wrong
         return Generation(qid, "", False, len(packed), chars, doc_ids, error=str(error))

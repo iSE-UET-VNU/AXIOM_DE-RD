@@ -59,6 +59,10 @@ def chunk_and_embed(
     skip_keys = skip_keys or set()
     result = ChunkEmbedResult()
 
+    # Chunk every document first, then embed the complete chunk stream in
+    # request-sized batches.  Embedding per document is correct but produces
+    # many tiny remote requests when discovery passes one page per document.
+    pending_docs: list[tuple[str, Any, list[Any]]] = []
     for enriched in enriched_records:
         metadata = enriched.get("metadata") or {}
         doc_id = str(enriched.get("source_object_id") or "")
@@ -79,33 +83,7 @@ def chunk_and_embed(
             started = time.perf_counter()
             chunks = route_document(extraction, ctx, resources)
             result.chunk_time += time.perf_counter() - started
-
-            started = time.perf_counter()
-            vectors = embedder.embed([chunk.embedding_text() for chunk in chunks]) if chunks else []
-            result.embed_time += time.perf_counter() - started
-            if len(vectors) != len(chunks):
-                raise RuntimeError(
-                    f"embedder returned {len(vectors)} vectors for {len(chunks)} chunks"
-                )
-
-            doc_metadata = {
-                "source_uri": source_uri,
-                "title": extraction.get("title"),
-                "document_type": extraction.get("document_type"),
-            }
-            for chunk, vector in zip(chunks, vectors):
-                chunk_record = chunk.to_record(config_hash)
-                chunk_record["metadata"].update(doc_metadata)
-                result.chunk_records.append(chunk_record)
-                result.vector_records.append(
-                    {
-                        "id": chunk.chunk_id,
-                        "vector": [round(float(value), 6) for value in vector],
-                        "model": embedder.model,
-                        "dim": len(vector),
-                    }
-                )
-            result.embedded_doc_ids.append(doc_id)
+            pending_docs.append((doc_id, source_uri, chunks))
         except Exception as exc:  # one bad document must never crash the batch
             logger.exception("Chunk/embed failed for doc %s (%s)", doc_id or "?", source_uri)
             result.skipped_docs.append(
@@ -115,6 +93,75 @@ def chunk_and_embed(
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
             )
+
+    pending: list[tuple[str, Any]] = [
+        (doc_id, chunk)
+        for doc_id, _source_uri, chunks in pending_docs
+        for chunk in chunks
+    ]
+    vectors_by_position: dict[int, list[float]] = {}
+    failed_docs: dict[str, str] = {}
+    batch_size = max(1, int((config.embedder_params or {}).get("batch_size", 64)))
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start : start + batch_size]
+        try:
+            started = time.perf_counter()
+            vectors = embedder.embed([chunk.embedding_text() for _doc_id, chunk in batch])
+            result.embed_time += time.perf_counter() - started
+            if len(vectors) != len(batch):
+                raise RuntimeError(
+                    f"embedder returned {len(vectors)} vectors for {len(batch)} chunks"
+                )
+        except Exception as exc:  # keep later batches resumable
+            reason = f"{type(exc).__name__}: {exc}"
+            for doc_id, _chunk in batch:
+                failed_docs.setdefault(doc_id, reason)
+            logger.exception("Embedding batch failed for %s chunk(s)", len(batch))
+            continue
+        for offset, vector in enumerate(vectors):
+            vectors_by_position[start + offset] = vector
+
+    for doc_id, source_uri, chunks in pending_docs:
+        positions = [index for index, (owner, _chunk) in enumerate(pending) if owner == doc_id]
+        reason = failed_docs.get(doc_id)
+        if reason or any(index not in vectors_by_position for index in positions):
+            result.skipped_docs.append(
+                {
+                    "doc_id": doc_id,
+                    "source_uri": source_uri,
+                    "reason": reason or "embedding batch did not return all vectors",
+                }
+            )
+            continue
+        doc_metadata = {
+            "source_uri": source_uri,
+            "title": None,
+            "document_type": None,
+        }
+        # The extraction metadata is not needed for batching correctness; keep
+        # the existing fields when available on the source record.
+        for enriched in enriched_records:
+            if str(enriched.get("source_object_id") or "") == doc_id:
+                extraction = _extraction_of(enriched)
+                doc_metadata.update(
+                    title=extraction.get("title"),
+                    document_type=extraction.get("document_type"),
+                )
+                break
+        for position, chunk in zip(positions, chunks):
+            vector = vectors_by_position[position]
+            chunk_record = chunk.to_record(config_hash)
+            chunk_record["metadata"].update(doc_metadata)
+            result.chunk_records.append(chunk_record)
+            result.vector_records.append(
+                {
+                    "id": chunk.chunk_id,
+                    "vector": [round(float(value), 6) for value in vector],
+                    "model": embedder.model,
+                    "dim": len(vector),
+                }
+            )
+        result.embedded_doc_ids.append(doc_id)
     result.llm_stats = dict(llm_client.stats) if llm_client else {}
     return result
 
