@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from experiments.data_discovery.pipeline import (  # noqa: E402
+from research.data_discovery.pipeline import (  # noqa: E402
     PageIndex,
     run_from_parse_artifacts,
     run_selected_pages,

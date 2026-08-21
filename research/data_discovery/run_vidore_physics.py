@@ -6,7 +6,7 @@ so a later evaluator can consume it without re-running discovery.
 
 Example:
 
-    python -m experiments.data_discovery.run_vidore_physics \
+    python -m research.data_discovery.run_vidore_physics \
         --language french \
         --top-k 100 \
         --output data/benchmark/vidore_v3/results/physics_discovery_bm25.jsonl
