@@ -19,6 +19,7 @@ from . import (
     local_reader,
     s3_reader,
 )
+from .ingestion import resume
 from .models import PipelineState, make_id
 from .utils.config import load_config, resolve_parser_config, resolve_project_path
 from .utils.env import load_dotenv_file
@@ -43,6 +44,7 @@ def run_pipeline(
     s3_object_key: str | None = None,
     s3_all_objects: bool = False,
     local_raw: str | Path | None = None,
+    resume_run_id: str | None = None,
 ) -> PipelineState:
     """Run the non-table document engine after public input routing."""
     project_root = Path(__file__).resolve().parents[1]
@@ -61,7 +63,9 @@ def run_pipeline(
     output_root = resolve_project_path(project_root, config.get("output_dir", "data/output"))
     enabled_modules = set(config.get("enabled_modules", MODULE_ORDER))
     persist_artifacts = "artifacts" in enabled_modules
-    run_id = make_id("pipeline-run", time.time_ns())
+    # Resuming reuses the run directory so previously parsed documents are found
+    # and re-entered; a fresh id would leave them stranded under the old run.
+    run_id = resume_run_id or make_id("pipeline-run", time.time_ns())
     raw_dir = raw_root / run_id
     ingested_dir = ingested_root / run_id
     cleaned_dir = cleaned_root / run_id
@@ -127,7 +131,26 @@ def run_pipeline(
             )
             state.input_source = batch.source
             state.raw_dir = batch.source
-            expected_document_count = len(batch.inputs)
+            # LocalInputBatch is frozen, so the pending list is kept separately.
+            pending = list(batch.inputs)
+            if resume_run_id:
+                already, reloaded = resume.load_completed(ingested_dir)
+                pending = [
+                    item
+                    for item in batch.inputs
+                    if ingestion.object_id_for(item.path, item.source_uri, project_root)
+                    not in already
+                ]
+                logger.info(
+                    "Resuming run %s: %d already parsed, %d to parse",
+                    run_id, len(already), len(pending),
+                )
+                if reloaded.data_objects:
+                    _accept_ingestion_result(
+                        state, reloaded, ingested_dir, project_root,
+                        len(batch.inputs), persist_artifacts,
+                    )
+            expected_document_count = len(pending)
             continuous_queue = _continuous_document_queue(parser_config)
             if continuous_queue is not None:
                 queue_provider, queue_config = continuous_queue
@@ -136,7 +159,7 @@ def run_pipeline(
                         "Submitting %s local document(s) to the continuous Chandra2 "
                         "page queue (%s render process(es), %s rendered-image "
                         "slot(s), %s image(s) per vLLM request)",
-                        len(batch.inputs),
+                        len(pending),
                         queue_config.get("render_processes", 4),
                         queue_config.get("max_workers", 4),
                         queue_config.get("request_batch_size", 1),
@@ -146,7 +169,7 @@ def run_pipeline(
                         "Submitting %s local document(s) to the continuous KDL "
                         "page queue (%s render process(es), %s concurrent "
                         "page(s), %s concurrent bbox request(s))",
-                        len(batch.inputs),
+                        len(pending),
                         queue_config.get("render_processes", 32),
                         queue_config.get("max_workers", 32),
                         queue_config.get("bbox_max_workers", 32),
@@ -158,7 +181,7 @@ def run_pipeline(
                             source_uri=item.source_uri,
                             metadata=item.metadata,
                         )
-                        for item in batch.inputs
+                        for item in pending
                     ],
                     parser_config=parser_config,
                     project_root=project_root,
@@ -174,7 +197,7 @@ def run_pipeline(
                     ),
                 )
             else:
-                for item in batch.inputs:
+                for item in pending:
                     partial_result = ingestion.run(
                         item.path,
                         source_uri=item.source_uri,
@@ -448,6 +471,15 @@ def cli(argv: list[str] | None = None) -> Any:
         help="Local raw file or directory. Uses local_input discovery settings.",
     )
     parser.add_argument(
+        "--resume",
+        default=None,
+        metavar="RUN_ID",
+        help="Continue an interrupted run: reuse its directory, skip documents "
+        "already parsed successfully, and retry the rest. Quarantined documents "
+        "are retried, since a parse that failed because the endpoint died is not "
+        "a property of the document.",
+    )
+    parser.add_argument(
         "--s3-object-key",
         default=None,
         help="Object key to select from --s3-info-file. Defaults to S3_OBJECT_KEY.",
@@ -470,6 +502,7 @@ def cli(argv: list[str] | None = None) -> Any:
         s3_object_key=args.s3_object_key,
         s3_all_objects=args.s3_all_objects,
         local_raw=args.local_raw,
+        resume_run_id=args.resume,
     )
     state = result.pipeline_state
     if result.table_document_count:

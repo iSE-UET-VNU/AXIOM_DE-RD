@@ -75,6 +75,7 @@ def dispatch_dataeng_inputs(
     s3_object_key: str | None = None,
     s3_all_objects: bool = False,
     local_raw: str | Path | None = None,
+    resume_run_id: str | None = None,
 ) -> DataEngDispatchResult:
     """Route every supported public input mode through one dispatch boundary."""
     load_dotenv_file(PROJECT_ROOT)
@@ -103,6 +104,7 @@ def dispatch_dataeng_inputs(
             paths,
             config_path=config_file,
             pipeline_input_root=input_root,
+            resume_run_id=resume_run_id,
         )
 
     if mode == "presigned_info":
@@ -254,6 +256,7 @@ def dispatch_local_dataeng_files(
     *,
     config_path: str | Path = DEFAULT_CONFIG_PATH,
     pipeline_input_root: str | Path | None = None,
+    resume_run_id: str | None = None,
 ) -> DataEngDispatchResult:
     """Route local workbook uploads while preserving the normal local pipeline."""
     load_dotenv_file(PROJECT_ROOT)
@@ -290,6 +293,7 @@ def dispatch_local_dataeng_files(
             pipeline_state = run_pipeline(
                 filtered_config_path,
                 local_raw=input_root,
+                resume_run_id=resume_run_id,
             )
             pipeline_output = build_dataeng_output(pipeline_state)
         finally:

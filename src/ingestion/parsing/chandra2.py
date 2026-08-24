@@ -222,13 +222,27 @@ class Chandra2Provider:
                 pages[start : start + self.config.batch_size],
             )
             failed_pages = [
-                start + index + 1
+                (start + index + 1, getattr(result, "error", None))
                 for index, result in enumerate(generated)
                 if bool(getattr(result, "error", False))
             ]
             if failed_pages:
-                pages_text = ", ".join(str(page) for page in failed_pages)
-                raise RuntimeError(f"Chandra2 failed to parse page(s): {pages_text}")
+                pages_text = ", ".join(str(page) for page, _ in failed_pages)
+                # Chandra records *why* each page failed. Reporting only the
+                # page numbers makes a context-length overflow, an OOM and a
+                # dropped connection produce byte-identical quarantine records,
+                # so the one fact needed to fix the run is the one discarded.
+                # Distinct causes only -- 34 identical messages say no more
+                # than one, and the quarantine record has to stay readable.
+                causes: list[str] = []
+                for _, error in failed_pages:
+                    text = str(error).strip()[:200]
+                    if text and text not in causes:
+                        causes.append(text)
+                raise RuntimeError(
+                    f"Chandra2 failed to parse page(s): {pages_text}"
+                    + (f" -- cause(s): {' | '.join(causes)}" if causes else "")
+                )
             results.extend(generated)
 
         return self._finalize_document(

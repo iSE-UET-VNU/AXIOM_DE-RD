@@ -133,6 +133,21 @@ def run_many(
     return output
 
 
+def object_id_for(
+    path: str | Path,
+    source_uri: str | None = None,
+    project_root: str | Path | None = None,
+) -> str:
+    """The object_id this input will be given, without parsing it.
+
+    Resume needs to know an input's identity *before* deciding whether to send
+    it to the parser. Deriving it here rather than reimplementing the rule at
+    the call site keeps one definition: two copies that drift would skip the
+    wrong documents, and the corpus would come out short with nothing raising.
+    """
+    return make_id("data-object", source_uri or portable_path(Path(path), project_root))
+
+
 def _build_data_object(
     path: Path,
     *,
@@ -146,7 +161,7 @@ def _build_data_object(
     file_format = detect_format(path)
     response_content_type = metadata.get("response_content_type")
     return DataObject(
-        object_id=make_id("data-object", resolved_source_uri),
+        object_id=object_id_for(path, resolved_source_uri, project_root),
         uri=resolved_source_uri,
         content_type=str(response_content_type or detect_content_type(path)),
         metadata={

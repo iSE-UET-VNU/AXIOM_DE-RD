@@ -10,6 +10,7 @@ from .backends import (
     DocumentParser,
     PptxConfig,
     PptxParserBackend,
+    TableParser,
     TextParserBackend,
     WordConfig,
     WordParserBackend,
@@ -40,6 +41,12 @@ class ParsingService:
             ParserRouter(
                 [
                     TextParserBackend(),
+                    # Local openpyxl/xlrd baseline for workbooks. The dispatcher
+                    # normally diverts these to the TableAgent service, but that
+                    # split only happens when the agent is enabled and reachable;
+                    # without this backend an unreachable agent turns every
+                    # workbook into an unsupported file rather than a parsed one.
+                    TableParser(),
                     PptxParserBackend(
                         PptxConfig.from_mapping(_provider_config(config, "pptx"))
                     ),

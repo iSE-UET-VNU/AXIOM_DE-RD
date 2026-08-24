@@ -10,7 +10,7 @@ from typing import Any, Iterable
 from ....models import DataObject, ParsedData, ParsedTable, ParseResult
 from ._tabular import normalize_headers, row_is_empty
 
-TABLE_EXTENSIONS = frozenset({".xls", ".xlsx"})
+TABLE_EXTENSIONS = frozenset({".xls", ".xlsx", ".csv"})
 TABLE_LINEAGE_FIELDS = frozenset({"__axiom_sheet_name", "__axiom_row_number"})
 
 
@@ -27,6 +27,8 @@ class TableParser:
                 tables = self._read_xlsx(file_path)
             elif file_path.suffix.lower() == ".xls":
                 tables = self._read_xls(file_path)
+            elif file_path.suffix.lower() == ".csv":
+                tables = self._read_csv(file_path)
             else:
                 raise ValueError(f"Unsupported table extension: {file_path.suffix}")
             parsed = self._build_parsed_data(file_path, data_object, tables)
@@ -79,6 +81,58 @@ class TableParser:
         finally:
             workbook.close()
         return tables
+
+    def _read_csv(self, path: Path) -> list[tuple[ParsedTable, int]]:
+        """A CSV is a one-sheet workbook, so it reuses the same row pipeline.
+
+        Two things are guessed rather than declared by the format, and both are
+        guessed conservatively:
+
+        *Encoding* -- UTF-8 first, then cp1252, then UTF-8 with replacement.
+        Never a silent failure: a Vietnamese CSV read as latin-1 produces
+        mojibake that parses, indexes and retrieves perfectly while matching no
+        query anyone will ever type.
+
+        *Delimiter* -- sniffed from a sample, falling back to comma. A
+        semicolon file read with a comma delimiter collapses into one column,
+        which looks like a valid single-column table rather than an error.
+        """
+        import csv
+        import io
+
+        raw = path.read_bytes()
+        text = None
+        for encoding in ("utf-8-sig", "utf-8", "cp1252"):
+            try:
+                text = raw.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            text = raw.decode("utf-8", errors="replace")
+
+        sample = text[:8192]
+        try:
+            dialect: Any = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel
+
+        numbered_rows = _compact_numbered_rows(
+            (row_number, [_normalize_cell(cell) for cell in row])
+            for row_number, row in enumerate(csv.reader(io.StringIO(text), dialect), start=1)
+        )
+        table_with_header = _table_from_numbered_rows(
+            numbered_rows,
+            name=path.stem,
+            source_ref=_sheet_source_ref(0, path.stem),
+            metadata={
+                "parser": self.backend_name,
+                "sheet_index": 0,
+                "sheet_name": path.stem,
+                "delimiter": getattr(dialect, "delimiter", ","),
+            },
+        )
+        return [table_with_header] if table_with_header is not None else []
 
     def _read_xls(self, path: Path) -> list[tuple[ParsedTable, int]]:
         try:
@@ -144,11 +198,35 @@ class TableParser:
                 record["__axiom_row_number"] = header_row_number + offset
                 flat_rows.append(record)
 
+        # rows[0] carries the extraction block every downstream stage reads.
+        # Without it chunking raises "enriched record has no rows[0].extraction"
+        # and the workbook parses successfully into zero retrievable chunks --
+        # a success at one stage and a silent total loss at the next.
+        # The flat per-spreadsheet-row records follow, so nothing that consumed
+        # them before stops working.
+        extraction_row = {
+            "extraction": {
+                "document_type": "table",
+                "language": None,
+                "title": path.stem,
+                "title_citations": [],
+                "main_text": "",
+                "main_text_citations": [],
+                "tables": [_table_as_markdown(table, index) for index, table in enumerate(tables)],
+                "figures": [],
+                "formulas": [],
+                "formulas_citations": [],
+            },
+            "text": "",
+            "source_blocks": [],
+            "reading_order": [],
+        }
+
         return ParsedData(
             object_id=data_object.object_id,
             source_uri=data_object.uri,
             source_format=path.suffix.lower().lstrip("."),
-            rows=flat_rows,
+            rows=[extraction_row, *flat_rows],
             text=None,
             tables=tables,
             metadata={
@@ -157,6 +235,33 @@ class TableParser:
                 "sheet_count_with_content": len(tables),
             },
         )
+
+
+def _md_cell(value: Any) -> str:
+    """Pipes would split one cell into two, silently shifting every column."""
+    return str(value if value is not None else "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _table_as_markdown(table: ParsedTable, index: int) -> dict[str, Any]:
+    """One sheet as the markdown shape ``route_tables`` chunks.
+
+    The chunker splits on markdown row boundaries and repeats the header across
+    row groups, so the header must be a real markdown header row -- otherwise
+    every chunk after the first loses its column names and the numbers in it
+    stop meaning anything.
+    """
+    headers = [_md_cell(h) for h in table.headers]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    lines.extend("| " + " | ".join(_md_cell(c) for c in row) + " |" for row in table.rows)
+    return {
+        "content": "\n".join(lines),
+        "caption": table.name,
+        "content_citations": [f"/sheet/{index}/Table/0"],
+        "caption_citations": [],
+    }
 
 
 def _table_from_numbered_rows(

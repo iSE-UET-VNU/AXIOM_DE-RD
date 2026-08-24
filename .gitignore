@@ -25,11 +25,7 @@ venv/
 /.tmp/
 /chandra2_technical_summary_for_codex.md
 /debug.log
-/tests
-!/tests/
-/tests/*
-!/tests/test_kdl_provider.py
-!/tests/test_api_output_paths.py
+/data_vidore_parsed_physics
 
 # Local inputs and presigned-URL inventories can contain sensitive data.
 data/raw/
@@ -59,6 +55,9 @@ data/processed/*
 # Local corpora and notebooks. Not needed to run the pipeline.
 data/subset/
 *.ipynb
+# Colab GPU servers; they must stay in sync with the tracked configs.
+!Chandra_serving_de.ipynb
+!KDL_serving_de.ipynb
 
 # ---------------------------------------------------------------------------
 # research/ is tracked: it holds the evaluation harness -- corpus build,

@@ -53,7 +53,7 @@
     "artifacts"
   ],
   "parsing": {
-    "provider": "lift_api",
+    "provider": "chandra2",
     "pptx": {
       "extract_images": true
     },
@@ -66,18 +66,18 @@
       "method": "vllm",
       "continuous_page_queue": true,
       "batch_size": 64,
-      "max_workers": 256,
+      "max_workers": 48,
       "render_processes": 32,
       "request_batch_size": 1,
       "request_timeout_seconds": 3600,
-      "max_output_tokens": 12384,
+      "max_output_tokens": 4096,
       "max_retries": 2,
       "include_images": true,
       "include_headers_footers": true,
       "save_raw_outputs": true,
       "refine_tables": false,
       "table_max_workers": 8,
-      "table_max_output_tokens": 8192,
+      "table_max_output_tokens": 4096,
       "table_crop_margin_ratio": 0.02,
       "table_crop_min_short_side": 1536,
       "table_crop_max_long_side": 3072,

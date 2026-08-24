@@ -5,7 +5,7 @@ Two independent things live in this repo and they are easy to confuse:
 - **The pipeline** (`src/`, `scripts/run_pipeline.py`) — ingestion → cleaning →
   enrichment → chunking/embedding → integration → artifacts. This is the
   product.
-- **The harness** (`research/harness/`) — builds a benchmark corpus and an
+- **The harness** (`src/evaluation/`) — builds a benchmark corpus and an
   evalset from the challenge data lake, runs retrieval, generates answers and
   judges them. This is how every number we report is produced.
 
@@ -73,11 +73,11 @@ Two scripts, both read the lake, and neither is needed again afterwards.
 
 ```bash
 # 923 files -> data/benchmark/corpus.jsonl  (~92 MB) + corpus_report.json
-python -m research.harness.build_corpus \
+python -m src.evaluation.build_corpus \
   --lake "[iSE Summer Challenge 2026] Data Lake"
 
 # CSV + lake -> data/benchmark/questions.jsonl + evalset_report.json
-python -m research.harness.build_evalset \
+python -m src.evaluation.build_evalset \
   --questions "[iSE Summer Challenge 2026] Questions - Q&A(1).csv" \
   --lake "[iSE Summer Challenge 2026] Data Lake"
 ```
@@ -98,7 +98,7 @@ Everything under `data/benchmark/` is gitignored: it is derived, large, and
 ## Part C — retrieval
 
 ```bash
-python -m research.harness.run_retrieval \
+python -m src.evaluation.run_retrieval \
   --benchmark ise \
   --arms bm25,dense,rrf \
   --chunker fixed_overlap \
@@ -128,7 +128,7 @@ and the parsing result rather than a retrieval one.
 ## Part D — answers
 
 ```bash
-python -m research.harness.run_answer \
+python -m src.evaluation.run_answer \
   --run data/benchmark/runs/<index_id>/rrf__*.jsonl \
   --arm rrf \
   --generator llm-rerank \
@@ -155,7 +155,7 @@ is scored as wrong but reported separately from errors.
 Comparing arms:
 
 ```bash
-python -m research.harness.compare_arms data/benchmark/runs/*.report.json
+python -m src.evaluation.compare_arms data/benchmark/runs/*.report.json
 ```
 
 Only `acc|common` — accuracy on the intersection of every arm's reachable set —

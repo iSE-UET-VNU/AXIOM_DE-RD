@@ -1,0 +1,53 @@
+# Full-stack local run with every other team's service replaced by a stub.
+#
+#   docker compose -f docker-compose.mock.yml up --build
+#
+# The AXIOM API talks to the mocks exactly as it would to the real services, so
+# wiring, contracts and embedding dimensions are exercised without any external
+# dependency, GPU, or paid API call.
+
+services:
+  mock-embeddings:
+    build: .
+    command: uvicorn mocks.embedding_service:app --host 0.0.0.0 --port 8002
+    environment:
+      MOCK_EMBEDDING_MODEL: openai/text-embedding-3-small
+      MOCK_EMBEDDING_DIMENSION: "1536"
+    ports:
+      - "8002:8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8002/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mock-tableagent:
+    build: .
+    command: uvicorn mocks.table_agent:app --host 0.0.0.0 --port 8001
+    environment:
+      MOCK_EMBEDDING_MODEL: openai/text-embedding-3-small
+      MOCK_EMBEDDING_DIMENSION: "1536"
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8001/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  axiom-api:
+    build: .
+    command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+    environment:
+      # Our embedder points at the mock model service instead of OpenRouter.
+      OPENROUTER_API_KEY: mock-key
+      OPENROUTER_BASE_URL: http://mock-embeddings:8002/v1
+      TABLE_AGENT_BASE_URL: http://mock-tableagent:8001
+      TABLE_AGENT_SERVICE_API_KEY: ""
+    ports:
+      - "8000:8000"
+    depends_on:
+      mock-embeddings:
+        condition: service_healthy
+      mock-tableagent:
+        condition: service_healthy

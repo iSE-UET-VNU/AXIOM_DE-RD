@@ -50,9 +50,51 @@ def analyze_cjk(text: str) -> list[str]:
     return tokens
 
 
+# Snowball's French stopword list, the same set bm25s applies.
+FRENCH_STOPWORDS = frozenset((
+    "ai", "aie", "aient", "aies", "ait", "as", "au", "aura", "aurai", "auraient", "aurais",
+    "aurait", "auras", "aurez", "auriez", "aurions", "aurons", "auront", "aux", "avaient",
+    "avais", "avait", "avec", "avez", "aviez", "avions", "avons", "ayant", "ayante", "ayantes",
+    "ayants", "ayez", "ayons", "c", "ce", "ces", "d", "dans", "de", "des", "du", "elle", "en",
+    "es", "est", "et", "eu", "eue", "eues", "eurent", "eus", "eusse", "eussent", "eusses",
+    "eussiez", "eussions", "eut", "eux", "eûmes", "eût", "eûtes", "furent", "fus", "fusse",
+    "fussent", "fusses", "fussiez", "fussions", "fut", "fûmes", "fût", "fûtes", "il", "ils",
+    "j", "je", "l", "la", "le", "les", "leur", "lui", "m", "ma", "mais", "me", "mes", "moi",
+    "mon", "même", "n", "ne", "nos", "notre", "nous", "on", "ont", "ou", "par", "pas", "pour",
+    "qu", "que", "qui", "s", "sa", "se", "sera", "serai", "seraient", "serais", "serait",
+    "seras", "serez", "seriez", "serions", "serons", "seront", "ses", "soient", "sois", "soit",
+    "sommes", "son", "sont", "soyez", "soyons", "suis", "sur", "t", "ta", "te", "tes", "toi",
+    "ton", "tu", "un", "une", "vos", "votre", "vous", "y", "à", "étaient", "étais", "était",
+    "étant", "étante", "étantes", "étants", "étiez", "étions", "été", "étée", "étées", "étés",
+    "êtes",
+))
+
+_french_stemmer = None
+
+
+def analyze_french(text: str) -> list[str]:
+    """Split elisions, drop stopwords, stem.
+
+    ``analyze`` joins on the apostrophe, so ``l'énergie`` is one token and a query
+    for ``énergie`` never matches it. Elision is pervasive in French, and splitting
+    it is worth more than stopwords and stemming combined (+1.31 of +2.71 NDCG@10
+    on ViDoRe V3 physics).
+    """
+    global _french_stemmer
+    if _french_stemmer is None:
+        import Stemmer
+
+        _french_stemmer = Stemmer.Stemmer("french")
+    tokens: list[str] = []
+    for token in analyze(text):
+        tokens.extend(part for part in token.split("'") if part)
+    return _french_stemmer.stemWords([t for t in tokens if t not in FRENCH_STOPWORDS])
+
+
 ANALYZERS: dict[str, Callable[[str], list[str]]] = {
     "plain": analyze,
     "cjk_bigram": analyze_cjk,
+    "french": analyze_french,
 }
 
 

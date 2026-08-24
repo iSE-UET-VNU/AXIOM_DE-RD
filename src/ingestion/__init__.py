@@ -1,5 +1,5 @@
 """Data ingestion public interface."""
 
-from .runner import IngestionInput, IngestionOutput, run, run_many
+from .runner import IngestionInput, IngestionOutput, object_id_for, run, run_many
 
-__all__ = ["IngestionInput", "IngestionOutput", "run", "run_many"]
+__all__ = ["IngestionInput", "IngestionOutput", "object_id_for", "run", "run_many"]
