@@ -306,3 +306,127 @@ the notebook's H100/A100 branch. The file is JSON parsed by `json.loads` despite
 its `.yaml` extension, so this cannot be recorded as an inline comment -- it is
 recorded here instead, and the next merge should not silently restore upstream's
 numbers.
+
+---
+
+## 7. SEP — Structural Evidence Propagation (2026-08-24)
+
+### The idea
+
+DISRetrieval (arXiv 2506.06313) builds an RST discourse tree over a document and
+lets a query-relevant internal node promote the top-k leaves of its own subtree.
+Two of its own ablations say which half of that is load-bearing: RQ3 finds
+summary-based retrieval *underperforms* the leaf baseline, and RQ4 finds swapping
+the node-summary LLM moves results <0.5%. So the expensive half — LLM-summarised
+internal nodes — is the half the paper's evidence says to drop.
+
+What remains is aggregation-and-promotion, and that needs a tree, not an RST
+parser. Our corpus already ships one: `file → page`, encoded directly in the unit
+id `subset::<file>#page=N`. SEP scores the existing α=0.7 pool, aggregates over
+that tree, and blends the aggregate back:
+
+    s'(c) = λ·s(c) + (1−λ)·[ β·A_file(c) + (1−β)·N(c) ]
+
+`A_file` is the top-m mean of the file's pool scores (mean, not sum — sum rewards
+long documents). `N` is distance-decayed evidence from neighbouring pages.
+Reorders the pool only, so recall@100 is unchanged and every delta is ordering.
+No API calls, no GPU, no index change.
+
+### Why ordering, and at which level (`physics_structure_diagnostic.py`)
+
+Recall was already known to be near-saturated (any-gold@100 = 98.3%). The open
+question was which structural level carries the fix. On physics:
+
+| failure shape | vidore_page | chandra_page |
+|---|---|---|
+| B: gold file present in top-10, wrong pages within it | **68.9%** | **70.5%** |
+| C: all gold already in top-10 | 24.2% | 23.8% |
+| A: gold file absent from top-10 | 7.0% | 5.6% |
+
+So "promote a missing document" addresses ~7% of queries — a plausible
+explanation for why the headers/footers, chunking and image-description
+ablations all landed n.s. at α=0.7 (§1). The signal is *within* the file.
+
+Decomposing the lift over rank-11..100 candidates settles what to aggregate:
+
+| stratum | n | gold rate |
+|---|---|---|
+| same file as a top-10 page, adjacent (±2) | 3,563 | 10.64% |
+| same file, not adjacent | 7,683 | 6.53% |
+| different file | 15,934 | **0.46%** |
+
+Same-file membership is a **16.9×** lift; adjacency adds only **1.63×** on top.
+The headline "4.4× adjacency lift" is mostly same-file in disguise. Cross-file
+candidates are gold 0.46% of the time — they are almost pure distractor, and
+displacing them is where the gain comes from.
+
+Gold is *not* contiguous (74.6% of runs are a single page, mean run 1.42), so a
+span model is not the mechanism; gold is dispersed through the relevant file.
+
+### Result — physics
+
+Paired permutation, 10,000 resamples, vs the α=0.7 baseline on identical pools:
+
+| index | baseline | SEP (λ=0.5) | delta | p | better/worse/tied |
+|---|---|---|---|---|---|
+| vidore_page  | 44.15 | 46.17 | **+2.02** | 0.0026 | 125/82/95 |
+| chandra_page | 42.90 | 44.59 | **+1.69** | 0.0083 | 126/75/101 |
+
+The effect decays smoothly to zero as λ→0.9 (+0.19, p=0.41), which is the shape
+a real effect has rather than a spike.
+
+**Selection caveat, stated plainly.** `β=0.75` was chosen from a grid sweep on
+physics, not fixed a priori. The lift table justifies `β > 0.5`, not `0.75`
+specifically. So the physics p-value is optimistic. `chandra_page` re-tests the
+same 302 queries under a different parse — it establishes parse-robustness, not
+selection-robustness. The honest physics bracket is **+1 to +2**, stable across
+β ∈ [0.5, 0.75] and λ ∈ [0.5, 0.7].
+
+### SEP does not generalise — and the precondition predicts where
+
+SEP needs file-level evidence to constrain *which pages* are relevant, which only
+holds when documents are small. Both statistics below are free (corpus + qrels,
+no embeddings, no retrieval). Predictions were **registered before testing** in
+`docs/sep_prescreen_prediction.md`.
+
+| subset | pages/file | gold as % of its file | predicted | measured (best λ) |
+|---|---|---|---|---|
+| physics          |  39.9 | 14.6% | helps (in-sample) | **+2.02**, p=0.0026 |
+| pharmaceuticals  |  44.5 | 12.0% | helps | **+2.17**, p=0.0005 |
+| hr               |  79.3 |  9.5% | weak/marginal | +0.54, p=0.14 n.s. |
+| industrial       | 194.2 |  5.2% | fails | −0.14, p=0.82 n.s. |
+| computer_science | 680.0 |  0.8% | fails hardest | −0.09, p=0.87 n.s. |
+
+**5/5, with graded resolution.** `pharmaceuticals` is the load-bearing test: a
+different subset and domain, config completely unchanged, +2.17 at p=0.0005.
+That is the one result here not exposed to the selection caveat above.
+
+Mechanism of the failure: on `industrial`, gold occupies 5.2% of a 194-page file,
+so the file aggregate averages the signal away. Gold rate by distance to the
+nearest top-10 anchor makes it concrete —
+
+| distance | physics | industrial |
+|---|---|---|
+| ≤1  | 24.4× | 6.6× |
+| ≤5  | 19.2× | **8.5×** |
+| ≤50 |  8.7× | 4.4× |
+| >50 | 13.5× (n=80) | **2.1×** (n=3,460) |
+
+Industrial does have local signal, but most of its same-file mass sits in the
+diluting >50 tail. Bounding the aggregation node to a page window (radius 5–40)
+was tried to rescue this and **does not work**: no radius is significant on
+industrial, and on physics the whole-file node stays best. Recorded as a dead
+end rather than retried.
+
+### Standing
+
+SEP is a **corpus-shape-conditional** technique, not a general improvement. The
+screen above is the deployment test and costs nothing to run on a new corpus.
+Rough threshold: gold ≳10% of its own file, i.e. chapter-sized documents.
+Reproduce with:
+
+```bash
+python research/experiments/physics_structure_diagnostic.py
+python research/experiments/physics_sep_test.py
+python research/experiments/vidore_sep_holdout.py --subset pharmaceuticals --language english
+```

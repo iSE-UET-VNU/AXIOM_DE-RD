@@ -17,11 +17,11 @@ fitted after the fact.
 | subset | queries | files | pages | pages/file | gold/query | gold as % of its file | prediction |
 |---|---|---|---|---|---|---|---|
 | physics          | 302 | 42 | 1674 |  39.9 | 7.21 | 14.6% | helps — **confirmed +2.02, p=0.0026** |
-| pharmaceuticals  | 364 | 52 | 2313 |  44.5 | 4.76 | 12.0% | **predict: helps** (closest to physics) |
-| hr               | 318 | 14 | 1110 |  79.3 | 5.44 |  9.5% | **predict: weak / marginal** |
+| pharmaceuticals  | 364 | 52 | 2313 |  44.5 | 4.76 | 12.0% | predict: helps — **CONFIRMED +2.17, p=0.0005** |
+| hr               | 318 | 14 | 1110 |  79.3 | 5.44 |  9.5% | predict: weak/marginal — **CONFIRMED +0.54, p=0.14 n.s.** |
 | industrial       | 283 | 27 | 5244 | 194.2 | 5.70 |  5.2% | fails — **confirmed n.s.** |
-| finance_en       | 309 |  6 | 2942 | 490.3 | 4.73 |  1.1% | **predict: fails** |
-| computer_science | 215 |  2 | 1360 | 680.0 | 4.88 |  0.8% | **predict: fails hardest** |
+| finance_en       | 309 |  6 | 2942 | 490.3 | 4.73 |  1.1% | predict: fails — *not run* |
+| computer_science | 215 |  2 | 1360 | 680.0 | 4.88 |  0.8% | predict: fails hardest — **CONFIRMED −0.09, p=0.87 n.s.** |
 
 ## How this can be wrong
 
@@ -40,3 +40,14 @@ bracket is **+1 to +2 NDCG@10, robust over beta in [0.5, 0.75] and lambda in
 [0.5, 0.7]**. `chandra_page` re-tests the same 302 queries under a different
 parse, so it establishes parse-robustness, not selection-robustness. Only a
 different subset does that.
+
+
+## Outcome — 5/5, registered predictions all held
+
+Tested after registration: `pharmaceuticals` (+2.17, p=0.0005), `hr` (+0.54,
+n.s.), `computer_science` (−0.09, n.s.), alongside the already-known `physics`
+(+2.02) and `industrial` (n.s.). The screen ordered them correctly and with
+graded resolution, so it stands as the free deployment test for SEP. Threshold
+sits near **gold ≳10% of its own file**. `finance_en` was left unrun: at 1.1% it
+is predicted to fail and sits on the same side of the threshold as the two
+already-confirmed failures.
