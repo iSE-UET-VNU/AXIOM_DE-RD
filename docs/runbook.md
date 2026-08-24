@@ -55,6 +55,65 @@ python scripts/run_pipeline.py \
 Writes to `data/{ingested,cleaned,enriched,embedded,output}/<run_id>/`. Success
 looks like `Built N retrieval record(s) and N vector record(s)`.
 
+### KDL with native PDF text routing
+
+Install the optional native parser and select the hybrid document provider:
+
+```bash
+pip install -e ".[pdf-inspector]"
+```
+
+```yaml
+parsing:
+  provider: kdl_pdf_inspector
+  kdl:
+    endpoint_url: https://<host>/v1  # or set VLLM_API_BASE
+    model: kdl-frontier-parser-nano # or set VLLM_MODEL_NAME
+    request_batch_size: 4           # requires /chat/completions/batch
+    max_model_sequences: 32         # match vLLM --max-num-seqs
+```
+
+The provider classifies each PDF once. Scanned pages and non-PDF images use
+the full KDL pipeline. On native-text pages, KDL still performs layout, while
+pdf-inspector fills text-category regions in one page-level batch; empty,
+unsafe, or failed regions fall back to KDL recognition. Use `provider: kdl`
+to retain the pure KDL route.
+
+`request_batch_size: 1` retains the standard OpenAI-compatible single-request
+transport. Values above one batch same-stage recognition regions within each
+page and require the synchronous vLLM batch endpoint used by Chandra2 and the
+ParseBench KDL adapter. `max_model_sequences` is a shared weighted budget for
+layout and recognition requests, so batches do not overload vLLM's configured
+sequence capacity.
+
+The default `scheduler: global_two_phase` uses corpus-wide batching. KDL first
+renders and batches every layout page, waits at a strict barrier, then routes
+native text and globally batches same-stage bbox crops across pages and
+documents.
+
+The legacy ParseBench-style scheduler remains available in
+`configs/pipeline.kdl-pdf-inspector-backup.yaml`.
+`request_workers` controls the shared HTTP request pool used by both phases;
+`render_processes` controls document render/crop processes. In this mode a KDL
+PDF is opened once for the layout render pass and, only when KDL recognition is
+still needed, once for the crop render pass.
+
+The ready-to-run `configs/pipeline.kdl-pdf-inspector.yaml` leaves endpoint and
+model as `null` so the environment variables take precedence. For PowerShell:
+
+```powershell
+$env:VLLM_API_BASE="https://<host>/v1"
+$env:VLLM_MODEL_NAME="kdl-frontier-parser-nano"
+python scripts/run_pipeline.py --config configs/pipeline.kdl-pdf-inspector.yaml --local-raw <pdf-or-directory>
+```
+
+Each run writes a timestamped console-style log to
+`data/logs/kdl-pdf-inspector-<run_id>.log`. Set
+`parsing.kdl.progress_every_batches` to control how often layout and
+recognition progress is emitted. The log includes phase boundaries, submitted
+and completed batches, queue sizes, failures, phase latency, and final raw
+output persistence timing.
+
 **Why `pipeline.mock.yaml`.** The default config parses with `lift_api`, which
 currently returns `402 Payment Required` — Datalab is out of credit — and every
 PDF is quarantined. `chandra2` is the other real parser and needs a hosted vLLM
