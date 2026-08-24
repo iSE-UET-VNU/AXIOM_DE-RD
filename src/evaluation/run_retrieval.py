@@ -92,6 +92,7 @@ def corpus_token(benchmark: Any) -> str:
 def build_index(
     benchmark: Any, embedder: Any, index_id: str, chunker: str = "",
     params: dict | None = None, prefix: bool = False, analyzer: str = "auto",
+    telemetry: dict[str, Any] | None = None,
 ) -> LocalIndex:
     """Index a corpus source's units.
 
@@ -99,9 +100,12 @@ def build_index(
     chunking. The iSE lake ships whole documents, where the chunker is an
     experimental variable rather than a property of the source.
     """
+    total_started = time.perf_counter()
     source = benchmark if hasattr(benchmark, "units") \
         else BenchmarkCorpus(benchmark, chunker, params, prefix)
+    units_started = time.perf_counter()
     records = list(source.units())
+    units_seconds = time.perf_counter() - units_started
     if not records:
         raise SystemExit(
             f"{index_id}: no indexable text from {source.corpus_identity()}"
@@ -112,25 +116,50 @@ def build_index(
     payload = [{"chunk_id": r.chunk_id, "doc_id": r.doc_id, "text": r.text} for r in records]
 
     vectors = None
+    embedding_seconds = 0.0
+    embedding_stats: dict[str, int] = {}
     if embedder is not None:
         import numpy as np
 
+        stats_before = dict(getattr(embedder, "stats", {}))
+        embedding_started = time.perf_counter()
         texts = [r.text for r in records]
         rows: list[Any] = []
         for start in range(0, len(texts), 128):
             rows.extend(embedder.embed(texts[start : start + 128]))
         vectors = np.asarray(rows, dtype=np.float32)
+        embedding_seconds = time.perf_counter() - embedding_started
+        stats_after = dict(getattr(embedder, "stats", {}))
+        embedding_stats = {
+            key: int(stats_after.get(key, 0)) - int(stats_before.get(key, 0))
+            for key in sorted(set(stats_before) | set(stats_after))
+        }
         if vectors.shape[0] != len(records):
             raise ValueError("Embedder returned a different number of vectors than chunks.")
 
+    sparse_started = time.perf_counter()
     bm25 = BM25Index(analyzer_name=analyzer).build(payload)
-    return LocalIndex(
+    sparse_seconds = time.perf_counter() - sparse_started
+    index_started = time.perf_counter()
+    index = LocalIndex(
         index_id=f"{index_id}.{bm25.analyzer_name}",
         records=records,
         bm25=bm25,
         vectors=vectors,
         embedder=embedder,
     )
+    local_index_seconds = time.perf_counter() - index_started
+    if telemetry is not None:
+        telemetry.update({
+            "units": len(records),
+            "source_units_seconds": round(units_seconds, 6),
+            "corpus_embedding_seconds": round(embedding_seconds, 6),
+            "bm25_build_seconds": round(sparse_seconds, 6),
+            "local_index_init_seconds": round(local_index_seconds, 6),
+            "total_seconds": round(time.perf_counter() - total_started, 6),
+            "embedding_stats": embedding_stats,
+        })
+    return index
 
 
 def oracle_records(benchmark: Any, questions: Sequence[Any], index: Any, depth: int) -> list:
@@ -413,7 +442,11 @@ def main() -> None:
 
     # Any two arms we compare must differ here, or the second reports the first's cache.
     identity = index_identity(args, source)
-    index = build_index(source, embedder, identity, analyzer=args.analyzer)
+    index_build_telemetry: dict[str, Any] = {}
+    index = build_index(
+        source, embedder, identity, analyzer=args.analyzer,
+        telemetry=index_build_telemetry,
+    )
 
     reranker = None
     if args.rerank == "llm":
@@ -427,6 +460,15 @@ def main() -> None:
     qids = [q.qid for q in questions]
     print(f"benchmark : {benchmark.name}  index_id={index.index_id}")
     print(f"corpus    : {len(index.records)} units   questions: {len(questions)}")
+    print(
+        "index prep: "
+        f"pages={index_build_telemetry.get('source_units_seconds', 0):.3f}s  "
+        f"embed={index_build_telemetry.get('corpus_embedding_seconds', 0):.3f}s  "
+        f"bm25={index_build_telemetry.get('bm25_build_seconds', 0):.3f}s  "
+        f"dense-init={index_build_telemetry.get('local_index_init_seconds', 0):.3f}s  "
+        f"total={index_build_telemetry.get('total_seconds', 0):.3f}s  "
+        f"embed-stats={index_build_telemetry.get('embedding_stats', {})}"
+    )
 
     corpus_docs = {r.doc_id for r in index.records}
     reachable = reachability(benchmark, corpus_docs, qids)
@@ -444,6 +486,7 @@ def main() -> None:
             # assume both saw the same corpus unless this number says otherwise.
             "units_indexed": len(index.records),
         },
+        "index_build": index_build_telemetry,
         "arms": {},
     }
     out_root = Path(args.out)
