@@ -430,3 +430,47 @@ python research/experiments/physics_structure_diagnostic.py
 python research/experiments/physics_sep_test.py
 python research/experiments/vidore_sep_holdout.py --subset pharmaceuticals --language english
 ```
+
+---
+
+## 8. DCW — refuted (2026-08-24)
+
+**Hypothesis.** 69% of failures are "right file, wrong pages within it". A
+bi-encoder should be structurally bad at that: every page of a document shares
+its topical vocabulary, so each page embedding carries a large document-topic
+component that is near-identical across the file — the very thing that makes the
+file findable and its pages indistinguishable. Factorise it:
+
+    e_hat_p = e_p − κ·μ_f
+    score   = a·cos(q, μ_f) + b·cos(q, e_hat_p)
+
+**Registered prediction.** DCW should behave opposite to SEP — μ_f is better
+estimated and there is more to disambiguate when files are large, so it should
+get *stronger* on `industrial` (194 pages/file) where SEP dies.
+
+**Result: refuted, with the sign backwards.** Every one of 16 configurations is
+worse on both subsets, monotonically in κ, and it fails *harder* on the large-
+document subset:
+
+| worst case (κ=1.0, a=0, b=1) | baseline | DCW | delta | p |
+|---|---|---|---|---|
+| physics    | 44.15 | 38.43 | **−5.73** | 0.0005 |
+| industrial | 45.19 | 35.68 | **−9.50** | 0.0005 |
+
+Even the gentlest setting (κ=0.25) never beats baseline on either subset.
+
+**What it teaches.** The document-topic component is *signal, not confound*.
+ViDoRe queries are largely topical, so most of a page's relevance genuinely is
+"is this document about this topic"; the within-document residual is dominated
+by page idiosyncrasy (headers, captions, layout noise) rather than by
+discriminative content. This is consistent with §7 rather than contradicting it:
+SEP gains by **amplifying** the document component (β=0.75 toward the file
+aggregate), and DCW loses by removing it. Both point the same way.
+
+The corollary is the useful part: within-document page discrimination is **not
+recoverable from bi-encoder geometry**. The only thing measured to do it is
+token-level query–page interaction — the cross-encoder, at +5.08 (§1). That is
+also what the ColEmbed report concludes from the other direction, where
+bi-encoder + reranker matches a late-interaction model at 1/2700th the storage.
+
+Reproduce: `python research/experiments/vidore_dcw.py --subset industrial --language english`
