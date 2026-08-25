@@ -356,3 +356,85 @@ Chạy lại:
 python research/experiments/vidore_longrange.py
 python research/experiments/vidore_visual_ablation.py
 ```
+
+---
+
+## 9. Arm visual đầu tiên — đã chạy thật, không còn là danh sách rào cản
+
+Nhận xét "mọi giải pháp retrieval hiện nay đều dùng ảnh như một lớp embedder mà
+ta chưa thử cái nào" là đúng. Phần này chạy một cái. Ba rào cản tôi từng viện
+dẫn thì **hai cái gỡ được**:
+
+| rào cản đã nêu | thực tế |
+|---|---|
+| ảnh trang chưa tải (442 MB – 2.2 GB/subset) | **không cần tải** — render tại chỗ từ 42 PDF gốc bằng PyMuPDF: 1,674 ảnh, 144 dpi, 730 MB |
+| torch 2.2.2, không GPU | **đi vòng bằng ONNX Runtime trên CPU**. (Máy là Intel Mac x86_64; torch bỏ hỗ trợ x86 macOS sau 2.2.x — nên bản pin là ràng buộc phần cứng, không phải lựa chọn) |
+| hết hạn mức API | model tải free từ HuggingFace, không tốn key |
+
+Xác nhận thêm: `corpus.parquet` **không** chứa ảnh (371 KB, chỉ có `corpus_id` /
+`doc_id` / `markdown` / `page_number_in_doc`), nên PDF gốc là nguồn ảnh duy nhất.
+
+### Kết quả
+
+| arm | NDCG@10 | R@10 |
+|---|---|---|
+| text α=0.7 (production) | **43.86** | 46.73 |
+| **visual only — CLIP ViT-B/32 @224px** | **4.45** | 5.05 |
+| random baseline | 0.62 | — |
+
+Hợp nhất với arm text, ở mọi trọng số:
+
+| w_visual | NDCG@10 | Δ | p |
+|---|---|---|---|
+| 0.1 | 43.94 | +0.08 | 0.804 n.s. |
+| 0.2 | 43.47 | −0.39 | 0.340 n.s. |
+| 0.3 | 42.69 | −1.16 | 0.038 |
+| 0.5 | 38.90 | −4.96 | 0.0001 |
+
+Bổ trợ gần như bằng không: gold trong top-10 **chỉ visual tìm ra 1.17%**, trong
+khi **chỉ text tìm ra 42.86%**.
+
+### Đọc kết quả này cho đúng
+
+CLIP **có học được gì đó** — 4.45 so với random 0.62, tức hơn 7 lần. Và phân rã
+theo loại câu hỏi cho thấy nó mạnh đúng chỗ đáng lẽ phải mạnh:
+
+| modality | n | visual NDCG@10 |
+|---|---|---|
+| **Infographic** | 93 | **7.72** |
+| Table | 46 | 4.93 |
+| Chart | 45 | 4.65 |
+| Mixed | 144 | 4.51 |
+| Image | 91 | 4.40 |
+| Text | 283 | 4.20 |
+
+Infographic cao nhất, Text thấp nhất — đúng hành vi của một model nắm "ý chung
+về bố cục" nhưng **không đọc được chữ**.
+
+**Nên kết luận đúng là: CLIP ViT-B/32 @224px vô dụng ở đây, chứ không phải
+visual vô dụng.** Ba bất lợi cộng dồn: (1) 224×224 trên một trang vật lý dày
+chữ thì thân bài hoàn toàn không đọc nổi; (2) CLIP huấn luyện tiếng Anh, truy
+vấn ở đây tiếng Pháp; (3) huấn luyện trên ảnh tự nhiên, không phải tài liệu.
+ColPali/ColEmbed dùng VLM chuyên tài liệu, độ phân giải cao hơn nhiều, cộng late
+interaction — khác hẳn về bản chất.
+
+### Còn thiếu đúng một thứ: model
+
+Pipeline giờ đã đủ và **model là phần cắm vào**:
+
+```
+render_page_images.py   →  vidore_visual_arm.py  →  vidore_visual_eval.py
+(1,674 ảnh, đã có)         (đổi --repo là xong)     (visual only + fusion + theo modality)
+```
+
+Để trả lời thật câu hỏi "visual có giúp không", cần chạy một VLM tài liệu
+(ColPali / ColQwen / ColEmbed) trên Colab — GPU là thứ duy nhất còn thiếu, và
+ảnh thì đã render sẵn nên chỉ cần upload. Đây là rào cản hạ tầng cuối cùng, và
+nó **không** còn bao gồm việc tải ảnh hay đổi index contract nữa.
+
+Chạy lại:
+```bash
+python research/experiments/render_page_images.py
+python research/experiments/vidore_visual_arm.py --repo Xenova/clip-vit-base-patch32
+python research/experiments/vidore_visual_eval.py
+```
