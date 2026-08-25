@@ -883,3 +883,60 @@ ceiling establishes is that the approach is **worth the API spend to test**
 (one call per query), and that its target is ~48.9 in combination with SEP.
 
 Reproduce: `python research/experiments/vidore_dat_ceiling.py`
+
+---
+
+## 15. DAT with a real LLM judge — the ceiling does not materialise (2026-08-25)
+
+§14 put DAT's ceiling at +3.27 alone and +5.01 with SEP. Measured with actual
+judges on the production config (302 queries, one call each):
+
+| arm | NDCG@10 | R@10 | vs production | p |
+|---|---|---|---|---|
+| production α=0.7 | 43.86 | 46.73 | | |
+| DAT, gpt-4o-mini, graded 0–5 | 44.07 | 46.91 | +0.21 | 0.718 n.s. |
+| DAT, gpt-4o-mini, binary | 43.10 | 45.40 | −0.76 | 0.298 n.s. |
+| DAT, gpt-4o, binary | 44.57 | 45.91 | +0.71 | 0.365 n.s. |
+| **SEP only** | **46.27** | **48.88** | **+2.41** | **0.0004** |
+| DAT (gpt-4o) + SEP | 46.50 | 48.45 | +2.64 | 0.0032 |
+
+DAT recovers ~6–22% of its ceiling and adds only +0.23 on top of SEP (against
++2.60 for a perfect judge), with *lower* recall. It does not ship.
+
+### Why: the judge is at chance
+
+Accuracy of the binary relevance verdict on each leg's top-1, against qrels:
+
+| judge | accuracy | precision | recall | says YES |
+|---|---|---|---|---|
+| gpt-4o-mini | 50.2% | 40.6% | 88.7% | 77.2% |
+| gpt-4o | 52.2% | 41.8% | 91.1% | 76.8% |
+
+Base rate of a top-1 actually being relevant is **35.3%**, and both judges answer
+YES on ~77% of cases. They affirm nearly everything, so the verdict carries
+almost no information. This is a judge *capability* limit on French physics
+prose, not a prompting problem — gpt-4o buys 2 points of accuracy over
+gpt-4o-mini and neither is usefully above chance.
+
+The two failure modes follow directly from that. A graded 0–5 judge hedges both
+passages into the mid-range, α collapses to ~0.5 and nothing changes
+(distribution `{0.4:34, 0.5:85, 0.6:80, 0.7:48, 0.8:49}`, never an extreme).
+A binary judge produces correctly extreme α (`{0.0:50, 0.5:186, 1.0:66}`) but on
+near-random verdicts, which is actively harmful.
+
+**The ceiling remains valid and worth revisiting** with a judge that can actually
+discriminate — a cross-encoder relevance model rather than a generative LLM is
+the obvious candidate, since that is precisely what cross-encoders are trained
+for and they already deliver +5.08 here as rerankers.
+
+### Bug worth recording
+
+The judgement checkpoint was keyed by `mode` only, so running a second judge
+silently reloaded the first judge's verdicts and reported them as the new
+model's result — an exactly-identical results table and "judge done in 0s" were
+the only tells. Now keyed by `mode + judge`.
+
+Reproduce:
+```bash
+python research/experiments/vidore_dat_llm.py --mode binary --judge openai/gpt-4o
+```
