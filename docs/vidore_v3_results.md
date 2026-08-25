@@ -834,3 +834,52 @@ Fold0 46.22 / fold1 46.33 — the two halves agree to 0.11, which is the stronge
 evidence available here that this is not fold-luck.
 
 Reproduce: `python research/experiments/vidore_french_alpha_confound.py`
+
+---
+
+## 14. DAT — dynamic alpha tuning: ceiling test (2026-08-25)
+
+§12 found +8.60 of real per-query α headroom and no predictor, having tried
+seven **query-surface** features (all r < 0.13). The literature says why that
+failed. *DAT: Dynamic Alpha Tuning for Hybrid Retrieval in RAG*
+([arXiv 2503.23013](https://arxiv.org/abs/2503.23013)) uses a **post-retrieval**
+signal instead: an LLM scores the effectiveness of the **top-1 result from each
+leg**, and those two scores are normalised into α. The information is not in the
+query, it is in how well each leg actually did.
+
+### Ceiling, using a perfect judge (true qrels grade of each leg's top-1)
+
+| | NDCG@10 | vs production |
+|---|---|---|
+| production α=0.7 | 43.86 | |
+| best fixed α (0.6) | 44.16 | +0.30 |
+| **DAT, perfect judge** | **47.13** | **+3.27** (p=0.0003) |
+| SEP alone | 46.27 | +2.41 |
+| **DAT + SEP (λ=0.5)** | **48.87** | **+5.01** (p=0.0001) |
+
+DAT recovers ~35% of the oracle-α headroom on its own, and **adds +2.60 on top
+of SEP** (p=0.0007) — the two are complementary, not redundant. SEP reorders
+within a fixed fusion; DAT changes the fusion itself.
+
+### Controls
+
+- **Not the fallback.** α falls back to 0.5 when the judge cannot separate the
+  legs, and 0.5/0.6 already beat production's 0.7. Against the *best fixed* α
+  DAT is still +2.94 (p=0.0001).
+- **Not winner's curse.** Giving each query *another query's* judge scores
+  yields **41.94** (sd 0.74) versus 47.10 for the true scores — below every
+  fixed α. The signal is genuinely query-specific.
+- **The judge is idle on half the queries.** Both legs' top-1 are non-gold on
+  144/302 (48%), and the two agree on 199/302 (66%), so α falls back to 0.5
+  there. The whole +3.27 comes from differentiating ~34% of queries.
+- Graded (0/1/2) and binary judges are indistinguishable (47.10 vs 47.13), so
+  the judge only needs to answer "is this relevant", not "how relevant".
+
+### Status: this is a CEILING, not a result
+
+It substitutes ground-truth relevance for the LLM judge. A real judge will be
+worse — how much worse is exactly what determines whether DAT ships. What the
+ceiling establishes is that the approach is **worth the API spend to test**
+(one call per query), and that its target is ~48.9 in combination with SEP.
+
+Reproduce: `python research/experiments/vidore_dat_ceiling.py`
