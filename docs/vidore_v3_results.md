@@ -650,3 +650,50 @@ discriminating, since both offsets yield 962 matching ids by set membership
 while pointing at different physical pages.
 
 Reproduce: `python research/experiments/vidore_sep_results.py`
+
+---
+
+## 11. Correction — SEP against the *production* baseline (2026-08-25)
+
+§10 measured SEP against a page-level arm (43.03). That is **not** the shipped
+configuration. The CSV's "Baseline Legacy" is KDL → **fixed_512/128 chunking** →
+MaxP to pages → hybrid α=0.7, and it records **44.2 / 47.47** — i.e. 1.2 NDCG
+*above* the arm SEP was being credited against. Re-measured properly:
+
+| arm | NDCG@10 | R@10 | delta | p |
+|---|---|---|---|---|
+| Baseline Legacy reproduction | 43.86 | 46.73 | | |
+| **+ SEP (λ=0.5)** | **46.27** | **48.88** | **+2.41** | 0.0004 |
+| + SEP (λ=0.6) | 45.94 | 47.91 | +2.08 | 0.0002 |
+| + SEP (λ=0.7) | 45.27 | 47.33 | +1.41 | 0.0037 |
+| + SEP (λ=0.8) | 44.94 | 47.21 | +1.08 | 0.0100 |
+
+The reproduction lands at 43.86 / 46.73 against the recorded 44.2 / 47.47 —
+within ~0.35 NDCG, attributable to KDL run variation or the "lake-subset"
+retrieval scope. Close enough to treat as faithful, but the gap should be
+closed before this row is quoted as production.
+
+**SEP is additive to chunking, not a substitute for it.** The gain against the
+production baseline (+2.41) is *larger* than against the page-level arm (+1.72),
+so the earlier concern that SEP merely recovers what fixed-512 chunking provides
+is refuted.
+
+### Standing correction on "~50"
+
+An earlier note projected "SEP (+1.7) and rerank (+5) moves NDCG@10 to ~50."
+That was **arithmetic on two gains never measured together** and should not have
+been stated as a number. The SEP × rerank composition is still untested. What is
+measured is 44.2 → **46.27**, i.e. **+2.07 over the recorded production number**.
+Whether reranking stacks additively on top of that is exactly the open
+experiment, and the diagnostic gives reason to think it might (SEP changes which
+20 pages reach the reranker, and same-file candidates are gold 7.83% vs 0.46%
+cross-file) — but *might* is not a result.
+
+### Bug found while reproducing
+
+`fixed_overlap` returns `Span` as a plain `(start, end)` **tuple**, not an object
+with `.start`/`.end`. A `hasattr(sp, "start")` guard silently fell through to
+`str(sp)`, embedding the literal text `"(0, 3985)"` as every chunk and producing
+NDCG 0.46. Worth knowing for any future code consuming the chunker directly.
+
+Reproduce: `python research/experiments/vidore_prod_baseline_sep.py`
