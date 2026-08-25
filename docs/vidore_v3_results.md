@@ -780,3 +780,57 @@ cross-encoder does, and suggests using one as a **router** rather than only as a
 reranker. Untested.
 
 Reproduce: `python research/experiments/vidore_signal_headroom.py`
+
+---
+
+## 13. The French analyzer was rejected under a confound — but it still loses (2026-08-25)
+
+The ledger records the `french` analyzer as +2.71 on BM25 alone but dropped for
+−0.13 "on the fusion". That fusion was **α=0.7 — dense-dominant**, i.e. the exact
+setting where a better BM25 leg is suppressed. §12 then showed 37% of queries
+want pure BM25. So the rejection was tested under a confound.
+
+**Confirmed.** Production config (KDL + fixed_512/128 + MaxP), french vs plain:
+
+| α | delta | p |
+|---|---|---|
+| 0.7 — where it was rejected | +0.09 | 0.8808 |
+| 0.6 | +0.49 | 0.4509 |
+| **0.5** | **+1.65** | **0.0200** |
+| 0.4 | +1.24 | 0.1140 |
+
+At α=0.5 the analyzer is worth a significant +1.65. The original −0.13 was an
+artifact of the fusion weight, not a property of the analyzer.
+
+Also worth noting: production's α=0.7 is not optimal on this config either —
+plain α=0.6 scores 44.16 vs 43.86 at 0.7.
+
+### But it does not survive contact with SEP
+
+Selecting `(analyzer, α, λ)` on one fold and scoring the other is **unstable**:
+fold0→fold1 picks `french/0.5/0.7` and returns +0.30 (n.s.); fold1→fold0 picks
+`plain/0.6/0.5` and returns +2.24 (p=0.020). A single held-out split cannot pick
+the configuration.
+
+Ranking instead by each config's **worst** fold — which is what guards against
+fold-luck — every robust configuration is `plain`:
+
+| config | fold0 | fold1 | all | vs production | p |
+|---|---|---|---|---|---|
+| **plain, α=0.7, SEP λ=0.5** | 46.22 | 46.33 | **46.27** | **+2.41** | 0.0004 |
+| plain, α=0.5, SEP λ=0.5 | 46.63 | 46.16 | 46.41 | +2.55 | 0.0023 |
+| plain, α=0.6, SEP λ=0.6 | 46.47 | 46.11 | 46.30 | +2.44 | 0.0003 |
+| plain, α=0.6, SEP λ=0.5 | 46.09 | 46.39 | 46.23 | +2.38 | 0.0008 |
+
+French does not appear. SEP and the French analyzer capture **overlapping**
+signal — both recover lexically-matched pages the dense-dominant fusion buries —
+and SEP captures more of it. Stacking them is worse than SEP alone.
+
+### Standing result
+
+**`plain`, α=0.7, SEP λ=0.5 → NDCG@10 46.27, R@10 48.88**, against the
+production baseline's 43.86/46.73 reproduction and the recorded 44.2/47.47.
+Fold0 46.22 / fold1 46.33 — the two halves agree to 0.11, which is the strongest
+evidence available here that this is not fold-luck.
+
+Reproduce: `python research/experiments/vidore_french_alpha_confound.py`
