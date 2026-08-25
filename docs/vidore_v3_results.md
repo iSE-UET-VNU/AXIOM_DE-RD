@@ -474,3 +474,110 @@ also what the ColEmbed report concludes from the other direction, where
 bi-encoder + reranker matches a late-interaction model at 1/2700th the storage.
 
 Reproduce: `python research/experiments/vidore_dcw.py --subset industrial --language english`
+
+---
+
+## 9. KDL arm, and the granularity refutation (2026-08-25)
+
+### KDL baseline — the parse we actually ship
+
+Page-level, physics/French, from `data_vidore_parsed_physics/output/benchmarks/`:
+
+| arm | physics | pharmaceuticals (en) |
+|---|---|---|
+| bm25 | 37.46 | — |
+| dense | 39.78 | — |
+| **α=0.7** | **43.03** | **56.36** |
+
+Sits between `chandra_page` (42.90) and `vidore_page` (44.15). Note the CSV's
+"Baseline Legacy" 44.2 is a *different* configuration — fixed-512 chunking — not
+this page-level arm.
+
+### SEP transfers to KDL
+
+Config unchanged from physics (w=2, γ=0.5, β=0.75, top-m=3):
+
+| KDL arm | baseline | SEP | delta | p |
+|---|---|---|---|---|
+| physics/french | 43.03 | 44.75 | **+1.73** | 0.0119 |
+| pharmaceuticals/english | 56.36 | 57.77 | **+1.41** | 0.0021 |
+
+As predicted: SEP never reads text, only `file#page` structure and pool scores,
+so it is parse-agnostic. Gains are slightly smaller than on ViDoRe's own text
+(+2.02) but hold on both subsets.
+
+### Sub-page granularity is refuted — pooling helps, it does not hurt
+
+Hypothesis was that one embedding per page (12.8 blocks, ~1,330 chars) drowns
+the one block a query actually matches, and that MaxSim over sub-page units
+would recover it — late interaction at affordable granularity.
+
+**Wrong, monotonically.** BM25 over KDL physics, MaxSim aggregated back to pages:
+
+| grouping | units/page | NDCG@10 | delta |
+|---|---|---|---|
+| **page (pooled)** | 1.0 | **37.46** | — |
+| section (SectionHeader boundaries) | 1.6 | 35.51 | −1.94 |
+| typed (tables/figures split out) | 3.8 | 33.64 | −3.82 |
+| fixed-5 blocks | 2.8 | 34.69 | −2.77 |
+| fixed-3 blocks | 4.4 | 32.46 | −5.00 |
+| per block | 12.1 | 26.30 | −11.16 |
+
+Random-grouping controls at matched unit count (`rand3` −6.22 vs `fixed3` −5.00;
+`rand5` −4.89 vs `fixed5` −2.77) isolate the cause: contiguity is worth only
+~1.2 points, while **granularity itself costs 5+**. It is fragmentation, not
+grouping quality.
+
+Confirmed with dense embeddings, so it is not a BM25 length-normalisation
+artifact: section-unit MaxSim **38.60** vs pooled page **39.78** (−1.18).
+
+**Where the reasoning went wrong.** ColEmbed's late interaction works because the
+model is *trained* with a MaxSim objective. Bolting MaxSim onto
+`text-embedding-3-small`, trained for pooled-sequence similarity, is a different
+operation with no reason to work. The paper's result does not transfer to an
+off-the-shelf bi-encoder.
+
+### Block type does not discriminate gold
+
+Share of pages containing at least one block of each type, gold vs non-gold
+(962 gold / 712 non-gold pages):
+
+| type | gold | non-gold | ratio |
+|---|---|---|---|
+| Table | 20.2% | 19.5% | 1.03 |
+| Figure | 63.4% | 71.2% | 0.89 |
+| EquationBlock | 20.0% | 24.4% | 0.82 |
+| SectionHeader | 39.5% | 49.2% | 0.80 |
+
+No type is enriched in gold. The `boost_fields {title: 2.0, figures: 0.7}`
+weights declared in `chunking_embedding`'s `hybrid_default` profile have **no
+empirical basis on this benchmark** — they should not be implemented on the
+strength of intuition.
+
+### The pattern across all four negative results
+
+Localise → lose. Aggregate → win.
+
+| intervention | direction | result |
+|---|---|---|
+| DCW centroid removal (§8) | localise | −5.73 / −9.50 |
+| sub-page MaxSim | localise | −1.18 to −11.16 |
+| type-aware boosting | localise | no basis |
+| page pooling (status quo) | aggregate | best single-page scorer |
+| SEP file aggregation (§7) | aggregate | +1.4 to +2.2 |
+
+Consistent with the corpus: **962 of 1,674 physics pages (57%) are gold for some
+query**, 7.21 gold pages per query, dispersed rather than contiguous. These are
+*topical* queries over a small topical corpus — evidence is diffuse, not
+localised. This is not needle-in-a-haystack retrieval, and methods designed for
+that lose here.
+
+The one localising method that *does* win is the cross-encoder (+5.08), and the
+distinction is instructive: it is **trained** for query–document interaction
+rather than assembled from a pooled embedder at inference time.
+
+Reproduce:
+```bash
+python research/experiments/vidore_granularity_test.py
+python research/experiments/vidore_sep_kdl.py
+```
