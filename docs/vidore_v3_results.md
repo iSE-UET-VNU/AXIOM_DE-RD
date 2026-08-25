@@ -940,3 +940,53 @@ Reproduce:
 ```bash
 python research/experiments/vidore_dat_llm.py --mode binary --judge openai/gpt-4o
 ```
+
+---
+
+## 16. Solution row — SEP end-to-end, ViDoRe V3 physics (2026-08-25)
+
+Production config (KDL + pdf-inspector, fixed_512/128, MaxP, α=0.7), 302 French
+questions, top-10 full-page context, DeepSeek V4 Flash generation, GPT-4o judge.
+Both arms run over the same questions so every delta is paired.
+
+| | NDCG@10 | R@10 | Correct_only | Correct+partial |
+|---|---|---|---|---|
+| CSV Baseline Legacy (recorded) | 44.2 | 47.47 | 51.66 | 90.4 |
+| baseline reproduction | 43.86 | 46.73 | 50.17 | 91.03 |
+| **+ SEP (λ=0.5)** | **46.27** | **48.88** | **51.83** | **89.70** |
+
+Paired permutation, 10,000 resamples:
+
+| metric | delta | p | better/worse/tied |
+|---|---|---|---|
+| NDCG@10 | **+2.41** | **0.0004** | 127/80/95 |
+| Correct_only | +1.33 | 0.6799 | 28/24/248 |
+| Correct+partial | −1.33 | 0.3855 | 4/8/288 |
+
+The E2E path reproduces the recorded row closely (50.17/91.03 vs 51.66/90.4),
+so the QA harness is sound.
+
+### The retrieval gain does not reach QA
+
+Both QA deltas are non-significant, and they point in opposite directions. This
+is the predicted outcome, not a surprise: §1 measured the oracle-vs-retrieved QA
+gap at ~3.6pp credited, because gold is redundant (7.21 gold pages available per
+query, ~2 needed to answer). Reordering pages that were *already retrieved*
+mostly reshuffles evidence the generator could already use — 248 of 300
+questions do not change label at all on correct_only, and 288 of 300 do not
+change on credited.
+
+**Read the row accordingly: SEP is a retrieval result, not an end-to-end one.**
+Quoting +2.41 NDCG@10 is supported; quoting a QA improvement is not.
+
+### Cost
+
+| | baseline | + SEP |
+|---|---|---|
+| online retrieval latency | 18.5 ms/query | **18.8 ms/query** |
+| offline parsing / chunk+embed+index | unchanged | unchanged |
+| API calls, GPU, index changes | — | **none** |
+
+SEP is arithmetic over scores already computed: +0.3 ms/query and nothing else.
+
+Reproduce: `python research/experiments/vidore_sep_e2e.py`
