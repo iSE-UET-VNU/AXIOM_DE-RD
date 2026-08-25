@@ -990,3 +990,58 @@ Quoting +2.41 NDCG@10 is supported; quoting a QA improvement is not.
 SEP is arithmetic over scores already computed: +0.3 ms/query and nothing else.
 
 Reproduce: `python research/experiments/vidore_sep_e2e.py`
+
+---
+
+## 17. The generator, not retrieval, is where the QA number is (2026-08-25)
+
+§16 showed SEP's +2.41 NDCG@10 producing no QA movement. The obvious next
+question — asked far too late in this work — is what *does* move QA. Holding
+retrieval **byte-identical** (α=0.7 baseline ranking for every arm) and swapping
+only the generator, n=120 physics questions, GPT-4o judge:
+
+| generator | Correct_only | Correct+partial |
+|---|---|---|
+| deepseek-v4-flash (current production) | 44.54 | 86.55 |
+| **openai/gpt-5.2** | **71.67** | **95.83** |
+| anthropic/claude-sonnet-4.5 | 63.33 | 86.67 |
+
+Paired permutation vs deepseek, 10,000 resamples, same questions:
+
+| | Correct_only | Correct+partial |
+|---|---|---|
+| gpt-5.2 | **+27.73** (p=0.0001) | **+9.24** (p=0.0009) |
+| claude-sonnet-4.5 | +19.33 (p=0.0002) | +0.84 (n.s.) |
+
+### Scale, against every retrieval change measured this session
+
+| change | Correct_only |
+|---|---|
+| SEP (+2.41 NDCG@10, p=0.0004) | +1.33 **n.s.** |
+| **generator swap** | **+27.73, p=0.0001** |
+
+Roughly **20× the effect, from a one-line config change, with retrieval
+untouched.** gpt-5.2's 71.67 also lands on the paper's 71.2% (Gemini 3 Pro),
+confirming the entire remaining QA gap was the generator.
+
+This was foreseeable from evidence already in this ledger: the oracle-retrieval
+QA ceiling was 55.6% with gpt-4o-mini against the paper's 71.2%, i.e. a ~15
+point discount that no retrieval work could close, and the oracle-vs-retrieved
+gap was only ~3.6pp. Both numbers were recorded before any of the retrieval
+experiments in §7–§15 were run.
+
+**Methodological lesson worth keeping:** measure the ceiling of each component
+before optimising any of them. Retrieval had ~3.6pp of end-to-end headroom and
+consumed the session; generation had ~27pp and took one experiment.
+
+### Status: n=120, full run blocked
+
+The full 302-query run aborted — the OpenRouter key hit its **monthly limit**
+(244/302 calls returned HTTP 403). The n=120 sweep above completed before that
+and is a clean paired comparison. Numbers should be refreshed at n=302 once the
+key is topped up; the checkpoints are resumable and keyed by generator.
+
+Reproduce (needs OpenRouter budget):
+```bash
+python research/experiments/vidore_sep_e2e.py --generator openai/gpt-5.2
+```

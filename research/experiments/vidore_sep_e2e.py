@@ -41,7 +41,7 @@ from src.evaluation.retrieval import alpha_fuse
 from src.retrieval.sparse import BM25Index
 
 SUB, LANG = "physics", "french"
-GENERATOR, JUDGE = "deepseek/deepseek-v4-flash", "openai/gpt-4o"
+GENERATOR, JUDGE = "deepseek/deepseek-v4-flash", "openai/gpt-4o"  # --generator overrides
 TOP_K, POOL, ALPHA, LAM = 10, 100, 0.7, 0.5
 RESULTS = ROOT / "data/benchmark/vidore_v3/results"
 norm = lambda m: m / np.clip(np.linalg.norm(m, axis=-1, keepdims=True), 1e-12, None)
@@ -51,8 +51,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=12)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--generator", default=GENERATOR)
     args = parser.parse_args()
-    assert_real([GENERATOR, JUDGE])
+    generator = args.generator
+    assert_real([generator, JUDGE])
 
     run = next((ROOT / f"data_vidore_parsed_physics/output/benchmarks/vidore-v3-{SUB}-kdl").iterdir())
     pages = {}
@@ -116,7 +118,7 @@ def main() -> None:
         ranked = {q: [u for u, _ in sorted(p.items(), key=lambda kv: -kv[1])][:TOP_K]
                   for q, p in pools.items()}
 
-        checkpoint = RESULTS / f"sep_e2e_{arm}.json"
+        checkpoint = RESULTS / f"sep_e2e_{arm}_{generator.replace('/', '-')}.json"
         rows = {r["qid"]: r for r in json.loads(checkpoint.read_text())} if checkpoint.exists() else {}
         todo = [q for q in questions if q.qid not in rows or not rows[q.qid].get("answer")]
         print(f"\n[{arm}] NDCG@10 {ndcg:.2f}  R@10 {recall:.2f} | generating {len(todo)} answers...")
@@ -124,13 +126,13 @@ def main() -> None:
         def work(question):
             context = render_documents([pages.get(u, "") for u in ranked[question.qid]])
             try:
-                answer = complete(GENERATOR, ANSWER_PROMPT.format(
+                answer = complete(generator, ANSWER_PROMPT.format(
                     documents=context, query=question.query),
                     temperature=0.0, max_output_tokens=512).strip()
             except Exception as error:
                 return question.qid, {"qid": question.qid, "answer": "", "error": str(error)}
             verdict = judge_answer(question.qid, question.query, question.answer, answer,
-                                   model=JUDGE, generator_model=GENERATOR)
+                                   model=JUDGE, generator_model=generator)
             return question.qid, {"qid": question.qid, "query": question.query,
                                   "answer": answer, "label": verdict.judgment,
                                   "error": verdict.error,
@@ -149,6 +151,18 @@ def main() -> None:
                         print(f"   {n}/{len(todo)}  {perf_counter()-gen_started:.0f}s", flush=True)
             checkpoint.write_text(json.dumps(list(rows.values()), ensure_ascii=False))
         answered = [rows[q.qid] for q in questions if rows.get(q.qid, {}).get("label")]
+        failed = [r for r in rows.values() if r.get("error")]
+        if not answered:
+            # Every call failed -- almost always an API budget or auth problem.
+            # Report it rather than dividing by zero; the checkpoint is resumable.
+            sample = failed[0]["error"][:160] if failed else "no rows produced"
+            print(f"[{arm}] NO answers judged ({len(failed)} errors). First: {sample}")
+            report[arm] = {"ndcg@10": round(ndcg, 2), "recall@10": round(recall, 2),
+                           "answered": 0, "errors": len(failed), "first_error": sample}
+            continue
+        if failed:
+            print(f"[{arm}] warning: {len(failed)} calls failed; "
+                  f"QA computed on the {len(answered)} that succeeded")
         correct = 100 * sum(r["correct"] for r in answered) / len(answered)
         credited = 100 * sum(r["credited"] for r in answered) / len(answered)
         print(f"[{arm}] correct_only {correct:.2f}   correct+partial {credited:.2f}"
@@ -159,13 +173,18 @@ def main() -> None:
                        "retrieval_seconds_all_queries": round(retrieval_seconds, 2),
                        "retrieval_ms_per_query": round(1000 * retrieval_seconds / len(questions), 1)}
 
-    (RESULTS / "sep_e2e_summary.json").write_text(json.dumps(
-        {"generator": GENERATOR, "judge": JUDGE, "top_k": TOP_K, "alpha": ALPHA,
+    (RESULTS / f"sep_e2e_summary_{generator.replace('/', '-')}.json").write_text(json.dumps(
+        {"generator": generator, "judge": JUDGE, "top_k": TOP_K, "alpha": ALPHA,
          "sep_lambda": LAM, "queries": len(questions), "arms": report}, indent=1))
     print("\n=== summary ===")
     for arm, r in report.items():
+        if not r.get("answered"):
+            print(f"  {arm:9s} NDCG@10 {r['ndcg@10']:.2f}  R@10 {r['recall@10']:.2f}  "
+                  f"QA UNAVAILABLE ({r.get('errors', 0)} failed calls)")
+            continue
         print(f"  {arm:9s} NDCG@10 {r['ndcg@10']:.2f}  R@10 {r['recall@10']:.2f}  "
-              f"correct {r['correct_only']:.2f}  correct+partial {r['correct_plus_partial']:.2f}")
+              f"correct {r['correct_only']:.2f}  correct+partial {r['correct_plus_partial']:.2f}"
+              f"  (n={r['answered']})")
 
 
 if __name__ == "__main__":
