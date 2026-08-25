@@ -581,3 +581,72 @@ Reproduce:
 python research/experiments/vidore_granularity_test.py
 python research/experiments/vidore_sep_kdl.py
 ```
+
+---
+
+## 10. Results table — SEP standalone vs SEP on light preparation (2026-08-25)
+
+Same 42 physics PDFs, same gold, same 302 French queries. Two preparation arms:
+
+- **KDL** — the accurate parse (GPU, vLLM), what the pipeline ships
+- **light prep** — `PdfInspectorPageParser` native text only, CPU, the light
+  preparation stage of the on-demand branch
+
+SEP config unchanged from §7 (w=2, γ=0.5, β=0.75, top-m=3); λ reported as a
+curve, not tuned. Paired permutation, 10,000 resamples, vs each arm's own α=0.7.
+
+### KDL — 1,674 pages, mean 1,330 chars/page
+
+| arm | NDCG@10 | R@10 | delta | p |
+|---|---|---|---|---|
+| bm25 | 37.46 | 39.71 | | |
+| dense | 39.78 | 42.38 | | |
+| α=0.7 | 43.03 | 46.49 | | |
+| **α=0.7 + SEP (λ=0.5)** | **44.75** | **47.42** | **+1.72** | 0.0119 |
+| α=0.7 + SEP (λ=0.6) | 44.50 | 47.28 | +1.47 | 0.0085 |
+| α=0.7 + SEP (λ=0.7) | 44.11 | 47.21 | +1.08 | 0.0167 |
+
+### Light preparation — 1,674 pages, mean 623 chars/page, 12s CPU
+
+| arm | NDCG@10 | R@10 | delta | p |
+|---|---|---|---|---|
+| bm25 | 36.62 | 37.92 | | |
+| dense | 40.70 | 44.34 | | |
+| α=0.7 | 43.09 | 46.29 | | |
+| **α=0.7 + SEP (λ=0.5)** | **44.62** | **47.05** | **+1.53** | 0.0342 |
+| α=0.7 + SEP (λ=0.6) | 44.60 | 47.00 | +1.51 | 0.0120 |
+| α=0.7 + SEP (λ=0.7) | 44.00 | 46.80 | +0.91 | 0.0692 n.s. |
+
+### The finding: for *retrieval*, KDL buys nothing over light preparation
+
+Paired, same queries:
+
+| comparison | light prep | KDL | delta | p | |
+|---|---|---|---|---|---|
+| α=0.7 | 43.09 | 43.03 | +0.07 | 0.9447 | indistinguishable |
+| α=0.7 + SEP | 44.62 | 44.75 | −0.13 | 0.8951 | indistinguishable |
+
+Light preparation extracts **half the text** (623 vs 1,330 chars/page) in
+**12 seconds of CPU** (139.5 pages/s) against a GPU vLLM run, and ranks exactly
+as well. The legs differ in the expected directions — light prep's BM25 is worse
+(36.62 vs 37.46, less text to match) while its dense leg is *better* (40.70 vs
+39.78, shorter cleaner text embeds better) — and the fusion cancels the two out.
+
+This does **not** say KDL is worthless. It says KDL's extra content — tables,
+figures, formulas, layout — does not change *which pages rank*. Its value, if
+any, is downstream in generation, where a table's contents matter for answering
+even though they did not matter for finding the page. That is untested here and
+should not be assumed in either direction.
+
+SEP holds on both arms (+1.72 / +1.53), which is expected: it never reads text,
+only `file#page` structure and pool scores.
+
+### Alignment note
+
+`pdf-inspector` page numbers are 1-based; KDL and the ViDoRe gold are 0-based.
+The −1 offset is *verified* by exact unit-id overlap with the KDL parse
+(1,674/1,674), not assumed — checking overlap against gold alone is not
+discriminating, since both offsets yield 962 matching ids by set membership
+while pointing at different physical pages.
+
+Reproduce: `python research/experiments/vidore_sep_results.py`
