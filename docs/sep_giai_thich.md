@@ -261,3 +261,98 @@ chỉ cần ~2 trang để trả lời), nên trần QA của retrieval chỉ kh
 | gpt-5.2 | **71.67** (+27.73, p=0.0001) |
 
 Tức là đòn bẩy cho điểm end-to-end nằm ở generator, không nằm ở retrieval.
+
+---
+
+## 7. Đã khai thác hết long-distance evidence chưa? — Rồi, và mở rộng thêm thì hỏng
+
+**Nới cửa sổ lân cận `w`** (bằng chứng xa hơn về mặt trang), so với SEP hiện tại
+(w=2, γ=0.5), kiểm định bắt cặp:
+
+| w | γ=0.5 | γ=0.8 |
+|---|---|---|
+| 2 (hiện tại) | 46.27 | 45.94 (−0.33, p=0.012) |
+| 3 | 46.21 (−0.05 n.s.) | 45.93 (−0.34 n.s.) |
+| 5 | 46.17 (−0.10 n.s.) | 45.63 (−0.64, p=0.033) |
+| 8 | 46.19 (−0.08 n.s.) | 45.60 (−0.67 n.s.) |
+| 12 | 46.19 (−0.08 n.s.) | 45.37 (−0.89, p=0.017) |
+| 20 | 46.19 (−0.08 n.s.) | 45.39 (−0.88, p=0.019) |
+
+**Không có gì để lấy thêm.** Lý do: `A_file` vốn đã tổng hợp **toàn bộ file**,
+tức khoảng cách không giới hạn. Số hạng lân cận `N` chỉ bổ sung tinh chỉnh cục
+bộ ở ±2; nới rộng nó chỉ lặp lại thông tin `A_file` đã có.
+
+**Lan truyền nhiều bước** (kiểu khuếch tán trên đồ thị) thì **có hại rõ rệt**:
+
+| số bước | NDCG@10 | so với 1 bước |
+|---|---|---|
+| 1 (hiện tại) | 46.27 | — |
+| 2 | 44.27 | **−2.00** (p=0.0007) |
+| 3 | 39.63 | **−6.64** (p=0.0002) |
+
+Mỗi vòng làm phân bố điểm mượt thêm; đến vòng thứ hai thì cấu trúc file đã lấn
+át tín hiệu gốc của từng trang.
+
+### Lỗ hổng thật: bằng chứng **liên file**
+
+| nhóm | tỉ lệ | baseline | +SEP | Δ |
+|---|---|---|---|---|
+| gold trải trên >1 file | 13.6% (41/302) | 42.38 | 43.78 | **+1.40** |
+| gold trong 1 file | 86.4% | 44.09 | 46.66 | **+2.57** |
+
+SEP giúp nhóm liên file **kém gần một nửa**. Đúng theo thiết kế: nó tổng hợp
+*trong* một file, nên khi bằng chứng nằm rải ở nhiều tài liệu thì nó không có gì
+để cộng dồn. Đây là hướng còn bỏ ngỏ, nhưng chỉ tác động lên 13.6% câu hỏi.
+
+---
+
+## 8. Đã khai thác hết visual chưa? — Có dùng, nhưng gần như không có tác dụng
+
+Ta **không** có ảnh trang. Cái ta có là bản KDL diễn giải hình ảnh thành text:
+1,648 block `Figure` có nội dung, cộng 1,043 `Caption` và 425 `Table`.
+
+Về khối lượng thì phần "visual" này rất lớn:
+
+| loại | % tổng số ký tự |
+|---|---|
+| **Figure** | **29.6%** |
+| **Table** | **26.2%** |
+| còn lại (Text, SectionHeader, Equation) | 44.1% |
+
+Nhưng khi bỏ chúng ra khỏi text của trang (đo bằng BM25, không cần API):
+
+| arm | chars/trang | BM25 NDCG@10 | Δ | p |
+|---|---|---|---|---|
+| đầy đủ (hiện tại) | 1,330 | 37.46 | — | |
+| bỏ Figure | 938 | 36.25 | −1.20 | 0.108 n.s. |
+| bỏ Figure + Caption | 919 | 36.09 | −1.37 | 0.083 n.s. |
+| bỏ Table | 984 | 36.97 | −0.48 | 0.511 n.s. |
+| chỉ Text + SectionHeader | 507 | 35.62 | −1.83 | 0.105 n.s. |
+
+**Bỏ 62% số ký tự chỉ mất 1.83 điểm, và không có ý nghĩa thống kê.** Nội dung
+suy ra từ hình ảnh chiếm gần 30% khối lượng nhưng đóng góp rất ít cho việc xếp
+hạng. Khớp với kết quả cũ trên chandra2: image descriptions +0.99 (p=0.25).
+
+Nghĩa là **visual đã được dùng — dưới dạng text — và dạng đó gần như vô dụng cho
+retrieval.** Câu hỏi còn mở là truy hồi bằng **ảnh thật** (visual encoder) có
+khác không. Ba rào cản, đều là rào cản thật:
+
+1. Ảnh trang **chưa tải về** (442 MB – 2.2 GB mỗi subset).
+2. GPU chỉ chạy được qua Google Colab.
+3. Hạn mức API đã hết.
+
+Tham chiếu để định lượng cơ hội: ColEmbed đạt 91.0 (ViDoRe V1) / 63.5 (V2) bằng
+late interaction trên ảnh; các visual retriever chạy 43.2–48.5 trên physics. Và
+Bảng 6 của chính bài đó cho thấy **bi-encoder ảnh một vector + reranker** đạt
+0.9064 so với 0.9106 của late interaction đầy đủ, ở mức **3.8 GB thay vì 10,311
+GB cho mỗi triệu trang** — tức bản rẻ không cần đổi index contract.
+
+**Kết luận ngắn:** long-distance đã hết dư địa; visual-dưới-dạng-text đã dùng và
+không đáng kể; visual-dưới-dạng-ảnh là dư địa thật nhưng đang bị chặn bởi hạ tầng
+chứ không phải bởi ý tưởng.
+
+Chạy lại:
+```bash
+python research/experiments/vidore_longrange.py
+python research/experiments/vidore_visual_ablation.py
+```
