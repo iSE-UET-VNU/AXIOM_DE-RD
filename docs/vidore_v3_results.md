@@ -697,3 +697,86 @@ with `.start`/`.end`. A `hasattr(sp, "start")` guard silently fell through to
 NDCG 0.46. Worth knowing for any future code consuming the chunker directly.
 
 Reproduce: `python research/experiments/vidore_prod_baseline_sep.py`
+
+---
+
+## 12. Signal headroom scan — where the unexploited signal actually is (2026-08-25)
+
+SEP tunes a coarse signal (file structure) that the fusion partly captures
+already, which is why it lands at +2.4. This scan asks a different question:
+across the signals we do *not* use, which has the most headroom? Oracles are
+never results — they are upper bounds that say whether a predictor is worth
+building.
+
+### Query-adaptive fusion is the largest unexploited signal found
+
+α is fixed at 0.7 for every query. It should not be:
+
+| | NDCG@10 |
+|---|---|
+| production, fixed α=0.7 | 43.03 |
+| best fixed α (0.5) | 43.56 |
+| **oracle per-query α** | **52.16** |
+| oracle over just {0.0, 0.7, 1.0} | 50.52 |
+
+**Headroom +8.60** over the best fixed α — roughly 4× what SEP delivers. And
+**113 of 302 queries (37%) are best served by pure BM25 (α=0.0)** while 30 want
+pure dense; we force a dense-dominant blend on all of them.
+
+**The headroom is real, not winner's curse.** Picking the max over 11 noisy
+options inflates, so: give each query the best α *of a randomly chosen other
+query*. That scores **39.87** (sd 0.58) — worse than any fixed α — and random α
+scores 41.14. If the oracle were selection noise, the shuffled version would
+match it. It does not, by 12 points. The per-query choice is genuinely
+query-specific.
+
+The gain is also concentrated: 66% of it sits in 50 queries, and the 43 queries
+where production scores exactly 0 have a mean oracle gain of 9.7.
+
+### But nothing cheap predicts it
+
+Seven features, all effectively uncorrelated with the best α:
+
+| feature | pearson r |
+|---|---|
+| query length | +0.128 |
+| has interrogative word | +0.094 |
+| dense max score | +0.061 |
+| ends with "?" | +0.059 |
+| bm25 score gap (relative) | +0.054 |
+| bm25/dense top-10 overlap | +0.049 |
+| **stopword ratio** | **+0.013** |
+
+The stopword hypothesis deserves a specific retraction. Eyeballing five samples
+per group suggested BM25-favouring queries were terse keyword strings
+(*"valeur commutateur [X, P] oscillateur harmonique quantique"*) and
+dense-favouring ones were full questions. Measured over all 302, function-word
+density is **0.372 vs 0.380** — indistinguishable. That was confirmation bias
+from a handful of examples. A held-out router built on it returns −0.15 / +0.47
+against production, i.e. nothing.
+
+### Feeding the reranker the union instead of the fusion — refuted
+
+If we cannot decide *a priori* which leg to trust, an appealing move is to stop
+discarding the loser's candidates. At matched budget it is worse:
+
+| K | fused α=0.7 recall | union (bm25 K/2 + dense K/2) | delta |
+|---|---|---|---|
+| 10 | 46.49 | 40.77 | **−5.72** |
+| 20 | 58.18 | 53.30 | **−4.87** |
+
+Fusion scores every item with *both* signals; union merely concatenates two
+partial views. The complementarity is nonetheless real — each leg exclusively
+finds ~11% of gold (bm25-only 10.9%, dense-only 13.6% at K=20) — but fusion is
+already the better way to exploit it.
+
+### Standing
+
+A large, verified, query-specific signal (+8.60) with **no known cheap
+predictor**. That is a more useful place to be than another +2 on a saturated
+signal, but it is not yet a method. Capturing it needs something that models the
+query–corpus *interaction* rather than query surface form — which is what a
+cross-encoder does, and suggests using one as a **router** rather than only as a
+reranker. Untested.
+
+Reproduce: `python research/experiments/vidore_signal_headroom.py`
