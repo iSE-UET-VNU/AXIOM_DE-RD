@@ -65,9 +65,12 @@ def main() -> None:
                 for qid, ids in ((q, served[q]["candidates"]) for q in qids if q in served)}
     nt, rt, tpq = report(text_run)
 
-    print(f"\n{'arm':40s} {'NDCG@10':>8s} {'R@10':>7s}")
-    print(f"{'text alpha=0.7 (served pool)':40s} {nt:8.2f} {rt:7.2f}")
-    print(f"{'ColQwen2 visual-only':40s} {nv:8.2f} {rv:7.2f}")
+    common0 = [q for q in qids if q in served]
+    dv, pv, *_ = permutation({q: tpq[q] for q in common0}, {q: vpq[q] for q in common0})
+    print(f"\n{'arm':40s} {'NDCG@10':>8s} {'R@10':>7s} {'vs text':>8s} {'p':>8s}")
+    print(f"{'text alpha=0.7 (served pool)':40s} {nt:8.2f} {rt:7.2f} {'':>8s} {'':>8s}")
+    flag_v = "" if pv < 0.05 else "  n.s."
+    print(f"{'ColQwen2 visual-only':40s} {nv:8.2f} {rv:7.2f} {dv:+8.2f} {pv:8.4f}{flag_v}")
 
     # complementarity
     gold_of = lambda qid: {u for u, v in qrels[qid].items() if v > 0}
@@ -85,12 +88,17 @@ def main() -> None:
           f"ONLY by text: {100 * only_t / len(common):.2f}%")
 
     # fusion sweep
+    # vis_run[qid] already holds the full (unnormalized) visual score for every
+    # page -- minmax it once per query rather than recomputing per wv.
+    vis_norm = {qid: minmax(vis_run[qid]) for qid in common}
+
     print(f"\n{'text + ColQwen2 fusion':40s} {'NDCG@10':>8s} {'vs text':>8s} {'p':>8s}")
-    for wv in (0.1, 0.2, 0.3, 0.5, 0.7):
+    best = (nt, 0.0, {})
+    for wv in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0):
         out = {}
         for qid in common:
             tv = minmax(text_run[qid])
-            vv = minmax({k: float(score_matrix[qids.index(qid), key_index[k]]) for k in keys})
+            vv = vis_norm[qid]
             out[qid] = {u: (1 - wv) * s + wv * vv.get(u, 0.0) for u, s in tv.items()}
             for u in vv:
                 if u not in out[qid]:
@@ -99,9 +107,16 @@ def main() -> None:
         d, p, *_ = permutation({q: tpq[q] for q in common}, {q: fpq[q] for q in common})
         flag = "" if p < 0.05 else "  n.s."
         print(f"{'  w_visual=' + str(wv):40s} {nf:8.2f} {nf - nt:+8.2f} {p:8.4f}{flag}")
+        if nf > best[0]:
+            best = (nf, wv, fpq)
+    print(f"\nbest fusion weight: w_visual={best[1]}  NDCG@10={best[0]:.2f}  (+{best[0] - nt:.2f} vs text)")
 
-    # the target group: gold pages absent from the served text top-100
-    print("\n--- the 473-page target group (fig-heavy pages text missed entirely) ---")
+    # the target group: gold pages absent from the served text top-100. Count
+    # here is this arm's own served_pool.json, so it will differ somewhat from
+    # vidore_why_missed.py's 473 (that number came from a separate BM25+dense
+    # reconstruction over KDL text, not this served pool) -- same phenomenon,
+    # different snapshot.
+    print("\n--- target group: gold pages text missed entirely (rank>=100) ---")
     deep_total, found10, found100 = 0, 0, 0
     for qid in common:
         served_set = set(served[qid]["candidates"][:100])
@@ -109,7 +124,7 @@ def main() -> None:
         deep = gold - served_set
         if not deep:
             continue
-        ranked = sorted(keys, key=lambda k: -score_matrix[qids.index(qid), key_index[k]])
+        ranked = sorted(keys, key=lambda k: -vis_run[qid][k])
         top10, top100 = set(ranked[:10]), set(ranked[:100])
         deep_total += len(deep)
         found10 += len(deep & top10)
@@ -121,6 +136,9 @@ def main() -> None:
     out_path = RESULTS / "physics_colqwen_eval.json"
     out_path.write_text(json.dumps({
         "text_ndcg10": round(nt, 2), "visual_ndcg10": round(nv, 2),
+        "visual_vs_text_delta": round(dv, 3), "visual_vs_text_p": round(pv, 5),
+        "best_fusion_weight": best[1], "best_fusion_ndcg10": round(best[0], 2),
+        "best_fusion_delta": round(best[0] - nt, 3),
         "only_visual_pct": round(100 * only_v / len(common), 2),
         "only_text_pct": round(100 * only_t / len(common), 2),
         "deep_group_total": deep_total, "deep_group_top10": found10, "deep_group_top100": found100,

@@ -1045,3 +1045,85 @@ Reproduce (needs OpenRouter budget):
 ```bash
 python research/experiments/vidore_sep_e2e.py --generator openai/gpt-5.2
 ```
+
+---
+
+## 18. ColQwen2 — the first visual arm that actually helps (2026-08-26)
+
+§7-8 of `docs/sep_giai_thich.md` and the CLIP arm (§ above, `vidore_visual_eval.py`)
+both found visual signal too weak to matter: CLIP ViT-B/32 scored 4.45 NDCG@10 and
+fusion never beat text at any weight. That used a natural-image encoder at 224px on
+dense French text pages — the honest prediction going in was "not visual is useless,
+CLIP-at-224px is useless here."
+
+Ran `vidore/colqwen2-v1.0` (Qwen2-VL-2B backbone, late-interaction/MaxSim, real
+document-VLM) on the same 1,674 rendered pages, via `ColQwen2_visual_arm_physics.ipynb`
+on Colab T4 + `research/experiments/physics_colqwen_eval.py` locally (no GPU, no API —
+scores exported as a flat 302×1,674 matrix). Text side is `physics_served_pool.json`'s
+cached α=0.7 order, same convention as the local rerank arm.
+
+| arm | NDCG@10 | R@10 | Δ vs text | p |
+|---|---:|---:|---:|---:|
+| text α=0.7 (served pool) | 44.15 | 47.58 | — | — |
+| ColQwen2 visual-only | 45.70 | 47.99 | +1.54 | 0.2293 n.s. |
+| **+ ColQwen2 fusion, best w≈0.7** | **47.37** | — | **+3.22** | **0.0014** |
+
+Fusion sweep, w_visual from 0.1 to 1.0 — the band 0.4–0.8 all land 46.9–47.4, all
+significant (p ≤ 0.005 except the tails); 0.9 is marginal (p=0.030); 1.0 (visual only)
+is the n.s. row above:
+
+| w_visual | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 | 0.6 | 0.7 | 0.8 | 0.9 |
+|---|---|---|---|---|---|---|---|---|---|
+| NDCG@10 | 44.94 | 45.60 | 46.12 | 46.87 | 47.12 | 47.08 | 47.37 | 47.16 | 46.69 |
+| p | 0.0059 | 0.0017 | 0.0005 | 0.0005 | 0.0006 | 0.0015 | 0.0014 | 0.0046 | 0.0300 |
+
+**Read it as a band (w≈0.5–0.8, NDCG@10≈47.1–47.4), not an argmax at 0.7** — same
+convention as the SEP λ sweep. This is the largest verified retrieval-only gain in
+this ledger: bigger than SEP (+2.41) alone, and this is on top of α=0.7 with no
+reranker in the loop at all.
+
+### Standalone visual is not significant — the win is specifically fusion
+
+ColQwen2 alone (45.70) is numerically above text (44.15) but p=0.229. Do not quote
+"ColQwen2 beats text." What is supported: **fused, it moves the number**; alone, it
+does not clear significance on 302 queries. This matters for cost — you cannot ship
+visual-only and expect this gain; the text leg is still required.
+
+### Complementarity vs the CLIP arm — night and day
+
+| | CLIP (224px) | ColQwen2 |
+|---|---:|---:|
+| gold@10 found ONLY by visual | 1.17% | 7.92% |
+| gold@10 found ONLY by text | 42.86% | 7.52% |
+
+CLIP's only-text share (42.86%) says it almost never contributes anything text
+doesn't already have. ColQwen2's only-visual (7.92%) is close to only-text (7.52%) —
+genuinely complementary coverage, not a weak echo of the text leg.
+
+### It does not surgically fix the figure-dependent 473/516-page group
+
+Of the gold pages text misses entirely (rank≥100 in the served pool — 516 here,
+vs the 473 counted in `vidore_why_missed.py` from a separate BM25+dense
+reconstruction over KDL text; same phenomenon, different snapshot):
+
+| | recovered |
+|---|---:|
+| in ColQwen2 visual top-10 | 5 / 516 (1.0%) |
+| in ColQwen2 visual top-100 | 170 / 516 (32.9%) |
+
+ColQwen2 does **not** promote these specific pages to the top of its own ranking —
+only 1% reach its top-10. But a third of them are somewhere in its top-100, which is
+real signal a reranker could exploit; it is just not concentrated enough to act as a
+standalone fix for the figure-dependent group. The overall +3.22 gain is coming from
+broader reordering across all 302 queries, not from surgically patching this group.
+
+### Standing
+
+The first visual experiment this session that clears significance. Composes with
+SEP untested (both reorder the served pool independently); composing with the
+Voyage/local reranker also untested. Both are natural next steps and neither needs
+new infrastructure — same served-pool JSON, same permutation harness.
+
+Reproduce: `python research/experiments/physics_colqwen_eval.py` (needs
+`data/work/vidore_physics_colqwen/{physics_colqwen_scores.npy,_keys.json,_qids.json}`
+from the Colab notebook — no GPU, no API for this step).
