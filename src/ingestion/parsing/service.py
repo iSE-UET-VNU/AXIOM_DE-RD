@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ...models import DataObject, ParseResult, ParseStatus
 from .backends import (
@@ -15,6 +15,8 @@ from .backends import (
     WordParserBackend,
 )
 from .chandra2 import Chandra2Config, Chandra2Provider
+from .kdl import KDLConfig, KDLProvider
+from .kdl_pdf_inspector import KdlPdfInspectorProvider
 from .lift import LiftAPIConfig, LiftAPIParserClient
 from .router import ParserRouter
 
@@ -85,14 +87,23 @@ class ParsingService:
     def parse_many(
         self,
         documents: list[tuple[str | Path, DataObject]],
+        *,
+        on_result: Callable[[int, ParseResult], None] | None = None,
     ) -> list[ParseResult]:
-        """Parse many inputs while sharing a continuous Chandra2 page queue."""
+        """Parse many inputs while sharing a provider-wide continuous page queue."""
 
         results: list[ParseResult | None] = [None] * len(documents)
-        chandra_groups: dict[
+        continuous_groups: dict[
             int,
             tuple[DocumentParser, list[tuple[int, str | Path, DataObject]]],
         ] = {}
+
+        def emit(index: int, result: ParseResult) -> None:
+            if results[index] is not None:
+                return
+            results[index] = result
+            if on_result is not None:
+                on_result(index, result)
 
         for index, (path, data_object) in enumerate(documents):
             backend = self.router.resolve(path)
@@ -100,46 +111,72 @@ class ParsingService:
                 backend.provider if isinstance(backend, DocumentParser) else None
             )
             if (
-                isinstance(provider, Chandra2Provider)
+                isinstance(provider, (Chandra2Provider, KDLProvider))
                 and provider.config.continuous_page_queue
                 and Path(path).suffix.lower() in provider.supported_extensions
             ):
                 key = id(backend)
-                if key not in chandra_groups:
-                    chandra_groups[key] = (backend, [])
-                chandra_groups[key][1].append((index, path, data_object))
+                if key not in continuous_groups:
+                    continuous_groups[key] = (backend, [])
+                continuous_groups[key][1].append((index, path, data_object))
                 continue
-            results[index] = self.parse(path, data_object)
+            emit(index, self.parse(path, data_object))
 
-        for backend, group in chandra_groups.values():
+        for backend, group in continuous_groups.values():
             provider = backend.provider
-            assert isinstance(provider, Chandra2Provider)
+            assert isinstance(provider, (Chandra2Provider, KDLProvider))
+            provider_name = provider.provider_name
+
+            def accept_provider_result(
+                group_index: int,
+                parsed: Any,
+            ) -> None:
+                index, _, data_object = group[group_index]
+                if isinstance(parsed, Exception):
+                    emit(
+                        index,
+                        _document_provider_failure(
+                            backend,
+                            data_object,
+                            parsed,
+                        ),
+                    )
+                    return
+                parsed.metadata.setdefault("parser", provider_name)
+                parsed.metadata["backend"] = provider_name
+                emit(
+                    index,
+                    ParseResult.success(
+                        data_object.object_id,
+                        provider_name,
+                        parsed,
+                        route="document",
+                    ),
+                )
+
             try:
-                parsed_documents = provider.parse_files(
-                    [(path, data_object) for _, path, data_object in group]
+                parsed_documents = provider.parse_files_with_errors(
+                    [(path, data_object) for _, path, data_object in group],
+                    on_document_complete=accept_provider_result,
                 )
                 if len(parsed_documents) != len(group):
                     raise RuntimeError(
-                        "Chandra2 returned a different number of documents than inputs."
+                        f"{provider_name} returned a different number of documents than inputs."
                     )
             except Exception as exc:
                 for index, _, data_object in group:
-                    results[index] = _document_provider_failure(
-                        backend,
-                        data_object,
-                        exc,
+                    emit(
+                        index,
+                        _document_provider_failure(
+                            backend,
+                            data_object,
+                            exc,
+                        ),
                     )
                 continue
 
-            for (index, _, data_object), parsed in zip(group, parsed_documents):
-                parsed.metadata.setdefault("parser", "chandra2")
-                parsed.metadata["backend"] = "chandra2"
-                results[index] = ParseResult.success(
-                    data_object.object_id,
-                    "chandra2",
-                    parsed,
-                    route="document",
-                )
+            for group_index, parsed in enumerate(parsed_documents):
+                accept_provider_result(group_index, parsed)
 
         if any(result is None for result in results):
             raise RuntimeError("ParsingService did not produce a result for every input.")
@@ -164,10 +201,21 @@ def _build_document_parser(
                 _provider_config(parser_config, "chandra2")
             )
             provider = Chandra2Provider(provider_config)
+        case "kdl":
+            provider_config = KDLConfig.from_mapping(
+                _provider_config(parser_config, "kdl")
+            )
+            provider = KDLProvider(provider_config)
+        case "kdl_pdf_inspector":
+            provider_config = KDLConfig.from_mapping(
+                _provider_config(parser_config, "kdl")
+            )
+            provider = KdlPdfInspectorProvider(provider_config)
         case _:
             raise ValueError(
                 "Unsupported document provider "
-                f"{provider_name!r}. Expected deferred, lift_api, or chandra2."
+                f"{provider_name!r}. Expected deferred, lift_api, chandra2, "
+                "kdl, or kdl_pdf_inspector."
             )
     return DocumentParser(
         provider,
@@ -203,6 +251,8 @@ def _normalize_provider_name(value: str) -> str:
         return "lift_api"
     if provider in {"chandra", "chandra2", "chandra_2"}:
         return "chandra2"
+    if provider in {"kdl", "kdl_frontier", "kdl_frontier_nano"}:
+        return "kdl"
     return provider
 
 

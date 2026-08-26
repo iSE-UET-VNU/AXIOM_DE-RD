@@ -11,8 +11,20 @@ dependencies = [
     "datalab-python-sdk",
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
+    "Markdown>=3.0",
+    # Corpus fetchers read the benchmark's parquet and pull its PDFs from the hub.
+    "huggingface_hub>=0.23",
+    "numpy>=1.26",
     "openai>=1.0.0",
+    "pyarrow>=14.0",
+    # Module name is pytrec_eval; without it run_retrieval reports ndcg@10 as
+    # null with a note rather than failing, so a run looks complete and scores
+    # nothing.
+    "pytrec_eval-terrier>=0.5.10",
     "openpyxl>=3.1.0",
+    "Pillow>=10.0.0",
+    "pydantic>=2.0.0",
+    "PyMuPDF>=1.24.0",
     "python-pptx>=1.0.0,<2.0.0",
     "python-docx>=1.2.0,<2.0.0",
     "python-dotenv>=1.0.0",
@@ -30,6 +42,7 @@ dependencies = [
 lift = ["datalab-python-sdk"]
 chandra2 = ["chandra-ocr>=0.2,<0.3"]
 chandra2-local = ["chandra-ocr[hf]>=0.2,<0.3"]
+pdf-inspector = ["pdf-inspector>=0.2.6,<0.3"]
 
 [tool.setuptools.package-data]
 "src.ingestion.parsing.lift" = ["schemas/*.json"]

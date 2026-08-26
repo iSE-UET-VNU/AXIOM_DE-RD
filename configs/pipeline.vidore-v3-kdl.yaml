@@ -1,0 +1,121 @@
+{
+  "input": {
+    "mode": "local_raw"
+  },
+  "s3_input": {
+    "uri_env": "S3_URI",
+    "profile_env": "AWS_PROFILE",
+    "region_env": "AWS_REGION",
+    "endpoint_url_env": "S3_ENDPOINT_URL",
+    "info_file": "data/raw/s3.info.txt",
+    "all_objects": false,
+    "object_key": null,
+    "object_key_env": "S3_OBJECT_KEY",
+    "file_name": null,
+    "max_size_bytes": 536870912,
+    "request_timeout_seconds": 60
+  },
+  "local_input": {
+    "path": "data/raw/benchmarks/vidore_v3",
+    "recursive": true,
+    "include_hidden": false,
+    "include_extensions": [
+      ".pdf"
+    ],
+    "max_files": null
+  },
+  "raw_dir": "data/raw",
+  "ingested_dir": "data/ingested/benchmarks/vidore-v3-kdl",
+  "cleaned_dir": "data/cleaned/benchmarks/vidore-v3-kdl",
+  "enriched_dir": "data/enriched/benchmarks/vidore-v3-kdl",
+  "embedded_dir": "data/embedded/benchmarks/vidore-v3-kdl",
+  "output_dir": "data/output/benchmarks/vidore-v3-kdl",
+  "enabled_modules": [
+    "ingestion",
+    "cleaning",
+    "enrichment",
+    "chunking_embedding",
+    "integration",
+    "artifacts"
+  ],
+  "parsing": {
+    "provider": "kdl",
+    "pptx": {
+      "extract_images": true
+    },
+    "word": {
+      "extract_images": true,
+      "soffice_path": null,
+      "conversion_timeout_seconds": 120
+    },
+    "chandra2": {
+      "method": "vllm",
+      "continuous_page_queue": true,
+      "batch_size": 64,
+      "max_workers": 256,
+      "render_processes": 32,
+      "request_batch_size": 1,
+      "request_timeout_seconds": 3600,
+      "max_output_tokens": 12384,
+      "max_retries": 2,
+      "include_images": true,
+      "include_headers_footers": true,
+      "save_raw_outputs": true,
+      "refine_tables": false,
+      "table_max_workers": 8,
+      "table_max_output_tokens": 8192,
+      "table_crop_margin_ratio": 0.02,
+      "table_crop_min_short_side": 1536,
+      "table_crop_max_long_side": 3072,
+      "table_crop_max_pixels": 6291456,
+      "output_dir": "data/work/benchmarks/vidore-v3-chandra2"
+    },
+    "kdl": {
+      "method": "vllm",
+      "continuous_page_queue": true,
+      "max_workers": 64,
+      "render_processes": 32,
+      "bbox_max_workers": 256,
+      "dpi": 144,
+      "request_timeout_seconds": 3600,
+      "max_retries": 2,
+      "max_pages": 400,
+      "layout_max_output_tokens": 6000,
+      "text_max_output_tokens": 2048,
+      "table_max_output_tokens": 5500,
+      "picture_max_output_tokens": 4096,
+      "formula_max_output_tokens": 128,
+      "save_raw_outputs": true,
+      "output_dir": "data/work/benchmarks/vidore-v3-kdl"
+    },
+    "lift_api": {
+      "api_key_env": "DATALAB_API_KEY",
+      "mode": "accurate",
+      "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
+      "fallback_to_local": false,
+      "extract_images": true,
+      "save_raw_outputs": true
+    }
+  },
+  "chunking_embedding": {
+    "chunker": "fixed_overlap",
+    "chunker_params": {
+      "n_words": 512,
+      "overlap": 128
+    },
+    "max_rows_per_chunk": 20,
+    "embedder": "openrouter_te3s",
+    "embedder_params": {
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "api_key_env": "OPENROUTER_API_KEY",
+      "batch_size": 64,
+      "cache_dir": "data/work/embedding_cache/text-embedding-3-small",
+      "app_title": "AXIOM_DE-RD"
+    },
+    "retrieval_profile": "hybrid_default"
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}

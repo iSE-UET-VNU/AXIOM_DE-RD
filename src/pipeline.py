@@ -20,7 +20,12 @@ from . import (
     s3_reader,
 )
 from .models import PipelineState, make_id
-from .utils.config import load_config, resolve_parser_config, resolve_project_path
+from .utils.config import (
+    default_pipeline_config_path,
+    load_config,
+    resolve_parser_config,
+    resolve_project_path,
+)
 from .utils.env import load_dotenv_file
 from .utils.paths import portable_path
 
@@ -35,7 +40,7 @@ MODULE_ORDER = [
 
 
 def run_pipeline(
-    config_path: str | Path = "configs/pipeline.yaml",
+    config_path: str | Path | None = None,
     *,
     presigned_inventory: dict[str, Any] | None = None,
     s3_uri: str | None = None,
@@ -47,11 +52,9 @@ def run_pipeline(
     """Run the non-table document engine after public input routing."""
     project_root = Path(__file__).resolve().parents[1]
     load_dotenv_file(project_root)
+    config_path = config_path or default_pipeline_config_path()
     config_file = _resolve_config_path(project_root, config_path)
     config = load_config(config_file)
-
-    _configure_logging(config)
-    logger = logging.getLogger(__name__)
 
     raw_root = resolve_project_path(project_root, config.get("raw_dir", "data/raw"))
     ingested_root = resolve_project_path(project_root, config.get("ingested_dir", "data/ingested"))
@@ -69,6 +72,9 @@ def run_pipeline(
     embedded_dir = embedded_root / run_id
     output_dir = output_root / run_id
 
+    log_path = _configure_logging(config, project_root=project_root, run_id=run_id)
+    logger = logging.getLogger(__name__)
+
     state = PipelineState(
         run_id=run_id,
         input_source=None,
@@ -80,7 +86,7 @@ def run_pipeline(
         output_dir=portable_path(output_dir, project_root),
     )
 
-    logger.info("Starting pipeline run %s", state.run_id)
+    logger.info("Starting pipeline run %s (log_file=%s)", state.run_id, log_path)
 
     if "ingestion" in enabled_modules:
         input_config = config.get("input", {})
@@ -113,6 +119,7 @@ def run_pipeline(
         )
         state.ingestion_config = parser_config
         expected_document_count = 1
+        continuous_queue = _continuous_document_queue(parser_config)
 
         if input_mode == "local_raw":
             if s3_object_key:
@@ -128,12 +135,48 @@ def run_pipeline(
             state.input_source = batch.source
             state.raw_dir = batch.source
             expected_document_count = len(batch.inputs)
-            if _uses_continuous_chandra_queue(parser_config):
-                logger.info(
-                    "Submitting %s local document(s) to the continuous Chandra2 page queue",
-                    len(batch.inputs),
-                )
-                partial_result = ingestion.run_many(
+            if continuous_queue is not None:
+                queue_provider, queue_config = continuous_queue
+                if queue_provider == "chandra2":
+                    logger.info(
+                        "Submitting %s local document(s) to the continuous Chandra2 "
+                        "page queue (%s render process(es), %s rendered-image "
+                        "slot(s), %s image(s) per vLLM request)",
+                        len(batch.inputs),
+                        queue_config.get("render_processes", 4),
+                        queue_config.get("max_workers", 4),
+                        queue_config.get("request_batch_size", 1),
+                    )
+                else:
+                    scheduler = queue_config.get(
+                        "scheduler", "parsebench_document"
+                    )
+                    if scheduler == "global_two_phase":
+                        logger.info(
+                            "Submitting %s local document(s) to the global two-phase "
+                            "KDL scheduler (%s render process(es), %s shared request "
+                            "worker(s), %s sequence(s) per batch, strict layout "
+                            "barrier)",
+                            len(batch.inputs),
+                            queue_config.get("render_processes", 32),
+                            queue_config.get("request_workers", 8),
+                            queue_config.get("request_batch_size", 1),
+                        )
+                    else:
+                        logger.info(
+                            "Submitting %s local document(s) to the ParseBench-style "
+                            "KDL document queue (%s render process(es), %s concurrent "
+                            "document(s), one active KDL request per document, %s "
+                            "sequence(s) per batch)",
+                            len(batch.inputs),
+                            queue_config.get("render_processes", 32),
+                            min(
+                                queue_config.get("max_workers", 32),
+                                queue_config.get("bbox_max_workers", 32),
+                            ),
+                            queue_config.get("request_batch_size", 1),
+                        )
+                ingestion.run_many(
                     [
                         ingestion.IngestionInput(
                             path=item.path,
@@ -144,14 +187,16 @@ def run_pipeline(
                     ],
                     parser_config=parser_config,
                     project_root=project_root,
-                )
-                _accept_ingestion_result(
-                    state,
-                    partial_result,
-                    ingested_dir,
-                    project_root,
-                    expected_document_count,
-                    persist_artifacts,
+                    on_document_complete=lambda partial_result: (
+                        _accept_ingestion_result(
+                            state,
+                            partial_result,
+                            ingested_dir,
+                            project_root,
+                            expected_document_count,
+                            persist_artifacts,
+                        )
+                    ),
                 )
             else:
                 for item in batch.inputs:
@@ -232,6 +277,10 @@ def run_pipeline(
                 )
         state.completed_modules.append("ingestion")
         if persist_artifacts:
+            rewrite_completed_documents = bool(
+                continuous_queue is not None
+                and continuous_queue[1].get("scheduler") == "global_two_phase"
+            )
             _record_artifact_paths(
                 state,
                 artifacts.write_ingested_artifacts(
@@ -244,7 +293,7 @@ def run_pipeline(
                         else "completed"
                     ),
                     expected_document_count=expected_document_count,
-                    document_ids=[],
+                    document_ids=(None if rewrite_completed_documents else []),
                 ),
                 project_root,
             )
@@ -410,7 +459,14 @@ def _accept_ingestion_result(
 
 def cli(argv: list[str] | None = None) -> Any:
     parser = argparse.ArgumentParser(description="Run the AXIOM_DE-RD pipeline scaffold.")
-    parser.add_argument("--config", default="configs/pipeline.yaml", help="Path to pipeline config.")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Path to pipeline config. Defaults to AXIOM_PIPELINE_CONFIG or "
+            "configs/pipeline.kdl-pdf-inspector.yaml."
+        ),
+    )
     input_group = parser.add_mutually_exclusive_group()
     input_group.add_argument(
         "--s3-uri",
@@ -439,8 +495,7 @@ def cli(argv: list[str] | None = None) -> Any:
     )
     args = parser.parse_args(argv)
 
-    # Import lazily because the dispatcher uses run_pipeline as the document
-    # engine after it has routed spreadsheet inputs to TableAgent.
+    # Import lazily to avoid a dispatcher/pipeline import cycle.
     from .dispatcher import dispatch_dataeng_inputs
 
     result = dispatch_dataeng_inputs(
@@ -452,18 +507,6 @@ def cli(argv: list[str] | None = None) -> Any:
         local_raw=args.local_raw,
     )
     state = result.pipeline_state
-    if result.table_document_count:
-        metadata = result.response.get("metadata", {})
-        print(
-            "AXIOM completed "
-            f"{metadata.get('document_count', 0)} document(s), including "
-            f"{result.table_document_count} workbook(s) routed to TableAgent."
-        )
-        print(json.dumps(result.response, ensure_ascii=False, indent=2))
-        return result
-
-    if state is None:
-        raise RuntimeError("The document pipeline did not return a run state.")
     run_status = "completed_with_errors" if state.errors else "completed"
     print(f"Pipeline run {state.run_id} {run_status}.")
     print(f"Modules: {', '.join(state.completed_modules) or 'none'}")
@@ -517,29 +560,87 @@ def _resolve_input_mode(
     return mode
 
 
-def _configure_logging(config: dict[str, Any]) -> None:
+def _configure_logging(
+    config: dict[str, Any], *, project_root: Path, run_id: str
+) -> Path | None:
     logging_config = config.get("logging", {})
     level_name = "INFO"
+    console = True
+    file_template: str | None = "data/logs/pipeline-{run_id}.log"
     if isinstance(logging_config, dict):
         level_name = str(logging_config.get("level", level_name))
-    logging.basicConfig(
-        level=getattr(logging, level_name.upper(), logging.INFO),
-        format="%(levelname)s %(name)s - %(message)s",
+        console = bool(logging_config.get("console", console))
+        configured_file = logging_config.get("file", file_template)
+        file_template = str(configured_file) if configured_file else None
+
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    root = logging.getLogger()
+    root.setLevel(level)
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s - %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
+    if console and not any(
+        isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+        for handler in root.handlers
+    ):
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        console_handler.setLevel(level)
+        root.addHandler(console_handler)
 
-def _uses_continuous_chandra_queue(parser_config: dict[str, Any]) -> bool:
+    if file_template is None:
+        return None
+    file_name = file_template.format(run_id=run_id)
+    file_path = Path(file_name)
+    if not file_path.is_absolute():
+        file_path = project_root / file_path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    for handler in list(root.handlers):
+        if getattr(handler, "_axiom_run_log", False):
+            root.removeHandler(handler)
+            handler.close()
+    file_handler = logging.FileHandler(file_path, encoding="utf-8")
+    file_handler._axiom_run_log = True
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(level)
+    root.addHandler(file_handler)
+    return file_path
+
+
+def _continuous_document_queue(
+    parser_config: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
     provider = str(parser_config.get("provider") or "").strip().lower()
     document_config = parser_config.get("document")
     if provider in {"", "router"} and isinstance(document_config, dict):
         provider = str(document_config.get("provider") or "").strip().lower()
     provider = provider.replace("-", "_")
-    chandra_config = parser_config.get("chandra2")
-    return (
-        provider in {"chandra", "chandra2", "chandra_2"}
-        and isinstance(chandra_config, dict)
-        and bool(chandra_config.get("continuous_page_queue", False))
-    )
+    aliases = {
+        "chandra": "chandra2",
+        "chandra2": "chandra2",
+        "chandra_2": "chandra2",
+        "kdl": "kdl",
+        "kdl_frontier": "kdl",
+        "kdl_frontier_nano": "kdl",
+        "kdl_pdf_inspector": "kdl",
+    }
+    normalized = aliases.get(provider)
+    provider_config = parser_config.get(normalized or "")
+    if (
+        normalized is not None
+        and isinstance(provider_config, dict)
+        and bool(
+            provider_config.get(
+                "continuous_page_queue",
+                normalized == "kdl",
+            )
+        )
+    ):
+        return normalized, provider_config
+    return None
 
 
 def _record_artifact_paths(

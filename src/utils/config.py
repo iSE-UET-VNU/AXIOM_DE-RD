@@ -6,9 +6,19 @@ requiring PyYAML. If PyYAML is installed, regular YAML files are also accepted.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 import json
+
+
+DEFAULT_PIPELINE_CONFIG_PATH = "configs/pipeline.kdl-pdf-inspector.yaml"
+
+
+def default_pipeline_config_path() -> str:
+    """Return the shared deployment/CLI config, allowing an environment override."""
+
+    return os.getenv("AXIOM_PIPELINE_CONFIG", DEFAULT_PIPELINE_CONFIG_PATH)
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -22,7 +32,8 @@ def load_config(path: str | Path) -> dict[str, Any]:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                "PyYAML is not installed, so pipeline.yaml must be JSON-compatible."
+                "PyYAML is not installed, so the pipeline config must be "
+                "JSON-compatible."
             ) from exc
     else:
         data = yaml.safe_load(text) or {}
@@ -65,6 +76,13 @@ def resolve_parser_config(
         chandra_config["output_dir"] = str(Path(parser_assets_dir))
         chandra_config["project_root"] = str(project_root)
         parser_config["chandra2"] = chandra_config
+
+    kdl_config = parser_config.get("kdl")
+    if isinstance(kdl_config, dict):
+        kdl_config = dict(kdl_config)
+        kdl_config["output_dir"] = str(Path(parser_assets_dir))
+        kdl_config["project_root"] = str(project_root)
+        parser_config["kdl"] = kdl_config
 
     pptx_config = parser_config.get("pptx")
     pptx_config = dict(pptx_config) if isinstance(pptx_config, dict) else {}

@@ -10,6 +10,7 @@ from typing import Any
 from ..chunking_embedding.document_view import DocumentView, document_from_enriched_data
 from ..chunking_embedding.lexical import build_corpus_statistics
 from ..models import DataObject, EnrichedData, ParsedData, PipelineState
+from ..reading_order import reading_order_from_rows
 from ..utils.paths import portable_path
 from .manifests import build_stage_metadata
 from .writer import LocalArtifactWriter
@@ -208,6 +209,7 @@ def write_output_artifacts(
             f"documents/{document_id}.json",
             {
                 "document": _output_document(data_object, document, enriched),
+                "content": _output_content(document, enriched, parsed),
                 "ingest": _stage_data(
                     parsed,
                     source=data_object,
@@ -238,6 +240,10 @@ def write_output_artifacts(
             },
             document_schema={
                 "document": "consumer-facing document identity and source summary",
+                "content": (
+                    "semantic content plus ordered source blocks and reading-order "
+                    "provenance; one document_contents row per key"
+                ),
                 "ingest": "source object and parsed data",
                 "clean": "cleaned data",
                 "enrich": "enriched data",
@@ -294,6 +300,53 @@ def _output_document(
     if source_refs:
         payload["source_refs"] = source_refs
     return _without_none(payload)
+
+
+def _output_content(
+    document: DocumentView | None,
+    enriched: EnrichedData | None,
+    parsed: ParsedData | None = None,
+) -> dict[str, Any]:
+    "Semantic content, keyed by content type."
+    
+    if document is None:
+        return {
+            "main_text": "",
+            "tables": [],
+            "figures": [],
+            "formulas": [],
+            "blocks": [],
+            "reading_order": [],
+            "reading_order_meta": {
+                "source": "unavailable",
+                "complete": False,
+                "block_count": 0,
+            },
+        }
+    if enriched is not None:
+        source_rows = enriched.rows
+    elif parsed is not None:
+        source_rows = parsed.rows
+    else:
+        source_rows = []
+    blocks, reading_order, reading_order_meta = reading_order_from_rows(source_rows)
+    payload: dict[str, Any] = {
+        "main_text": document.main_text,
+        "tables": _strip_parser_audit(document.tables),
+        "figures": _strip_parser_audit(document.figures),
+        "formulas": _strip_parser_audit(document.formulas),
+        "blocks": blocks,
+        "reading_order": reading_order,
+        "reading_order_meta": reading_order_meta,
+    }
+    if enriched and enriched.annotations:
+        payload["annotations"] = _strip_parser_audit(enriched.annotations)
+    if enriched and enriched.profile:
+        payload["profile"] = _strip_parser_audit(enriched.profile)
+    source_refs = _extraction_source_refs(enriched, ("main_text", "formulas"))
+    if source_refs:
+        payload["source_refs"] = source_refs
+    return payload
 
 
 def _stage_data(

@@ -13,7 +13,7 @@ COPY scripts ./scripts
 COPY src ./src
 COPY streamlit_app.py ./
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[pdf-inspector]"
 
 EXPOSE 8000
 

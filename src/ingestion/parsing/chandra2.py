@@ -3,22 +3,34 @@
 from __future__ import annotations
 
 from collections import Counter
-from concurrent.futures import Executor, Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Executor,
+    Future,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from html.parser import HTMLParser
 import hashlib
 import json
+import logging
 import math
+import multiprocessing
 import os
+from queue import Empty
 import re
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from ...models import DataObject, ParsedData
 from ...utils.paths import portable_path
 from .contracts import AXIOM_NATIVE_BLOCK_SOURCE
+
+logger = logging.getLogger(__name__)
 
 CHANDRA2_EXTENSIONS = frozenset(
     {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".tiff"}
@@ -46,6 +58,9 @@ class Chandra2Config:
     continuous_page_queue: bool = False
     batch_size: int = 28
     max_workers: int = 4
+    render_processes: int = 4
+    request_batch_size: int = 1
+    request_timeout_seconds: float = 3600.0
     max_output_tokens: int = 12384
     max_retries: int = 2
     include_images: bool = True
@@ -71,6 +86,13 @@ class Chandra2Config:
             raise ValueError(
                 "chandra2.continuous_page_queue is only supported with method='vllm'"
             )
+        max_workers = _positive_int(config, "max_workers", 4)
+        request_batch_size = _positive_int(config, "request_batch_size", 1)
+        if continuous_page_queue and request_batch_size > max_workers:
+            raise ValueError(
+                "chandra2.request_batch_size must not exceed max_workers; "
+                "max_workers is also the rendered-image pool capacity"
+            )
         return cls(
             method=method,
             continuous_page_queue=continuous_page_queue,
@@ -79,7 +101,18 @@ class Chandra2Config:
                 "batch_size",
                 1 if method == "hf" else 28,
             ),
-            max_workers=_positive_int(config, "max_workers", 4),
+            max_workers=max_workers,
+            render_processes=_positive_int(
+                config,
+                "render_processes",
+                min(max_workers, 4),
+            ),
+            request_batch_size=request_batch_size,
+            request_timeout_seconds=_positive_float(
+                config,
+                "request_timeout_seconds",
+                3600.0,
+            ),
             max_output_tokens=_positive_int(config, "max_output_tokens", 12384),
             max_retries=_non_negative_int(config, "max_retries", 2),
             include_images=bool(config.get("include_images", True)),
@@ -122,14 +155,23 @@ class _ChandraRuntime:
     load_file: Callable[[str, dict[str, Any]], list[Any]]
     inference_manager: Callable[..., Any]
     batch_input_item: Callable[..., Any]
+    page_count: Callable[[str], int] | None = None
+    load_pages: Callable[[str, int, int], list[Any]] | None = None
+    process_rendering: bool = False
 
 
 @dataclass
 class _PreparedDocument:
     file_path: Path
     data_object: DataObject
-    pages: list[Any]
-    results: list[Any | None]
+    page_count: int = 0
+    pages: list[Any | None] = field(default_factory=list)
+    results: list[Any | None] = field(default_factory=list)
+    preloaded_pages: list[Any] | None = None
+    next_page: int = 0
+    completed_pages: int = 0
+    in_flight_pages: int = 0
+    failure: Exception | None = None
 
 
 @dataclass(frozen=True)
@@ -137,7 +179,6 @@ class _PageJob:
     document_id: str
     document_index: int
     page_index: int
-    input_item: Any
 
 
 @dataclass
@@ -206,131 +247,835 @@ class Chandra2Provider:
         self,
         documents: list[tuple[str | Path, DataObject]],
     ) -> list[ParsedData]:
-        """Parse multiple documents through one continuous vLLM page queue."""
+        """Parse multiple documents and raise after preserving successful outputs."""
+
+        outcomes = self.parse_files_with_errors(documents)
+        failures = [
+            f"{Path(path).name}: {outcome}"
+            for (path, _), outcome in zip(documents, outcomes)
+            if isinstance(outcome, Exception)
+        ]
+        if failures:
+            raise RuntimeError(
+                "Chandra2 failed to parse document(s): " + "; ".join(failures)
+            )
+        return [outcome for outcome in outcomes if isinstance(outcome, ParsedData)]
+
+    def parse_files_with_errors(
+        self,
+        documents: list[tuple[str | Path, DataObject]],
+        *,
+        on_document_complete: (
+            Callable[[int, ParsedData | Exception], None] | None
+        ) = None,
+    ) -> list[ParsedData | Exception]:
+        """Parse a batch while keeping failures scoped to their source document."""
 
         if not documents:
             return []
         if not self.config.continuous_page_queue:
-            return [
-                self.parse_file(path, data_object)
-                for path, data_object in documents
-            ]
+            outcomes: list[ParsedData | Exception] = []
+            for path, data_object in documents:
+                try:
+                    outcomes.append(self.parse_file(path, data_object))
+                except Exception as exc:
+                    outcomes.append(exc)
+                if on_document_complete is not None:
+                    on_document_complete(len(outcomes) - 1, outcomes[-1])
+            return outcomes
+        return self._parse_files_continuous(
+            documents,
+            on_document_complete=on_document_complete,
+        )
+
+    def _parse_files_continuous(
+        self,
+        documents: list[tuple[str | Path, DataObject]],
+        *,
+        on_document_complete: (
+            Callable[[int, ParsedData | Exception], None] | None
+        ) = None,
+    ) -> list[ParsedData | Exception]:
+        """Render and infer one page per worker without limiting active PDFs."""
 
         started = time.monotonic()
         runtime = self._get_runtime()
-        prepared: list[_PreparedDocument] = []
-        jobs: list[_PageJob] = []
-        for document_index, (path, data_object) in enumerate(documents):
-            file_path, pages = self._load_document(path, runtime)
-            prepared.append(
-                _PreparedDocument(
-                    file_path=file_path,
-                    data_object=data_object,
-                    pages=pages,
-                    results=[None] * len(pages),
-                )
-            )
-            jobs.extend(
-                _PageJob(
-                    document_id=data_object.object_id,
-                    document_index=document_index,
-                    page_index=page_index,
-                    input_item=runtime.batch_input_item(
-                        image=image,
-                        prompt_type="ocr_layout",
-                    ),
-                )
-                for page_index, image in enumerate(pages)
+        self._get_manager()
+        if runtime.process_rendering:
+            return self._parse_files_multiprocess(
+                documents,
+                runtime,
+                started,
+                on_document_complete=on_document_complete,
             )
 
-        # InferenceManager.generate() waits for every item in its input batch.
-        # Submit one page per future instead so completed documents can be
-        # finalized and persisted while slow pages are still retrying.
-        self._get_manager()
-        completed_page_counts = [0] * len(prepared)
+        prepared = [
+            _PreparedDocument(Path(path), data_object)
+            for path, data_object in documents
+        ]
         parsed_documents: list[ParsedData | None] = [None] * len(prepared)
-        failures: list[str] = []
-        worker_count = min(self.config.max_workers, len(jobs))
+        reported_documents: set[int] = set()
+        schedulable_documents: list[int] = []
+        round_robin_cursor = 0
+
+        def report(document_index: int, outcome: ParsedData | Exception) -> None:
+            if document_index in reported_documents:
+                return
+            reported_documents.add(document_index)
+            if on_document_complete is not None:
+                on_document_complete(document_index, outcome)
+
+        # Counting pages opens each PDF briefly but does not render any page.
+        # Every valid document then participates in one global round-robin queue.
+        for document_index, document in enumerate(prepared):
+            self._activate_stream_document(document, runtime)
+            if document.failure is None:
+                schedulable_documents.append(document_index)
+
         finalize_worker_count = min(
             self.config.table_max_workers,
             len(prepared),
         )
-        refinement_worker_count = self.config.table_max_workers
         with (
-            ThreadPoolExecutor(max_workers=worker_count) as page_executor,
+            ThreadPoolExecutor(max_workers=self.config.max_workers) as page_executor,
             ThreadPoolExecutor(max_workers=finalize_worker_count) as finalize_executor,
             ThreadPoolExecutor(
-                max_workers=refinement_worker_count
+                max_workers=self.config.table_max_workers
             ) as refinement_executor,
         ):
-            future_to_job = {
-                page_executor.submit(
-                    self._generate_batch,
-                    [job.input_item],
-                    max_workers=1,
-                ): job
-                for job in jobs
-            }
-            future_to_document: dict[Future[ParsedData], int] = {}
-            for future in as_completed(future_to_job):
-                job = future_to_job[future]
-                document = prepared[job.document_index]
-                if document.data_object.object_id != job.document_id:
-                    raise RuntimeError(
-                        "Chandra2 page job document metadata is inconsistent."
+            page_futures: dict[Future[tuple[Any, Any | None]], _PageJob] = {}
+            finalize_futures: dict[Future[ParsedData], int] = {}
+
+            while True:
+                while len(page_futures) < self.config.max_workers:
+                    scheduled = self._next_schedulable_document(
+                        prepared,
+                        schedulable_documents,
+                        round_robin_cursor,
                     )
-                try:
-                    document.results[job.page_index] = future.result()[0]
-                except Exception:
-                    # Preserve completion of other documents. The missing page
-                    # is reported with the rest of the page-level failures.
-                    document.results[job.page_index] = None
-                completed_page_counts[job.document_index] += 1
-                if completed_page_counts[job.document_index] != len(document.pages):
-                    continue
+                    if scheduled is None:
+                        break
+                    document_index, round_robin_cursor = scheduled
+                    document = prepared[document_index]
+                    page_index = document.next_page
+                    document.next_page += 1
+                    job = _PageJob(
+                        document_id=document.data_object.object_id,
+                        document_index=document_index,
+                        page_index=page_index,
+                    )
+                    try:
+                        future = page_executor.submit(
+                            self._render_and_generate_page,
+                            runtime,
+                            document,
+                            page_index,
+                        )
+                    except Exception as exc:
+                        document.failure = RuntimeError(
+                            f"{page_index + 1}: failed to submit page: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        document.next_page = document.page_count
+                        if document.in_flight_pages == 0:
+                            self._discard_stream_document(document)
+                            self._remove_schedulable_document(
+                                schedulable_documents,
+                                document_index,
+                            )
+                        continue
+                    page_futures[future] = job
+                    document.in_flight_pages += 1
 
-                failed_pages = [
-                    index + 1
-                    for index, result in enumerate(document.results)
-                    if result is None or bool(getattr(result, "error", False))
-                ]
-                if failed_pages:
-                    pages_text = ", ".join(str(page) for page in failed_pages)
-                    failures.append(f"{document.file_path.name}: {pages_text}")
-                    continue
+                if not page_futures:
+                    break
 
-                finalize_future = finalize_executor.submit(
-                    self._finalize_document,
-                    runtime,
-                    document.file_path,
-                    document.data_object,
-                    document.pages,
-                    list(document.results),
-                    started=started,
-                    inference_mode="continuous_vllm",
-                    refinement_executor=refinement_executor,
+                completed, _ = wait(
+                    tuple(page_futures),
+                    timeout=0.05,
+                    return_when=FIRST_COMPLETED,
                 )
-                future_to_document[finalize_future] = job.document_index
+                for future in completed:
+                    job = page_futures.pop(future)
+                    document = prepared[job.document_index]
+                    document.in_flight_pages -= 1
+                    document.completed_pages += 1
+                    retained_image: Any | None = None
+                    try:
+                        result, retained_image = future.result()
+                        if document.failure is None:
+                            _write_stream_page_artifacts(
+                                self.config,
+                                document.file_path,
+                                document.data_object,
+                                job.page_index,
+                                document.page_count,
+                                result,
+                            )
+                            document.results[job.page_index] = result
+                            if self.config.refine_tables:
+                                document.pages[job.page_index] = retained_image
+                                retained_image = None
+                    except Exception as exc:
+                        if document.failure is None:
+                            document.failure = RuntimeError(
+                                f"{job.page_index + 1}: {exc}"
+                            )
+                        document.next_page = document.page_count
+                    finally:
+                        _release_image(retained_image)
 
-            for future in as_completed(future_to_document):
-                document_index = future_to_document[future]
+                    if document.failure is not None:
+                        if document.in_flight_pages == 0:
+                            self._discard_stream_document(document)
+                            self._remove_schedulable_document(
+                                schedulable_documents,
+                                job.document_index,
+                            )
+                        continue
+                    if document.completed_pages == document.page_count:
+                        future = finalize_executor.submit(
+                            self._finalize_stream_document,
+                            runtime,
+                            document,
+                            started,
+                            refinement_executor,
+                        )
+                        finalize_futures[future] = job.document_index
+                        self._remove_schedulable_document(
+                            schedulable_documents,
+                            job.document_index,
+                        )
+
+                completed_finalizations = [
+                    future
+                    for future in finalize_futures
+                    if future.done()
+                ]
+                for future in completed_finalizations:
+                    document_index = finalize_futures.pop(future)
+                    document = prepared[document_index]
+                    try:
+                        parsed = future.result()
+                    except Exception as exc:
+                        document.failure = exc
+                        report(document_index, exc)
+                    else:
+                        parsed_documents[document_index] = parsed
+                        report(document_index, parsed)
+
+            for future in as_completed(tuple(finalize_futures)):
+                document_index = finalize_futures.pop(future)
                 document = prepared[document_index]
                 try:
                     parsed_documents[document_index] = future.result()
                 except Exception as exc:
-                    failures.append(
-                        f"{document.file_path.name}: "
-                        f"{type(exc).__name__}: {exc}"
+                    document.failure = exc
+                    report(document_index, exc)
+                else:
+                    report(document_index, parsed_documents[document_index])
+
+        outcomes: list[ParsedData | Exception] = []
+        for index, document in enumerate(prepared):
+            parsed = parsed_documents[index]
+            if parsed is not None:
+                outcomes.append(parsed)
+            elif document.failure is not None:
+                outcomes.append(document.failure)
+            else:
+                outcomes.append(
+                    RuntimeError("Chandra2 did not finalize the document.")
+                )
+            report(index, outcomes[-1])
+        return outcomes
+
+    def _parse_files_multiprocess(
+        self,
+        documents: list[tuple[str | Path, DataObject]],
+        runtime: _ChandraRuntime,
+        started: float,
+        *,
+        on_document_complete: (
+            Callable[[int, ParsedData | Exception], None] | None
+        ) = None,
+    ) -> list[ParsedData | Exception]:
+        """Render whole documents in isolated PDFium processes."""
+
+        prepared = [
+            _PreparedDocument(Path(path), data_object)
+            for path, data_object in documents
+        ]
+        parsed_documents: list[ParsedData | None] = [None] * len(prepared)
+        reported_documents: set[int] = set()
+
+        def report(document_index: int, outcome: ParsedData | Exception) -> None:
+            if document_index in reported_documents:
+                return
+            reported_documents.add(document_index)
+            if on_document_complete is not None:
+                on_document_complete(document_index, outcome)
+
+        render_document_indexes: list[int] = []
+        for document_index, document in enumerate(prepared):
+            try:
+                self._validate_document_path(document.file_path)
+            except Exception as exc:
+                document.failure = exc
+            else:
+                render_document_indexes.append(document_index)
+
+        if not render_document_indexes:
+            outcomes = [
+                document.failure
+                or RuntimeError("Chandra2 could not schedule the document.")
+                for document in prepared
+            ]
+            for document_index, outcome in enumerate(outcomes):
+                report(document_index, outcome)
+            return outcomes
+
+        context = multiprocessing.get_context("spawn")
+        task_queue = context.Queue()
+        rendered_queue = context.Queue(maxsize=self.config.max_workers)
+        image_slots = context.BoundedSemaphore(self.config.max_workers)
+        cancelled = context.Array("b", len(prepared), lock=False)
+        render_process_count = min(
+            self.config.render_processes,
+            len(render_document_indexes),
+        )
+        render_processes = [
+            context.Process(
+                target=_render_document_worker,
+                args=(task_queue, rendered_queue, image_slots, cancelled),
+                name=f"chandra2-render-{index + 1}",
+            )
+            for index in range(render_process_count)
+        ]
+        for process in render_processes:
+            process.start()
+        for document_index in render_document_indexes:
+            task_queue.put(
+                (
+                    document_index,
+                    str(prepared[document_index].file_path),
+                )
+            )
+        for _ in render_processes:
+            task_queue.put(None)
+
+        finalize_worker_count = min(
+            self.config.table_max_workers,
+            len(prepared),
+        )
+        render_done: set[int] = set()
+        finalizing: set[int] = set()
+        dead_process_timeouts = 0
+        page_futures: dict[Future[list[Any]], list[_PageJob]] = {}
+        future_images: dict[Future[list[Any]], list[Any]] = {}
+        pending_pages: list[tuple[_PageJob, Any, Any]] = []
+        finalize_futures: dict[Future[ParsedData], int] = {}
+        request_batch_size = self.config.request_batch_size
+        max_inflight_requests = max(
+            1,
+            self.config.max_workers // request_batch_size,
+        )
+        batch_client: Any | None = None
+
+        def mark_failure(document_index: int, error: Exception) -> None:
+            document = prepared[document_index]
+            if document.failure is None:
+                document.failure = error
+            cancelled[document_index] = 1
+
+        def maybe_finalize(
+            document_index: int,
+            executor: Executor,
+            refinement_executor: Executor,
+        ) -> None:
+            document = prepared[document_index]
+            if (
+                document_index in finalizing
+                or document.failure is not None
+                or document_index not in render_done
+                or document.page_count <= 0
+                or document.in_flight_pages != 0
+                or document.completed_pages != document.page_count
+            ):
+                return
+            future = executor.submit(
+                self._finalize_stream_document,
+                runtime,
+                document,
+                started,
+                refinement_executor,
+            )
+            finalize_futures[future] = document_index
+            finalizing.add(document_index)
+
+        try:
+            if request_batch_size > 1:
+                batch_client = self._open_vllm_batch_client()
+            with (
+                ThreadPoolExecutor(
+                    max_workers=max_inflight_requests
+                ) as page_executor,
+                ThreadPoolExecutor(
+                    max_workers=finalize_worker_count
+                ) as finalize_executor,
+                ThreadPoolExecutor(
+                    max_workers=self.config.table_max_workers
+                ) as refinement_executor,
+            ):
+                def submit_pending_batches(*, force: bool = False) -> None:
+                    while (
+                        pending_pages
+                        and len(page_futures) < max_inflight_requests
+                        and (force or len(pending_pages) >= request_batch_size)
+                    ):
+                        take = min(request_batch_size, len(pending_pages))
+                        selected = pending_pages[:take]
+                        del pending_pages[:take]
+
+                        active: list[tuple[_PageJob, Any, Any]] = []
+                        for job, input_item, image in selected:
+                            document = prepared[job.document_index]
+                            if document.failure is None:
+                                active.append((job, input_item, image))
+                                continue
+                            document.in_flight_pages -= 1
+                            _release_image(image)
+                            image_slots.release()
+
+                        if not active:
+                            continue
+
+                        jobs = [item[0] for item in active]
+                        inputs = [item[1] for item in active]
+                        images = [item[2] for item in active]
+                        if request_batch_size > 1:
+                            future = page_executor.submit(
+                                self._generate_vllm_request_batch,
+                                batch_client,
+                                inputs,
+                            )
+                        else:
+                            future = page_executor.submit(
+                                self._generate_batch,
+                                inputs,
+                                max_workers=1,
+                            )
+                        page_futures[future] = jobs
+                        future_images[future] = images
+
+                while (
+                    len(render_done) < len(render_document_indexes)
+                    or page_futures
+                    or pending_pages
+                    or finalize_futures
+                ):
+                    received_event = False
+                    try:
+                        event = rendered_queue.get(timeout=0.05)
+                        received_event = True
+                    except Empty:
+                        event = None
+
+                    if event is not None:
+                        event_type, document_index, page_index, payload = event
+                        document = prepared[document_index]
+                        if event_type == "started":
+                            page_count = int(payload)
+                            if page_count <= 0:
+                                mark_failure(
+                                    document_index,
+                                    RuntimeError(
+                                        "Chandra2 could not load any pages from "
+                                        f"the document: {document.file_path.name}"
+                                    ),
+                                )
+                            else:
+                                document.page_count = page_count
+                                document.pages = [None] * page_count
+                                document.results = [None] * page_count
+                        elif event_type == "page":
+                            if document.failure is not None:
+                                image_slots.release()
+                            else:
+                                image: Any | None = None
+                                try:
+                                    image = _deserialize_rendered_image(payload)
+                                    input_item = runtime.batch_input_item(
+                                        image=image,
+                                        prompt_type="ocr_layout",
+                                    )
+                                except Exception as exc:
+                                    _release_image(image)
+                                    image_slots.release()
+                                    mark_failure(
+                                        document_index,
+                                        RuntimeError(
+                                            f"{page_index + 1}: failed to submit page: "
+                                            f"{type(exc).__name__}: {exc}"
+                                        ),
+                                    )
+                                else:
+                                    job = _PageJob(
+                                        document_id=document.data_object.object_id,
+                                        document_index=document_index,
+                                        page_index=page_index,
+                                    )
+                                    pending_pages.append((job, input_item, image))
+                                    document.in_flight_pages += 1
+                                    submit_pending_batches()
+                        elif event_type == "error":
+                            error_type, message = payload
+                            page_text = (
+                                f"{page_index + 1}: " if page_index >= 0 else ""
+                            )
+                            mark_failure(
+                                document_index,
+                                RuntimeError(
+                                    f"{page_text}failed to render page: "
+                                    f"{error_type}: {message}"
+                                ),
+                            )
+                        elif event_type == "done":
+                            render_done.add(document_index)
+                            maybe_finalize(
+                                document_index,
+                                finalize_executor,
+                                refinement_executor,
+                            )
+                        else:
+                            mark_failure(
+                                document_index,
+                                RuntimeError(
+                                    f"Unknown Chandra2 render event: {event_type}"
+                                ),
+                            )
+
+                    completed = [
+                        future for future in page_futures if future.done()
+                    ]
+                    for future in completed:
+                        jobs = page_futures.pop(future)
+                        images = future_images.pop(future)
+                        try:
+                            generated = future.result()
+                            if len(generated) != len(jobs):
+                                raise RuntimeError(
+                                    "Chandra2 returned a different number of "
+                                    "results than request-batch pages."
+                                )
+                        except Exception as exc:
+                            generated = [exc] * len(jobs)
+
+                        for job, image, result in zip(jobs, images, generated):
+                            document = prepared[job.document_index]
+                            document.in_flight_pages -= 1
+                            document.completed_pages += 1
+                            try:
+                                if isinstance(result, Exception):
+                                    raise result
+                                if bool(getattr(result, "error", False)):
+                                    raise RuntimeError(
+                                        "Chandra2 marked the page as failed"
+                                    )
+                                if document.failure is None:
+                                    _write_stream_page_artifacts(
+                                        self.config,
+                                        document.file_path,
+                                        document.data_object,
+                                        job.page_index,
+                                        document.page_count,
+                                        result,
+                                    )
+                                    document.results[job.page_index] = result
+                                    if self.config.refine_tables:
+                                        document.pages[job.page_index] = image
+                                        image = None
+                            except Exception as exc:
+                                mark_failure(
+                                    job.document_index,
+                                    RuntimeError(
+                                        f"{job.page_index + 1}: failed page: "
+                                        f"{type(exc).__name__}: {exc}"
+                                    ),
+                                )
+                            finally:
+                                _release_image(image)
+                                image_slots.release()
+
+                            maybe_finalize(
+                                job.document_index,
+                                finalize_executor,
+                                refinement_executor,
+                            )
+
+                        submit_pending_batches(
+                            force=(
+                                len(render_done)
+                                == len(render_document_indexes)
+                            )
+                        )
+
+                    all_renderers_stopped = not any(
+                        process.is_alive() for process in render_processes
+                    )
+                    if (
+                        not received_event
+                        and all_renderers_stopped
+                        and len(render_done) < len(render_document_indexes)
+                    ):
+                        dead_process_timeouts += 1
+                        if dead_process_timeouts >= 20:
+                            missing = set(render_document_indexes) - render_done
+                            for document_index in missing:
+                                mark_failure(
+                                    document_index,
+                                    RuntimeError(
+                                        "Chandra2 render process exited before the "
+                                        "document completed."
+                                    ),
+                                )
+                                render_done.add(document_index)
+                    else:
+                        dead_process_timeouts = 0
+
+                    submit_pending_batches(
+                        force=(
+                            len(render_done) == len(render_document_indexes)
+                        )
                     )
 
-        if failures:
-            raise RuntimeError(
-                "Chandra2 failed to parse page(s): " + "; ".join(failures)
-            )
+                    completed_finalizations = [
+                        future
+                        for future in finalize_futures
+                        if future.done()
+                    ]
+                    for future in completed_finalizations:
+                        document_index = finalize_futures.pop(future)
+                        document = prepared[document_index]
+                        try:
+                            parsed = future.result()
+                        except Exception as exc:
+                            document.failure = exc
+                            report(document_index, exc)
+                        else:
+                            parsed_documents[document_index] = parsed
+                            report(document_index, parsed)
 
-        if any(document is None for document in parsed_documents):
-            raise RuntimeError("Chandra2 did not finalize every completed document.")
-        return [document for document in parsed_documents if document is not None]
+                for future in as_completed(tuple(finalize_futures)):
+                    document_index = finalize_futures.pop(future)
+                    document = prepared[document_index]
+                    try:
+                        parsed = future.result()
+                    except Exception as exc:
+                        document.failure = exc
+                        report(document_index, exc)
+                    else:
+                        parsed_documents[document_index] = parsed
+                        report(document_index, parsed)
+        finally:
+            if batch_client is not None:
+                batch_client.close()
+            for process in render_processes:
+                process.join(timeout=5)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+            task_queue.close()
+            task_queue.cancel_join_thread()
+            rendered_queue.close()
+            rendered_queue.cancel_join_thread()
+
+        outcomes: list[ParsedData | Exception] = []
+        for index, document in enumerate(prepared):
+            parsed = parsed_documents[index]
+            if parsed is not None:
+                outcomes.append(parsed)
+                report(index, parsed)
+                continue
+            if document.failure is not None:
+                self._discard_stream_document(document)
+                outcomes.append(document.failure)
+                report(index, document.failure)
+                continue
+            self._discard_stream_document(document)
+            error = RuntimeError(
+                "Chandra2 did not finalize the document."
+            )
+            outcomes.append(error)
+            report(index, error)
+        return outcomes
+
+    def _activate_stream_document(
+        self,
+        document: _PreparedDocument,
+        runtime: _ChandraRuntime,
+    ) -> None:
+        try:
+            self._validate_document_path(document.file_path)
+            if runtime.page_count is not None and runtime.load_pages is not None:
+                document.page_count = int(runtime.page_count(str(document.file_path)))
+            else:
+                document.preloaded_pages = list(
+                    runtime.load_file(
+                        str(document.file_path),
+                        {},
+                    )
+                )
+                document.page_count = len(document.preloaded_pages)
+            if document.page_count <= 0:
+                raise RuntimeError(
+                    f"Chandra2 could not load any pages from the document: "
+                    f"{document.file_path.name}"
+                )
+            document.pages = [None] * document.page_count
+            document.results = [None] * document.page_count
+        except Exception as exc:
+            document.failure = exc
+
+    def _load_stream_pages(
+        self,
+        document: _PreparedDocument,
+        runtime: _ChandraRuntime,
+        start_page: int,
+        count: int,
+    ) -> list[Any]:
+        if document.preloaded_pages is not None:
+            return list(
+                document.preloaded_pages[start_page : start_page + count]
+            )
+        if runtime.load_pages is None:
+            raise RuntimeError("Chandra2 runtime has no streaming page loader.")
+        return runtime.load_pages(str(document.file_path), start_page, count)
+
+    def _render_and_generate_page(
+        self,
+        runtime: _ChandraRuntime,
+        document: _PreparedDocument,
+        page_index: int,
+    ) -> tuple[Any, Any | None]:
+        images: list[Any] = []
+        retained_image: Any | None = None
+        try:
+            try:
+                images = self._load_stream_pages(
+                    document,
+                    runtime,
+                    page_index,
+                    1,
+                )
+                if document.preloaded_pages is not None:
+                    document.preloaded_pages[page_index] = None
+                if len(images) != 1:
+                    raise RuntimeError(
+                        f"expected 1 rendered page, got {len(images)}"
+                    )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"failed to render page: {type(exc).__name__}: {exc}"
+                ) from exc
+
+            image = images[0]
+            try:
+                input_item = runtime.batch_input_item(
+                    image=image,
+                    prompt_type="ocr_layout",
+                )
+                result = self._generate_batch(
+                    [input_item],
+                    max_workers=1,
+                )[0]
+                if bool(getattr(result, "error", False)):
+                    raise RuntimeError("Chandra2 marked the page as failed")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"failed page: {type(exc).__name__}: {exc}"
+                ) from exc
+
+            if self.config.refine_tables:
+                retained_image = image
+            return result, retained_image
+        finally:
+            for image in images:
+                if image is not retained_image:
+                    _release_image(image)
+
+    @staticmethod
+    def _discard_stream_document(document: _PreparedDocument) -> None:
+        images = [*document.pages, *(document.preloaded_pages or [])]
+        released: set[int] = set()
+        for image in images:
+            identity = id(image)
+            if image is None or identity in released:
+                continue
+            released.add(identity)
+            _release_image(image)
+        document.pages.clear()
+        document.results.clear()
+        document.preloaded_pages = None
+
+    def _finalize_stream_document(
+        self,
+        runtime: _ChandraRuntime,
+        document: _PreparedDocument,
+        started: float,
+        refinement_executor: Executor,
+    ) -> ParsedData:
+        try:
+            return self._finalize_document(
+                runtime,
+                document.file_path,
+                document.data_object,
+                document.pages,
+                list(document.results),
+                started=started,
+                inference_mode="continuous_vllm",
+                refinement_executor=refinement_executor,
+            )
+        finally:
+            for image in document.pages:
+                _release_image(image)
+            document.pages.clear()
+            document.results.clear()
+            document.preloaded_pages = None
+
+    @staticmethod
+    def _next_schedulable_document(
+        prepared: list[_PreparedDocument],
+        active_documents: list[int],
+        cursor: int,
+    ) -> tuple[int, int] | None:
+        if not active_documents:
+            return None
+        for offset in range(len(active_documents)):
+            position = (cursor + offset) % len(active_documents)
+            document_index = active_documents[position]
+            document = prepared[document_index]
+            if (
+                document.failure is None
+                and document.next_page < document.page_count
+            ):
+                return document_index, (position + 1) % len(active_documents)
+        return None
+
+    @staticmethod
+    def _remove_schedulable_document(
+        schedulable_documents: list[int],
+        document_index: int,
+    ) -> None:
+        try:
+            schedulable_documents.remove(document_index)
+        except ValueError:
+            pass
+
+    def _validate_document_path(self, file_path: Path) -> None:
+        if file_path.suffix.lower() not in self.supported_extensions:
+            raise RuntimeError(
+                f"Chandra2 does not support file type: {file_path.suffix}"
+            )
 
     def _load_document(
         self,
@@ -338,10 +1083,7 @@ class Chandra2Provider:
         runtime: _ChandraRuntime,
     ) -> tuple[Path, list[Any]]:
         file_path = Path(path)
-        if file_path.suffix.lower() not in self.supported_extensions:
-            raise RuntimeError(
-                f"Chandra2 does not support file type: {file_path.suffix}"
-            )
+        self._validate_document_path(file_path)
         pages = runtime.load_file(str(file_path), {})
         if not pages:
             raise RuntimeError(
@@ -360,6 +1102,244 @@ class Chandra2Provider:
                 for image in pages
             ]
         )
+
+    def _open_vllm_batch_client(self) -> Any:
+        import httpx
+
+        from chandra.settings import settings
+
+        headers = {
+            "Authorization": f"Bearer {settings.VLLM_API_KEY}",
+            "ngrok-skip-browser-warning": "true",
+        }
+        return httpx.Client(
+            headers=headers,
+            timeout=httpx.Timeout(
+                self.config.request_timeout_seconds,
+                connect=min(60.0, self.config.request_timeout_seconds),
+            ),
+        )
+
+    def _generate_vllm_request_batch(
+        self,
+        client: Any,
+        batch: list[Any],
+    ) -> list[Any]:
+        """Send many independent page conversations in one vLLM HTTP request."""
+
+        from chandra.model.schema import BatchOutputItem
+        from chandra.model.util import detect_repeat_token, scale_to_fit
+        from chandra.model.vllm import image_to_base64
+        from chandra.output import (
+            extract_images,
+            parse_chunks,
+            parse_html,
+            parse_markdown,
+        )
+        from chandra.prompts import PROMPT_MAPPING
+        from chandra.settings import settings
+
+        conversations: list[list[dict[str, Any]]] = []
+        for item in batch:
+            prompt = item.prompt or PROMPT_MAPPING[item.prompt_type]
+            scaled_image = scale_to_fit(item.image)
+            try:
+                image_b64 = image_to_base64(scaled_image)
+            finally:
+                if scaled_image is not item.image:
+                    _release_image(scaled_image)
+            conversations.append(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": (
+                                        "data:image/png;base64," + image_b64
+                                    )
+                                },
+                            },
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ]
+            )
+
+        api_base = str(settings.VLLM_API_BASE).rstrip("/")
+        model_name = settings.VLLM_MODEL_NAME
+        if model_name is None:
+            response = client.get(f"{api_base}/models")
+            response.raise_for_status()
+            model_name = response.json()["data"][0]["id"]
+
+        raw_results: list[dict[str, Any]] = [
+            {"raw": "", "token_count": 0, "error": True}
+            for _ in batch
+        ]
+        pending = list(range(len(batch)))
+        for attempt in range(self.config.max_retries + 1):
+            if not pending:
+                break
+            if attempt == 0:
+                logger.info(
+                    "Submitting one vLLM HTTP request containing %s page(s)",
+                    len(pending),
+                )
+            payload = {
+                "model": model_name,
+                "messages": [conversations[index] for index in pending],
+                "max_tokens": self.config.max_output_tokens,
+                "temperature": min(0.2 * attempt, 0.8),
+                "top_p": 0.1 if attempt == 0 else 0.95,
+                "return_token_ids": True,
+            }
+            try:
+                response = client.post(
+                    f"{api_base}/chat/completions/batch",
+                    json=payload,
+                )
+                response.raise_for_status()
+                body = response.json()
+                choices = body.get("choices")
+                if not isinstance(choices, list):
+                    raise RuntimeError(
+                        "vLLM batch response does not contain a choices list"
+                    )
+            except Exception as exc:
+                retryable = _vllm_batch_error_is_retryable(exc)
+                if retryable and attempt < self.config.max_retries:
+                    logger.warning(
+                        "vLLM request batch of %s page(s) failed; retrying "
+                        "attempt %s/%s: %s",
+                        len(pending),
+                        attempt + 1,
+                        self.config.max_retries,
+                        _vllm_batch_error_text(exc),
+                    )
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                logger.error(
+                    "vLLM request batch of %s page(s) failed: %s",
+                    len(pending),
+                    _vllm_batch_error_text(exc),
+                )
+                break
+
+            aggregate_tokens = int(
+                (body.get("usage") or {}).get("completion_tokens") or 0
+            )
+            fallback_tokens = aggregate_tokens // max(1, len(choices))
+            seen_local_indexes: set[int] = set()
+            retry_indexes: list[int] = []
+            for choice in choices:
+                try:
+                    local_index = int(choice["index"])
+                    if local_index < 0 or local_index >= len(pending):
+                        continue
+                    global_index = pending[local_index]
+                    content = choice["message"]["content"]
+                except (IndexError, KeyError, TypeError, ValueError):
+                    continue
+                if local_index in seen_local_indexes:
+                    continue
+                seen_local_indexes.add(local_index)
+                raw = _vllm_message_text(content)
+                token_ids = choice.get("token_ids")
+                token_count = (
+                    len(token_ids)
+                    if isinstance(token_ids, list)
+                    else fallback_tokens
+                )
+                has_repeat = detect_repeat_token(raw) or (
+                    len(raw) > 50
+                    and detect_repeat_token(raw, cut_from_end=50)
+                )
+                if has_repeat and attempt < self.config.max_retries:
+                    retry_indexes.append(global_index)
+                    continue
+                raw_results[global_index] = {
+                    "raw": raw,
+                    "token_count": token_count,
+                    "error": False,
+                }
+
+            missing_indexes = [
+                global_index
+                for local_index, global_index in enumerate(pending)
+                if local_index not in seen_local_indexes
+            ]
+            pending = retry_indexes + missing_indexes
+            if pending and attempt < self.config.max_retries:
+                logger.warning(
+                    "Retrying %s incomplete or repeating output(s) from a "
+                    "vLLM request batch",
+                    len(pending),
+                )
+
+        outputs: list[Any] = []
+        for item, result in zip(batch, raw_results):
+            raw = str(result["raw"] or "")
+            if result["error"]:
+                outputs.append(
+                    BatchOutputItem(
+                        markdown="",
+                        html="",
+                        chunks={},
+                        raw=raw,
+                        page_box=[0, 0, item.image.width, item.image.height],
+                        token_count=int(result["token_count"]),
+                        images={},
+                        error=True,
+                    )
+                )
+                continue
+            try:
+                chunks = parse_chunks(raw, item.image)
+                outputs.append(
+                    BatchOutputItem(
+                        markdown=parse_markdown(
+                            raw,
+                            include_headers_footers=(
+                                self.config.include_headers_footers
+                            ),
+                            include_images=self.config.include_images,
+                        ),
+                        html=parse_html(
+                            raw,
+                            include_headers_footers=(
+                                self.config.include_headers_footers
+                            ),
+                            include_images=self.config.include_images,
+                        ),
+                        chunks=chunks,
+                        raw=raw,
+                        page_box=[0, 0, item.image.width, item.image.height],
+                        token_count=int(result["token_count"]),
+                        images=extract_images(raw, chunks, item.image),
+                        error=False,
+                    )
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to post-process one vLLM batch choice: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+                outputs.append(
+                    BatchOutputItem(
+                        markdown="",
+                        html="",
+                        chunks={},
+                        raw=raw,
+                        page_box=[0, 0, item.image.width, item.image.height],
+                        token_count=int(result["token_count"]),
+                        images={},
+                        error=True,
+                    )
+                )
+        return outputs
 
     def _generate_batch(
         self,
@@ -501,6 +1481,9 @@ class Chandra2Provider:
                 "method": self.config.method,
                 "inference_mode": inference_mode,
                 "continuous_page_queue": self.config.continuous_page_queue,
+                "max_workers": self.config.max_workers,
+                "render_processes": self.config.render_processes,
+                "request_batch_size": self.config.request_batch_size,
                 "model_name": _model_name(self.config.method),
                 "page_count": len(results),
                 "token_count": token_count,
@@ -549,6 +1532,8 @@ class Chandra2Provider:
 
 def _load_runtime() -> _ChandraRuntime:
     try:
+        import pypdfium2 as pdfium
+
         from chandra.input import load_file
         from chandra.model import InferenceManager
         from chandra.model.schema import BatchInputItem
@@ -556,7 +1541,210 @@ def _load_runtime() -> _ChandraRuntime:
         raise RuntimeError(
             "Missing Chandra2 dependency. Install it with: pip install -e .[chandra2]"
         ) from exc
-    return _ChandraRuntime(load_file, InferenceManager, BatchInputItem)
+
+    def page_count(filepath: str) -> int:
+        if Path(filepath).suffix.lower() != ".pdf":
+            return 1
+        document = pdfium.PdfDocument(filepath)
+        try:
+            return len(document)
+        finally:
+            document.close()
+
+    def load_pages(filepath: str, start_page: int, count: int) -> list[Any]:
+        if Path(filepath).suffix.lower() != ".pdf":
+            return load_file(filepath, {}) if start_page == 0 and count else []
+        end_page = start_page + count - 1
+        page_range = (
+            str(start_page)
+            if start_page == end_page
+            else f"{start_page}-{end_page}"
+        )
+        return load_file(filepath, {"page_range": page_range})
+
+    return _ChandraRuntime(
+        load_file,
+        InferenceManager,
+        BatchInputItem,
+        page_count=page_count,
+        load_pages=load_pages,
+        process_rendering=True,
+    )
+
+
+def _render_document_worker(
+    task_queue: Any,
+    rendered_queue: Any,
+    image_slots: Any,
+    cancelled: Any,
+) -> None:
+    """Render complete documents in an isolated spawned process."""
+
+    while True:
+        task = task_queue.get()
+        if task is None:
+            return
+        document_index, filepath = task
+        try:
+            if Path(filepath).suffix.lower() == ".pdf":
+                _render_pdf_document(
+                    document_index,
+                    filepath,
+                    rendered_queue,
+                    image_slots,
+                    cancelled,
+                )
+            else:
+                _render_image_document(
+                    document_index,
+                    filepath,
+                    rendered_queue,
+                    image_slots,
+                    cancelled,
+                )
+        except Exception as exc:
+            rendered_queue.put(
+                (
+                    "error",
+                    document_index,
+                    -1,
+                    (type(exc).__name__, str(exc)),
+                )
+            )
+        finally:
+            rendered_queue.put(("done", document_index, -1, None))
+
+
+def _render_pdf_document(
+    document_index: int,
+    filepath: str,
+    rendered_queue: Any,
+    image_slots: Any,
+    cancelled: Any,
+) -> None:
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(filepath)
+    try:
+        document.init_forms()
+        page_count = len(document)
+        rendered_queue.put(("started", document_index, -1, page_count))
+        for page_index in range(page_count):
+            if cancelled[document_index]:
+                break
+            image_slots.acquire()
+            if cancelled[document_index]:
+                image_slots.release()
+                break
+            image: Any | None = None
+            try:
+                image = _render_pdfium_page(document, page_index)
+                payload = _serialize_rendered_image(image)
+                rendered_queue.put(
+                    ("page", document_index, page_index, payload)
+                )
+            except Exception as exc:
+                image_slots.release()
+                rendered_queue.put(
+                    (
+                        "error",
+                        document_index,
+                        page_index,
+                        (type(exc).__name__, str(exc)),
+                    )
+                )
+                break
+            finally:
+                _release_image(image)
+    finally:
+        document.close()
+
+
+def _render_pdfium_page(document: Any, page_index: int) -> Any:
+    from chandra.input import flatten
+    from chandra.settings import settings
+
+    page = document[page_index]
+    try:
+        min_page_dim = min(page.get_width(), page.get_height())
+    finally:
+        page.close()
+
+    scale_dpi = (settings.MIN_PDF_IMAGE_DIM / min_page_dim) * 72
+    scale_dpi = max(scale_dpi, settings.IMAGE_DPI)
+    page = document[page_index]
+    try:
+        flatten(page)
+    finally:
+        page.close()
+
+    page = document[page_index]
+    bitmap: Any | None = None
+    source_image: Any | None = None
+    try:
+        bitmap = page.render(scale=scale_dpi / 72)
+        source_image = bitmap.to_pil()
+        return source_image.convert("RGB")
+    finally:
+        _release_image(source_image)
+        _release_image(bitmap)
+        page.close()
+
+
+def _render_image_document(
+    document_index: int,
+    filepath: str,
+    rendered_queue: Any,
+    image_slots: Any,
+    cancelled: Any,
+) -> None:
+    from chandra.input import load_image
+
+    rendered_queue.put(("started", document_index, -1, 1))
+    if cancelled[document_index]:
+        return
+    image_slots.acquire()
+    if cancelled[document_index]:
+        image_slots.release()
+        return
+    image: Any | None = None
+    try:
+        image = load_image(filepath)
+        rendered_queue.put(
+            (
+                "page",
+                document_index,
+                0,
+                _serialize_rendered_image(image),
+            )
+        )
+    except Exception:
+        image_slots.release()
+        raise
+    finally:
+        _release_image(image)
+
+
+def _serialize_rendered_image(image: Any) -> tuple[str, tuple[int, int], bytes]:
+    return image.mode, tuple(image.size), image.tobytes()
+
+
+def _deserialize_rendered_image(
+    payload: tuple[str, tuple[int, int], bytes],
+) -> Any:
+    from PIL import Image
+
+    mode, size, data = payload
+    return Image.frombytes(mode, size, data)
+
+
+def _release_image(image: Any) -> None:
+    close = getattr(image, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
 
 
 def _refine_table_blocks(
@@ -988,6 +2176,58 @@ def _table_shape(value: str) -> tuple[int, int] | None:
     return len(parser.rows), max_columns
 
 
+def _write_stream_page_artifacts(
+    config: Chandra2Config,
+    file_path: Path,
+    data_object: DataObject,
+    page_index: int,
+    page_count: int,
+    result: Any,
+) -> None:
+    """Checkpoint one completed page before the whole document is ready."""
+
+    if not config.save_raw_outputs or not config.output_dir:
+        return
+    bundle_dir = Path(config.output_dir) / (
+        f"{_safe_slug(file_path.stem)}--{data_object.object_id}"
+    )
+    pages_dir = bundle_dir / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"page_{page_index + 1:04d}"
+    page_payloads, _ = _page_payloads([result])
+    page_payload = page_payloads[0]
+    page_payload["page_number"] = page_index + 1
+
+    _atomic_write_text(
+        pages_dir / f"{prefix}.raw.html",
+        str(getattr(result, "raw", "") or ""),
+    )
+    _atomic_write_text(
+        pages_dir / f"{prefix}.clean.html",
+        str(getattr(result, "html", "") or ""),
+    )
+    _atomic_write_text(
+        pages_dir / f"{prefix}.first-pass.md",
+        str(getattr(result, "markdown", "") or ""),
+    )
+    _atomic_write_text(
+        pages_dir / f"{prefix}.chunks.json",
+        _json_text(page_payload),
+    )
+    logger.info(
+        "Persisted completed Chandra page %s/%s: %s",
+        page_index + 1,
+        page_count,
+        file_path.name,
+    )
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(value, encoding="utf-8")
+    temporary.replace(path)
+
+
 def _write_raw_outputs(
     config: Chandra2Config,
     bundle_dir: Path | None,
@@ -1077,6 +2317,9 @@ def _write_raw_outputs(
                 "method": config.method,
                 "inference_mode": inference_mode,
                 "continuous_page_queue": config.continuous_page_queue,
+                "max_workers": config.max_workers,
+                "render_processes": config.render_processes,
+                "request_batch_size": config.request_batch_size,
                 "model_name": _model_name(config.method),
                 "page_count": len(results),
                 "token_count": token_count,
@@ -1610,6 +2853,49 @@ def _positive_int(config: dict[str, Any], name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"chandra2.{name} must be greater than zero")
     return value
+
+
+def _positive_float(config: dict[str, Any], name: str, default: float) -> float:
+    value = float(config.get(name, default))
+    if value <= 0:
+        raise ValueError(f"chandra2.{name} must be greater than zero")
+    return value
+
+
+def _vllm_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict)
+        )
+    return "" if content is None else str(content)
+
+
+def _vllm_batch_error_text(error: Exception) -> str:
+    response = getattr(error, "response", None)
+    if response is None:
+        return f"{type(error).__name__}: {error}"
+    status_code = getattr(response, "status_code", "unknown")
+    try:
+        detail = str(response.text).strip().replace("\n", " ")[:500]
+    except Exception:
+        detail = ""
+    suffix = f": {detail}" if detail else ""
+    return f"HTTP {status_code}{suffix}"
+
+
+def _vllm_batch_error_is_retryable(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    if response is None:
+        return True
+    try:
+        status_code = int(response.status_code)
+    except (AttributeError, TypeError, ValueError):
+        return True
+    return status_code in {408, 409, 425, 429} or status_code >= 500
 
 
 def _inference_method(value: Any) -> str:
