@@ -22,8 +22,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.retrieval.settings import ARTIFACT_ROOT  # noqa: E402
 from src.retrieval.ids import embedding_id, short_hash  # noqa: E402
 from src.retrieval.sparse import BM25Index, resolve_analyzer  # noqa: E402
+from src.utils.config import default_pipeline_config_path  # noqa: E402
+from src.utils.env import load_dotenv_file  # noqa: E402
 
-DEFAULT_CONFIG = "configs/pipeline.yaml"
 ARTIFACT_SCHEMA_VERSION = "retrieval-artifacts-v2"
 
 
@@ -167,9 +168,14 @@ def config_hash_from(config_path: Path) -> str:
 
 
 def main() -> None:
+    load_dotenv_file(PROJECT_ROOT)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True, help="Pipeline run whose output to index.")
-    parser.add_argument("--config", default=DEFAULT_CONFIG, help="Config the run used; names the artifact set.")
+    parser.add_argument(
+        "--config",
+        default=default_pipeline_config_path(),
+        help="Config the run used; names the artifact set.",
+    )
     parser.add_argument("--output", default=str(ARTIFACT_ROOT))
     parser.add_argument("--analyzer", default="auto", choices=["plain", "cjk_bigram", "auto"])
     parser.add_argument(

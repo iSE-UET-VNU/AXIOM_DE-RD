@@ -16,7 +16,11 @@ import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-from ..utils.config import load_config, resolve_project_path
+from ..utils.config import (
+    default_pipeline_config_path,
+    load_config,
+    resolve_project_path,
+)
 from ..utils.env import load_dotenv_file
 from .contracts import ChunkEmbedConfig
 from .embedders import create_embedder
@@ -193,7 +197,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     parser = argparse.ArgumentParser(description="Run AXIOM chunking + embedding on enriched data.")
-    parser.add_argument("--config", default="configs/pipeline.yaml")
+    parser.add_argument("--config", default=default_pipeline_config_path())
     parser.add_argument("--input", default=None, help="Dir containing enriched_data.json or documents/*.json")
     parser.add_argument("--output", default=None, help="Output dir for records (default: output_dir)")
     parser.add_argument("--chunker", default=None, help=f"Override {CONFIG_SECTION}.chunker for this run")

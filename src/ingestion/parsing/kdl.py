@@ -72,8 +72,8 @@ class KDLConfig:
             raise ValueError("kdl.method must be 'vllm'")
         endpoint = str(
             values.get("endpoint_url")
-            or os.getenv("VLLM_API_BASE")
             or os.getenv("KDL_NANO_ENDPOINT_URL")
+            or os.getenv("VLLM_API_BASE")
             or "http://127.0.0.1:8000/v1"
         ).strip().rstrip("/")
         max_workers = _positive_int(values, "max_workers", 32)
@@ -104,8 +104,8 @@ class KDLConfig:
             endpoint_url=endpoint,
             model=str(
                 values.get("model")
-                or os.getenv("VLLM_MODEL_NAME")
                 or os.getenv("KDL_NANO_MODEL")
+                or os.getenv("VLLM_MODEL_NAME")
                 or "kdl-frontier-parser-nano"
             ).strip(),
             dpi=_positive_int(values, "dpi", 144),

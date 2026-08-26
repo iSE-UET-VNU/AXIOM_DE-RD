@@ -6,7 +6,6 @@ import base64
 from datetime import datetime
 import html
 from html.parser import HTMLParser
-from importlib.util import find_spec
 import json
 import logging
 import math
@@ -30,17 +29,14 @@ from src.demo.data import (
     list_documents,
     load_document,
     load_stage_metadata,
-    persist_dataeng_response,
 )
 from src.dispatcher import dispatch_dataeng_inputs
-from src.ingestion.parsing.lift.client import SUPPORTED_EXTENSIONS as LIFT_SUPPORTED_EXTENSIONS
 from src.reading_order import (
     citation_ids,
     component_path_parts,
     source_blocks_from_extraction,
 )
-from src.table_agent.client import DEFAULT_WORKBOOK_EXTENSIONS
-from src.utils.config import load_config
+from src.utils.config import default_pipeline_config_path, load_config
 from src.utils.env import load_dotenv_file
 
 
@@ -51,7 +47,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-PIPELINE_CONFIG_PATH = PROJECT_ROOT / "configs" / "pipeline.yaml"
+load_dotenv_file(PROJECT_ROOT)
+PIPELINE_CONFIG_PATH = PROJECT_ROOT / default_pipeline_config_path()
 
 
 def _normalized_extensions(value: object, *, fallback: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -72,18 +69,12 @@ def _normalized_extensions(value: object, *, fallback: tuple[str, ...] = ()) -> 
 
 _PIPELINE_CONFIG = load_config(PIPELINE_CONFIG_PATH)
 _LOCAL_INPUT_CONFIG = _PIPELINE_CONFIG.get("local_input", {})
-_TABLE_AGENT_CONFIG = _PIPELINE_CONFIG.get("table_agent", {})
 CONFIGURED_INPUT_EXTENSIONS = _normalized_extensions(
     _LOCAL_INPUT_CONFIG.get("include_extensions")
 )
-CONFIGURED_WORKBOOK_EXTENSIONS = _normalized_extensions(
-    _TABLE_AGENT_CONFIG.get("supported_extensions"),
-    fallback=DEFAULT_WORKBOOK_EXTENSIONS,
-)
-CONFIGURED_UPLOAD_EXTENSIONS = _normalized_extensions(
-    [*CONFIGURED_INPUT_EXTENSIONS, *CONFIGURED_WORKBOOK_EXTENSIONS]
-)
-SUPPORTED_UPLOAD_TYPES = [extension.removeprefix(".") for extension in CONFIGURED_UPLOAD_EXTENSIONS]
+SUPPORTED_UPLOAD_TYPES = [
+    extension.removeprefix(".") for extension in CONFIGURED_INPUT_EXTENSIONS
+]
 DISPLAY_TITLE_OVERRIDES = {
     "5.4. Data size analysis (RQ4)": "Analysis",
 }
@@ -171,7 +162,6 @@ class _OutputHTMLSanitizer(HTMLParser):
 
 
 def main() -> None:
-    load_dotenv_file(PROJECT_ROOT)
     _inject_styles()
     next_page = st.session_state.pop("_next_page", None)
     if next_page:
@@ -211,21 +201,17 @@ def _sidebar() -> str:
 def _render_pipeline_runner() -> None:
     _hero(
         "Run pipeline",
-        "Upload documents or Excel workbooks and route them to the right processor.",
+        "Upload documents and run them through the configured pipeline.",
         "NEW RUN",
     )
-    parser_key_ready = bool(os.getenv("DATALAB_API_KEY"))
-    parser_sdk_ready = find_spec("datalab_sdk") is not None
 
     uploads = st.file_uploader(
-        "Choose files enabled in configs/pipeline.yaml",
+        f"Choose files enabled in {default_pipeline_config_path()}",
         type=SUPPORTED_UPLOAD_TYPES,
         accept_multiple_files=True,
         help=(
-            "The upload types come from local_input.include_extensions and "
-            "table_agent.supported_extensions. Excel workbooks are sent to "
-            "TableAgent; other configured files continue through the normal "
-            "AXIOM pipeline."
+            "The upload types come from local_input.include_extensions in the "
+            "selected pipeline config."
         ),
     )
     if uploads:
@@ -234,31 +220,15 @@ def _render_pipeline_runner() -> None:
             cols[0].write(item.name)
             cols[1].caption(format_bytes(item.size))
 
-    needs_lift_parser = any(
-        Path(item.name).suffix.lower() in LIFT_SUPPORTED_EXTENSIONS
-        for item in uploads or []
-    )
-    if needs_lift_parser and not parser_sdk_ready:
-        st.error("Missing `datalab-python-sdk`. Run `pip install -e .`, then restart Streamlit.")
-    elif needs_lift_parser and not parser_key_ready:
-        st.warning("Add `DATALAB_API_KEY` to `.env` to process PDF or image files.")
-
     st.caption(
         "Configured types: "
         + ", ".join(SUPPORTED_UPLOAD_TYPES)
-        + " · Excel → TableAgent · PDF/images → Datalab Lift"
     )
     run_clicked = st.button(
         "Run pipeline",
         type="primary",
         width="stretch",
-        disabled=(
-            not uploads
-            or (
-                needs_lift_parser
-                and (not parser_key_ready or not parser_sdk_ready)
-            )
-        ),
+        disabled=not uploads,
     )
     if run_clicked and uploads:
         _execute_upload_run(uploads)
@@ -286,19 +256,6 @@ def _execute_upload_run(uploads: list) -> None:
             )
         progress.progress(100, text="Pipeline completed")
         state = dispatch_result.pipeline_state
-        if dispatch_result.table_document_count:
-            run_id = persist_dataeng_response(dispatch_result.response)
-            st.session_state["selected_run"] = run_id
-            st.session_state["run_notice"] = (
-                f"Run `{run_id}` completed with "
-                f"{dispatch_result.table_document_count} workbook(s) "
-                "processed by TableAgent."
-            )
-            st.session_state["_next_page"] = RESULTS_PAGE
-            st.rerun()
-
-        if state is None:
-            raise RuntimeError("The document pipeline did not return a run state.")
         st.session_state["selected_run"] = state.run_id
         st.session_state["run_notice"] = (
             f"Run `{state.run_id}` completed with {len(state.errors)} errors/quarantined documents."
@@ -325,7 +282,7 @@ def _execute_upload_run(uploads: list) -> None:
 
 
 def _demo_config() -> Path:
-    config = load_config(PROJECT_ROOT / "configs" / "pipeline.yaml")
+    config = load_config(PIPELINE_CONFIG_PATH)
     chunking_embedding = config.setdefault("chunking_embedding", {})
     chunking_embedding["embedder"] = "local_hash"
     chunking_embedding["embedder_params"] = {

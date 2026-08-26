@@ -20,7 +20,12 @@ from . import (
     s3_reader,
 )
 from .models import PipelineState, make_id
-from .utils.config import load_config, resolve_parser_config, resolve_project_path
+from .utils.config import (
+    default_pipeline_config_path,
+    load_config,
+    resolve_parser_config,
+    resolve_project_path,
+)
 from .utils.env import load_dotenv_file
 from .utils.paths import portable_path
 
@@ -35,7 +40,7 @@ MODULE_ORDER = [
 
 
 def run_pipeline(
-    config_path: str | Path = "configs/pipeline.yaml",
+    config_path: str | Path | None = None,
     *,
     presigned_inventory: dict[str, Any] | None = None,
     s3_uri: str | None = None,
@@ -47,6 +52,7 @@ def run_pipeline(
     """Run the non-table document engine after public input routing."""
     project_root = Path(__file__).resolve().parents[1]
     load_dotenv_file(project_root)
+    config_path = config_path or default_pipeline_config_path()
     config_file = _resolve_config_path(project_root, config_path)
     config = load_config(config_file)
 
@@ -453,7 +459,14 @@ def _accept_ingestion_result(
 
 def cli(argv: list[str] | None = None) -> Any:
     parser = argparse.ArgumentParser(description="Run the AXIOM_DE-RD pipeline scaffold.")
-    parser.add_argument("--config", default="configs/pipeline.yaml", help="Path to pipeline config.")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Path to pipeline config. Defaults to AXIOM_PIPELINE_CONFIG or "
+            "configs/pipeline.kdl-pdf-inspector.yaml."
+        ),
+    )
     input_group = parser.add_mutually_exclusive_group()
     input_group.add_argument(
         "--s3-uri",
@@ -482,8 +495,7 @@ def cli(argv: list[str] | None = None) -> Any:
     )
     args = parser.parse_args(argv)
 
-    # Import lazily because the dispatcher uses run_pipeline as the document
-    # engine after it has routed spreadsheet inputs to TableAgent.
+    # Import lazily to avoid a dispatcher/pipeline import cycle.
     from .dispatcher import dispatch_dataeng_inputs
 
     result = dispatch_dataeng_inputs(
@@ -495,18 +507,6 @@ def cli(argv: list[str] | None = None) -> Any:
         local_raw=args.local_raw,
     )
     state = result.pipeline_state
-    if result.table_document_count:
-        metadata = result.response.get("metadata", {})
-        print(
-            "AXIOM completed "
-            f"{metadata.get('document_count', 0)} document(s), including "
-            f"{result.table_document_count} workbook(s) routed to TableAgent."
-        )
-        print(json.dumps(result.response, ensure_ascii=False, indent=2))
-        return result
-
-    if state is None:
-        raise RuntimeError("The document pipeline did not return a run state.")
     run_status = "completed_with_errors" if state.errors else "completed"
     print(f"Pipeline run {state.run_id} {run_status}.")
     print(f"Modules: {', '.join(state.completed_modules) or 'none'}")

@@ -28,26 +28,27 @@ cp .env.example .env
 
 ## Running the Pipeline
 
-The CLI uses the shared dispatcher, including when input mode comes from
-`configs/pipeline.yaml`:
+Every entrypoint defaults to `configs/pipeline.kdl-pdf-inspector.yaml`. Set
+`AXIOM_PIPELINE_CONFIG` or pass `--config` to select another profile.
 
 ```bash
-python scripts/run_pipeline.py --config configs/pipeline.yaml
+python scripts/run_pipeline.py
 ```
 
-Process a local workbook through TableAgent:
+Process a local PDF or image through the hybrid parser:
 
 ```bash
 python scripts/run_pipeline.py \
-  --config configs/pipeline.yaml \
-  --local-raw path/to/workbook.xlsx
+  --local-raw path/to/document.pdf
 ```
+
+The legacy `configs/pipeline.yaml` profile remains available for Lift API
+workflows that need its broader input configuration.
 
 #### Use the existing `s3://bucket/key` CLI option:
 
 ```bash
 python scripts/run_pipeline.py \
-  --config configs/pipeline.yaml \
   --s3-uri 's3://bucket/path/to/document.pdf'
 ```
 
@@ -55,7 +56,6 @@ python scripts/run_pipeline.py \
 
 ```bash
 python scripts/run_pipeline.py \
-  --config configs/pipeline.yaml \
   --s3-info-file data/raw/s3.info.txt \
   --s3-object-key 'path/to/document.pdf'
 ```
@@ -64,7 +64,6 @@ python scripts/run_pipeline.py \
 
 ```bash
 python scripts/run_pipeline.py \
-  --config configs/pipeline.yaml \
   --s3-info-file data/raw/s3.info.txt \
   --s3-all-objects
 ```
@@ -88,17 +87,34 @@ The equivalent configuration is:
 
 ```bash
 python scripts/run_pipeline.py \
-  --config configs/pipeline.yaml \
   --local-raw data/raw/omnidocbench_subset
 ```
 
 ## REST API
+
+The REST API uses the same hybrid default. Install the
+hybrid extra and point AXIOM at an externally hosted OpenAI-compatible KDL/vLLM
+service:
+
+```bash
+python -m pip install -e ".[pdf-inspector]"
+export AXIOM_PIPELINE_CONFIG="configs/pipeline.kdl-pdf-inspector.yaml"
+export KDL_NANO_ENDPOINT_URL="http://<kdl-host>:8000/v1"
+export KDL_NANO_MODEL="kdl-frontier-parser-nano"
+```
 
 Start the synchronous REST service with:
 
 ```bash
 uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 ```
+
+The ready-to-run hybrid config uses `request_batch_size: 8`, so the model
+service must expose the synchronous `/v1/chat/completions/batch` route. Set
+`request_batch_size: 1` when the service only exposes the standard
+`/v1/chat/completions` route. Set
+`AXIOM_PIPELINE_CONFIG=configs/pipeline.yaml` to explicitly select the legacy
+Lift API profile.
 
 Submit a batch of presigned S3 objects:
 
