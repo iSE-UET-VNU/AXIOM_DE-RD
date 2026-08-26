@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 import argparse
@@ -13,7 +14,6 @@ from . import (
     artifacts,
     cleaning,
     enrichment,
-    indexing_cataloging,
     ingestion,
     integration,
     local_reader,
@@ -28,7 +28,7 @@ MODULE_ORDER = [
     "ingestion",
     "cleaning",
     "enrichment",
-    "indexing_cataloging",
+    "chunking_embedding",
     "integration",
     "artifacts",
 ]
@@ -128,11 +128,20 @@ def run_pipeline(
             state.input_source = batch.source
             state.raw_dir = batch.source
             expected_document_count = len(batch.inputs)
-            for item in batch.inputs:
-                partial_result = ingestion.run(
-                    item.path,
-                    source_uri=item.source_uri,
-                    input_metadata=item.metadata,
+            if _uses_continuous_chandra_queue(parser_config):
+                logger.info(
+                    "Submitting %s local document(s) to the continuous Chandra2 page queue",
+                    len(batch.inputs),
+                )
+                partial_result = ingestion.run_many(
+                    [
+                        ingestion.IngestionInput(
+                            path=item.path,
+                            source_uri=item.source_uri,
+                            metadata=item.metadata,
+                        )
+                        for item in batch.inputs
+                    ],
                     parser_config=parser_config,
                     project_root=project_root,
                 )
@@ -144,6 +153,23 @@ def run_pipeline(
                     expected_document_count,
                     persist_artifacts,
                 )
+            else:
+                for item in batch.inputs:
+                    partial_result = ingestion.run(
+                        item.path,
+                        source_uri=item.source_uri,
+                        input_metadata=item.metadata,
+                        parser_config=parser_config,
+                        project_root=project_root,
+                    )
+                    _accept_ingestion_result(
+                        state,
+                        partial_result,
+                        ingested_dir,
+                        project_root,
+                        expected_document_count,
+                        persist_artifacts,
+                    )
         else:
             resolved_s3_config = {**s3_config, "mode": input_mode}
             raw_objects_dir = raw_dir / "objects"
@@ -263,36 +289,46 @@ def run_pipeline(
             len(state.enriched_data),
         )
 
-    if "indexing_cataloging" in enabled_modules:
-        result = indexing_cataloging.run(
-            state.enriched_data,
-            state.enriched_schemas,
-            indexing_config=config.get("indexing", {}),
+    if "chunking_embedding" in enabled_modules:
+        from .chunking_embedding.stage import run as run_chunking_embedding
+
+        result = run_chunking_embedding(
+            [asdict(record) for record in state.enriched_data],
+            config.get("chunking_embedding", {}),
         )
-        state.metadata_records = result.metadata_records
-        state.index_records = result.index_records
-        state.index_quality_report = result.index_quality_report
+        state.retrieval_records = result.retrieval_records
+        state.retrieval_quality_report = result.quality_report
         state.vector_records = result.vector_records
         state.embedding_report = result.embedding_report
-        state.completed_modules.append("indexing_cataloging")
+        state.errors.extend(
+            {
+                "code": "chunking_embedding_failed",
+                "stage": "chunking_embedding",
+                "status": "failed",
+                "document_id": skipped.get("doc_id"),
+                "source_uri": skipped.get("source_uri"),
+                "message": skipped.get("reason"),
+            }
+            for skipped in result.skipped_docs
+        )
+        state.completed_modules.append("chunking_embedding")
         logger.info(
-            "Built %s metadata record(s), %s index record(s), and %s vector record(s); quality status: %s",
-            len(state.metadata_records),
-            len(state.index_records),
+            "Built %s retrieval record(s) and %s vector record(s); quality status: %s",
+            len(state.retrieval_records),
             len(state.vector_records),
-            state.index_quality_report.get("status", "unknown"),
+            state.retrieval_quality_report.get("status", "unknown"),
         )
 
     if "integration" in enabled_modules:
-        result = integration.run(state.index_records)
-        state.index_records = result.passed_index_records
+        result = integration.run(state.retrieval_records)
+        state.retrieval_records = result.passed_retrieval_records
         state.schema_matches = result.schema_matches
         state.entity_matches = result.entity_matches
         state.relationship_records = result.relationship_records
         state.completed_modules.append("integration")
         logger.info(
-            "Integration pass-through accepted %s index record(s)",
-            len(result.passed_index_records),
+            "Integration pass-through accepted %s retrieval record(s)",
+            len(result.passed_retrieval_records),
         )
 
     if persist_artifacts:
@@ -307,7 +343,7 @@ def run_pipeline(
             output_dir,
             project_root=project_root,
         )
-        logger.info("Wrote embedding and index artifacts to %s", embedded_dir)
+        logger.info("Wrote chunking and embedding artifacts to %s", embedded_dir)
         logger.info("Wrote consolidated output artifacts to %s", output_dir)
 
     if state.errors:
@@ -489,6 +525,20 @@ def _configure_logging(config: dict[str, Any]) -> None:
     logging.basicConfig(
         level=getattr(logging, level_name.upper(), logging.INFO),
         format="%(levelname)s %(name)s - %(message)s",
+    )
+
+
+def _uses_continuous_chandra_queue(parser_config: dict[str, Any]) -> bool:
+    provider = str(parser_config.get("provider") or "").strip().lower()
+    document_config = parser_config.get("document")
+    if provider in {"", "router"} and isinstance(document_config, dict):
+        provider = str(document_config.get("provider") or "").strip().lower()
+    provider = provider.replace("-", "_")
+    chandra_config = parser_config.get("chandra2")
+    return (
+        provider in {"chandra", "chandra2", "chandra_2"}
+        and isinstance(chandra_config, dict)
+        and bool(chandra_config.get("continuous_page_queue", False))
     )
 
 

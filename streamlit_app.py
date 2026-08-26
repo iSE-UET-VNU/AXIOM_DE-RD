@@ -33,6 +33,7 @@ from src.demo.data import (
     persist_dataeng_response,
 )
 from src.dispatcher import dispatch_dataeng_inputs
+from src.ingestion.parsing.lift.client import SUPPORTED_EXTENSIONS as LIFT_SUPPORTED_EXTENSIONS
 from src.reading_order import (
     citation_ids,
     component_path_parts,
@@ -50,13 +51,39 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-SUPPORTED_UPLOAD_TYPES = [
-    "pdf",
-    "png",
-    "jpg",
-    "jpeg",
-    *(extension.removeprefix(".") for extension in DEFAULT_WORKBOOK_EXTENSIONS),
-]
+PIPELINE_CONFIG_PATH = PROJECT_ROOT / "configs" / "pipeline.yaml"
+
+
+def _normalized_extensions(value: object, *, fallback: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Read config extensions in the same normalized form used by the router."""
+    if not isinstance(value, list):
+        return fallback
+    extensions: list[str] = []
+    for item in value:
+        extension = str(item).strip().lower()
+        if not extension:
+            continue
+        if not extension.startswith("."):
+            extension = f".{extension}"
+        if extension not in extensions:
+            extensions.append(extension)
+    return tuple(extensions) or fallback
+
+
+_PIPELINE_CONFIG = load_config(PIPELINE_CONFIG_PATH)
+_LOCAL_INPUT_CONFIG = _PIPELINE_CONFIG.get("local_input", {})
+_TABLE_AGENT_CONFIG = _PIPELINE_CONFIG.get("table_agent", {})
+CONFIGURED_INPUT_EXTENSIONS = _normalized_extensions(
+    _LOCAL_INPUT_CONFIG.get("include_extensions")
+)
+CONFIGURED_WORKBOOK_EXTENSIONS = _normalized_extensions(
+    _TABLE_AGENT_CONFIG.get("supported_extensions"),
+    fallback=DEFAULT_WORKBOOK_EXTENSIONS,
+)
+CONFIGURED_UPLOAD_EXTENSIONS = _normalized_extensions(
+    [*CONFIGURED_INPUT_EXTENSIONS, *CONFIGURED_WORKBOOK_EXTENSIONS]
+)
+SUPPORTED_UPLOAD_TYPES = [extension.removeprefix(".") for extension in CONFIGURED_UPLOAD_EXTENSIONS]
 DISPLAY_TITLE_OVERRIDES = {
     "5.4. Data size analysis (RQ4)": "Analysis",
 }
@@ -191,12 +218,14 @@ def _render_pipeline_runner() -> None:
     parser_sdk_ready = find_spec("datalab_sdk") is not None
 
     uploads = st.file_uploader(
-        "Choose PDF, image, or Excel workbook files",
+        "Choose files enabled in configs/pipeline.yaml",
         type=SUPPORTED_UPLOAD_TYPES,
         accept_multiple_files=True,
         help=(
-            "Excel workbooks are sent to TableAgent. Other supported files "
-            "continue through the normal AXIOM pipeline."
+            "The upload types come from local_input.include_extensions and "
+            "table_agent.supported_extensions. Excel workbooks are sent to "
+            "TableAgent; other configured files continue through the normal "
+            "AXIOM pipeline."
         ),
     )
     if uploads:
@@ -205,16 +234,20 @@ def _render_pipeline_runner() -> None:
             cols[0].write(item.name)
             cols[1].caption(format_bytes(item.size))
 
-    needs_document_parser = any(
-        Path(item.name).suffix.lower() not in DEFAULT_WORKBOOK_EXTENSIONS
+    needs_lift_parser = any(
+        Path(item.name).suffix.lower() in LIFT_SUPPORTED_EXTENSIONS
         for item in uploads or []
     )
-    if needs_document_parser and not parser_sdk_ready:
+    if needs_lift_parser and not parser_sdk_ready:
         st.error("Missing `datalab-python-sdk`. Run `pip install -e .`, then restart Streamlit.")
-    elif needs_document_parser and not parser_key_ready:
+    elif needs_lift_parser and not parser_key_ready:
         st.warning("Add `DATALAB_API_KEY` to `.env` to process PDF or image files.")
 
-    st.caption("Excel → TableAgent · PDF/images → Datalab Lift")
+    st.caption(
+        "Configured types: "
+        + ", ".join(SUPPORTED_UPLOAD_TYPES)
+        + " · Excel → TableAgent · PDF/images → Datalab Lift"
+    )
     run_clicked = st.button(
         "Run pipeline",
         type="primary",
@@ -222,7 +255,7 @@ def _render_pipeline_runner() -> None:
         disabled=(
             not uploads
             or (
-                needs_document_parser
+                needs_lift_parser
                 and (not parser_key_ready or not parser_sdk_ready)
             )
         ),
@@ -293,16 +326,12 @@ def _execute_upload_run(uploads: list) -> None:
 
 def _demo_config() -> Path:
     config = load_config(PROJECT_ROOT / "configs" / "pipeline.yaml")
-    embeddings = config.setdefault("indexing", {}).setdefault("embeddings", {})
-    embeddings.update(
-        {
-            "enabled": True,
-            "provider": "local_hash",
-            "model": "local-hash-embedding-v1",
-            "dimension": 128,
-            "fail_on_error": True,
-        }
-    )
+    chunking_embedding = config.setdefault("chunking_embedding", {})
+    chunking_embedding["embedder"] = "local_hash"
+    chunking_embedding["embedder_params"] = {
+        "model": "local-hash-embedding-v1",
+        "dimension": 128,
+    }
 
     handle = tempfile.NamedTemporaryFile(
         mode="w",

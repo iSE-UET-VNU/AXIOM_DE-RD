@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from ..indexing_cataloging.lexical import (
+from ..chunking_embedding.lexical import (
     build_corpus_statistics,
     build_lexical_payload,
     content_text,
@@ -19,6 +19,7 @@ _RETRIEVAL_FIELDS = {
     "item_id",
     "id",
     "type",
+    "component_type",
     "position",
     "content",
     "lexical",
@@ -59,19 +60,10 @@ def normalize_table_agent_response(
     source_metadata: dict[str, Any],
     run_id: str,
 ) -> dict[str, Any]:
-    """Return an ``output-document-v4`` object for a TableAgent workbook."""
+    """Return a stage-oriented API document for a TableAgent workbook."""
     structures = response.get("structures")
     if not isinstance(structures, list):
         raise RuntimeError("TableAgent response is missing the structures array.")
-    failed = [
-        item
-        for item in structures
-        if isinstance(item, dict) and str(item.get("status") or "") != "good"
-    ]
-    if failed:
-        raise RuntimeError(
-            f"TableAgent returned {len(failed)} unsuccessful workbook structure(s)."
-        )
 
     file_name = str(
         source_metadata.get("file_name")
@@ -103,17 +95,27 @@ def normalize_table_agent_response(
         }
         for index, table in enumerate(tables)
     ]
-    completed_stages = ["table_agent:structure", "axiom:normalization"]
-    if embedding_count:
-        completed_stages.insert(1, "table_agent:embedding")
-
     table_agent_annotations = _table_agent_annotations(
         response,
         workbook_name=workbook_name,
     )
+    main_text = str(workbook_metadata.get("description") or "")
+    extraction = {
+        "main_text": main_text,
+        "tables": tables,
+        "figures": [],
+        "formulas": [],
+        "blocks": blocks,
+        "reading_order": [block["component_id"] for block in blocks],
+        "reading_order_meta": {
+            "source": "table_agent",
+            "complete": True,
+            "block_count": len(blocks),
+        },
+    }
+    stage_row = {"extraction": extraction}
 
     return {
-        "contract_version": "output-document-v4",
         "document": _document_identity(
             document_id=document_id,
             source_uri=source_uri,
@@ -121,19 +123,49 @@ def normalize_table_agent_response(
             workbook_name=workbook_name,
             workbook_metadata=workbook_metadata,
         ),
-        "content": {
-            "main_text": str(workbook_metadata.get("description") or ""),
-            "tables": tables,
-            "figures": [],
-            "formulas": [],
-            "blocks": blocks,
-            "reading_order": [block["component_id"] for block in blocks],
-            "reading_order_meta": {
-                "source": "table_agent",
-                "complete": True,
-                "block_count": len(blocks),
+        "ingest": {
+            "source": {
+                "object_id": document_id,
+                "uri": source_uri,
+                "content_type": source_metadata.get("content_type")
+                or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "metadata": deepcopy(source_metadata),
             },
-            "annotations": {"table_agent": table_agent_annotations},
+            "data": {
+                "object_id": document_id,
+                "source_uri": source_uri,
+                "source_format": Path(file_name).suffix.lower().lstrip(".") or "xlsx",
+                "rows": [deepcopy(stage_row)],
+                "text": main_text,
+                "metadata": {"processor": "table_agent"},
+                "tables": [],
+            },
+        },
+        "clean": {
+            "data": {
+                "source_object_id": document_id,
+                "rows": [deepcopy(stage_row)],
+                "issues": [],
+                "metadata": {
+                    "pass_through": True,
+                    "processor": "table_agent",
+                },
+            },
+        },
+        "enrich": {
+            "data": {
+                "source_object_id": document_id,
+                "rows": [stage_row],
+                "annotations": {"table_agent": table_agent_annotations},
+                "profile": {},
+                "metadata": {
+                    "pass_through": True,
+                    "processor": "table_agent",
+                    "job_id": response.get("job_id"),
+                    "stage": response.get("stage"),
+                    "embedding_count": embedding_count,
+                },
+            },
         },
         "retrieval": {
             "items": retrieval_items,
@@ -145,22 +177,6 @@ def normalize_table_agent_response(
                 ),
                 scope="document",
             ),
-        },
-        "lineage": {
-            "run_id": run_id,
-            "status": "succeeded",
-            "schema_ids": {
-                "ingested": None,
-                "cleaned": None,
-                "enriched": None,
-            },
-            "completed_stages": completed_stages,
-            "processor": {
-                "name": "table_agent",
-                "job_id": response.get("job_id"),
-                "stage": response.get("stage"),
-                "embedding_count": embedding_count,
-            },
         },
     }
 
@@ -187,7 +203,6 @@ def _table_agent_annotations(
     workbook_name: str,
 ) -> dict[str, Any]:
     annotations: dict[str, Any] = {
-        "schema_artifacts": deepcopy(response.get("schema_artifacts") or []),
         "workbook_metadata": _workbook_metadata_extensions(
             response,
             workbook_name=workbook_name,
@@ -295,6 +310,7 @@ def _retrieval_items(
                 if value not in (None, "")
             ),
             "type": "table",
+            "component_type": "table",
             "position": {
                 "index": index,
                 "workbook": table.get("workbook"),
@@ -334,6 +350,9 @@ def _normalize_retrieval_item(
     normalized = {
         "item_id": str(item.get("item_id") or item.get("id") or index),
         "type": str(item.get("type") or "table"),
+        "component_type": str(
+            item.get("component_type") or item.get("type") or "table"
+        ),
         "position": deepcopy(position),
         "content": deepcopy(content),
         "embeddings": _normalize_embeddings(item),

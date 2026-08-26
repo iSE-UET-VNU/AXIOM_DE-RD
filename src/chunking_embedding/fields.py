@@ -17,10 +17,51 @@ import re
 
 from .contracts import Chunk, Unit, chunk_identity, params_hash
 from .registry import chunker_needs, get_chunker
-from .text import Span
 
 _PAGE_RE = re.compile(r"^/page/(\d+)/")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
+_WORD_RE = re.compile(r"\S+")
+_SENT_RE = re.compile(r"(?<=[.!?。！？])\s+|\n{2,}")
+_PARA_RE = re.compile(r"\n{2,}")
+
+Span = tuple[int, int]
+SENTENCE_END_CHARS = ".!?。！？:\"')"
+
+
+def sentence_spans(text: str) -> list[Span]:
+    return _split_text_spans(text, _SENT_RE)
+
+
+def paragraph_spans(text: str) -> list[Span]:
+    return _split_text_spans(text, _PARA_RE)
+
+
+def word_windows(text: str, n_words: int, overlap: int) -> list[Span]:
+    words = list(_WORD_RE.finditer(text))
+    if not words:
+        return []
+    spans: list[Span] = []
+    step = max(1, n_words - overlap)
+    index = 0
+    while index < len(words):
+        end_index = min(index + n_words, len(words))
+        spans.append((words[index].start(), words[end_index - 1].end()))
+        if end_index == len(words):
+            break
+        index += step
+    return spans
+
+
+def _split_text_spans(text: str, pattern: re.Pattern[str]) -> list[Span]:
+    spans: list[Span] = []
+    position = 0
+    for match in pattern.finditer(text):
+        if text[position:match.start()].strip():
+            spans.append((position, match.start()))
+        position = match.end()
+    if text[position:].strip():
+        spans.append((position, len(text)))
+    return spans
 
 
 @dataclass(frozen=True)
@@ -49,7 +90,11 @@ class FieldContext:
         }
 
 
-def route_document(extraction: dict[str, Any], ctx: FieldContext, resources: Resources | None = None) -> list[Chunk]:
+def route_document(
+    extraction: dict[str, Any],
+    ctx: FieldContext,
+    resources: Resources | None = None,
+) -> list[Chunk]:
     chunks: list[Chunk] = []
     for field_name, route in _ROUTES:
         value = extraction.get(field_name)
@@ -58,7 +103,12 @@ def route_document(extraction: dict[str, Any], ctx: FieldContext, resources: Res
     return chunks
 
 
-def route_main_text(value: Any, extraction: dict[str, Any], ctx: FieldContext, resources: Resources | None = None) -> list[Chunk]:
+def route_main_text(
+    value: Any,
+    extraction: dict[str, Any],
+    ctx: FieldContext,
+    resources: Resources | None = None,
+) -> list[Chunk]:
     text = str(value)
     base_meta = {
         **ctx.base_metadata(),
@@ -70,7 +120,12 @@ def route_main_text(value: Any, extraction: dict[str, Any], ctx: FieldContext, r
     return _chunks_from_result(result, ctx.doc_id, "main_text", text, base_meta)
 
 
-def route_tables(value: Any, extraction: dict[str, Any], ctx: FieldContext, resources: Resources | None = None) -> list[Chunk]:
+def route_tables(
+    value: Any,
+    extraction: dict[str, Any],
+    ctx: FieldContext,
+    resources: Resources | None = None,
+) -> list[Chunk]:
     chunks: list[Chunk] = []
     for i, table in enumerate(value):
         if not isinstance(table, dict):
@@ -116,7 +171,12 @@ def route_tables(value: Any, extraction: dict[str, Any], ctx: FieldContext, reso
     return chunks
 
 
-def route_figures(value: Any, extraction: dict[str, Any], ctx: FieldContext, resources: Resources | None = None) -> list[Chunk]:
+def route_figures(
+    value: Any,
+    extraction: dict[str, Any],
+    ctx: FieldContext,
+    resources: Resources | None = None,
+) -> list[Chunk]:
     chunks: list[Chunk] = []
     for i, figure in enumerate(value):
         if not isinstance(figure, dict):
@@ -126,14 +186,28 @@ def route_figures(value: Any, extraction: dict[str, Any], ctx: FieldContext, res
         composed = "\n\n".join(part for part in (caption, ocr_text) if part)
         if not composed:
             continue
-        page = _single_page(figure.get("caption_citations") or figure.get("description_citations"))
+        page = _single_page(
+            figure.get("caption_citations") or figure.get("description_citations")
+        )
         chunks.append(
             Chunk.create(
-                ctx.doc_id, f"figures[{i}]", "figure_chunk", composed, 0, len(composed),
+                ctx.doc_id,
+                f"figures[{i}]",
+                "figure_chunk",
+                composed,
+                0,
+                len(composed),
                 metadata={
                     **ctx.base_metadata(),
                     "component_type": "figure",
-                    "composed_from": [n for n, part in (("caption", caption), ("description", ocr_text)) if part],
+                    "composed_from": [
+                        name
+                        for name, part in (
+                            ("caption", caption),
+                            ("description", ocr_text),
+                        )
+                        if part
+                    ],
                     "page": page,
                     "field_chars": len(composed),
                 },
@@ -142,11 +216,21 @@ def route_figures(value: Any, extraction: dict[str, Any], ctx: FieldContext, res
     return chunks
 
 
-def route_formulas(value: Any, extraction: dict[str, Any], ctx: FieldContext, resources: Resources | None = None) -> list[Chunk]:
+def route_formulas(
+    value: Any,
+    extraction: dict[str, Any],
+    ctx: FieldContext,
+    resources: Resources | None = None,
+) -> list[Chunk]:
     chunks: list[Chunk] = []
     for i, formula in enumerate(value):
         if isinstance(formula, dict):
-            content = str(formula.get("content") or formula.get("latex") or formula.get("text") or "")
+            content = str(
+                formula.get("content")
+                or formula.get("latex")
+                or formula.get("text")
+                or ""
+            )
         else:
             content = str(formula or "")
         if not content.strip():
@@ -179,33 +263,65 @@ def _run_chunker(ctx: FieldContext, text: str, resources: Resources | None) -> l
     if not needs:
         return fn(text, **ctx.chunker_params)
     if resources is None:
-        raise RuntimeError(f"chunker {ctx.chunker_name!r} needs {needs} but no resources were provided")
+        raise RuntimeError(
+            f"chunker {ctx.chunker_name!r} needs {needs} but no resources were provided"
+        )
     missing = [n for n in needs if getattr(resources, n, None) is None]
     if missing:
         raise RuntimeError(f"chunker {ctx.chunker_name!r} needs {missing} which the run did not supply")
     return fn(text, resources=resources, **ctx.chunker_params)
 
 
-def _chunks_from_result(result: list[Any], doc_id: str, field_path: str, text: str, base_meta: dict[str, Any]) -> list[Chunk]:
+def _chunks_from_result(
+    result: list[Any],
+    doc_id: str,
+    field_path: str,
+    text: str,
+    base_meta: dict[str, Any],
+) -> list[Chunk]:
     ids = [
-        chunk_identity(doc_id, field_path, item.start, item.end, f"#{i}") if isinstance(item, Unit) else None
+        chunk_identity(doc_id, field_path, item.start, item.end, f"#{i}")
+        if isinstance(item, Unit)
+        else None
         for i, item in enumerate(result)
     ]
     chunks: list[Chunk] = []
     for i, item in enumerate(result):
         if isinstance(item, Unit):
-            parent_id = ids[item.parent] if item.parent is not None and 0 <= item.parent < len(ids) else None
+            parent_id = (
+                ids[item.parent]
+                if item.parent is not None and 0 <= item.parent < len(ids)
+                else None
+            )
             children = [ids[j] for j in item.children if 0 <= j < len(ids) and ids[j]]
             chunks.append(
                 Chunk(
-                    chunk_id=ids[i], doc_id=doc_id, field_path=field_path, chunk_type=item.chunk_type,
-                    text=item.text, start=item.start, end=item.end,
-                    metadata={**base_meta, **item.meta}, level=item.level, parent_id=parent_id, children=children,
+                    chunk_id=ids[i],
+                    doc_id=doc_id,
+                    field_path=field_path,
+                    chunk_type=item.chunk_type,
+                    text=item.text,
+                    start=item.start,
+                    end=item.end,
+                    metadata={**base_meta, **item.meta},
+                    level=item.level,
+                    parent_id=parent_id,
+                    children=children,
                 )
             )
         else:
             a, b = item
-            chunks.append(Chunk.create(doc_id, field_path, "text_chunk", text[a:b], a, b, metadata=dict(base_meta)))
+            chunks.append(
+                Chunk.create(
+                    doc_id,
+                    field_path,
+                    "text_chunk",
+                    text[a:b],
+                    a,
+                    b,
+                    metadata=dict(base_meta),
+                )
+            )
     return chunks
 
 

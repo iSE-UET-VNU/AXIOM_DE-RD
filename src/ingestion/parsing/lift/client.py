@@ -14,13 +14,16 @@ import os
 import time
 
 from ....models import DataObject, ParsedData
+from ...image_contract import normalize_markdown_images
 from ....reading_order import (
     parse_document_json,
     source_blocks_from_parser_json,
 )
 from ....utils.paths import portable_path_value
 
-SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+SUPPORTED_EXTENSIONS = frozenset(
+    {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+)
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas/document_components.json"
 
 
@@ -66,6 +69,9 @@ class LiftAPIConfig:
 class LiftAPIParserClient:
     """Small wrapper around the Datalab hosted extraction API."""
 
+    provider_name = "lift_api"
+    supported_extensions = SUPPORTED_EXTENSIONS
+
     def __init__(self, config: LiftAPIConfig) -> None:
         self.config = config
 
@@ -81,7 +87,7 @@ class LiftAPIParserClient:
             from datalab_sdk import ConvertOptions, DatalabClient, ExtractOptions
         except ImportError as exc:
             raise RuntimeError(
-                "Missing datalab-python-sdk. Install it with: pip install datalab-python-sdk"
+                "Missing Lift dependency. Install it with: pip install -e .[lift]"
             ) from exc
 
         schema = _load_schema(self.config.schema_path)
@@ -140,6 +146,18 @@ class LiftAPIParserClient:
             else None
         )
         image_files = _write_images(bundle_dir, images)
+        image_markdown_source = (
+            conversion if conversion is not None else result
+        )
+        image_markdown = str(
+            _get_attr(image_markdown_source, "markdown", "") or ""
+        )
+        extraction, normalized_image_count = normalize_markdown_images(
+            extraction,
+            image_markdown,
+            image_files,
+            source_blocks,
+        )
         raw_output_paths = _write_lift_raw_outputs(
             bundle_dir,
             extract_result=result,
@@ -164,6 +182,7 @@ class LiftAPIParserClient:
             "images": images,
             "image_files": image_files,
             "image_source": image_source,
+            "normalized_image_count": normalized_image_count,
             "raw_lift_outputs": raw_output_paths,
         }
         output_path = (
@@ -202,6 +221,7 @@ class LiftAPIParserClient:
                 "image_count": len(image_files),
                 "image_files": image_files,
                 "image_source": image_source,
+                "normalized_image_count": normalized_image_count,
                 "raw_lift_outputs": raw_output_paths,
                 "reading_order_source": (
                     "parser_json"

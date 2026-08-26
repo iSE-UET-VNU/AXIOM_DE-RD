@@ -1,8 +1,8 @@
-"""Lexical statistics used by BM25 retrieval.
+"""Lexical statistics stored alongside chunk embeddings for BM25 retrieval.
 
 Term frequency and chunk length are stored with each retrieval item. Document
-statistics are derived from those item-level payloads and stored in that same
-document, so every output file is self-contained for BM25 retrieval.
+statistics are derived from those item-level payloads, so every output document
+is self-contained for lexical retrieval as well as dense retrieval.
 """
 
 from __future__ import annotations
@@ -24,18 +24,14 @@ _TOKEN_PATTERN = re.compile(r"[^\W_]+(?:'[^\W_]+)*", flags=re.UNICODE)
 
 
 def analyze(text: str) -> list[str]:
-    """Normalize and tokenize text deterministically for indexing and queries."""
+    """Normalize and tokenize text deterministically."""
     normalized = unicodedata.normalize("NFC", str(text)).casefold()
     normalized = normalized.replace("\u2019", "'")
     return _TOKEN_PATTERN.findall(normalized)
 
 
 def build_lexical_payload(text: str) -> dict[str, Any] | None:
-    """Return item-level raw term frequencies and token length.
-
-    Empty text has no lexical payload and is therefore excluded from the BM25
-    corpus statistics.
-    """
+    """Return item-level raw term frequencies and analyzed token length."""
     tokens = analyze(text)
     if not tokens:
         return None
@@ -49,11 +45,7 @@ def build_lexical_payload(text: str) -> dict[str, Any] | None:
 
 
 def content_text(value: Any) -> str:
-    """Flatten consumer retrieval content into analyzer input text.
-
-    Mapping keys are structural labels and are intentionally excluded; string
-    and numeric values retain their input order.
-    """
+    """Flatten retrieval content values into analyzer input text."""
     parts: list[str] = []
 
     def visit(child: Any) -> None:
@@ -98,7 +90,6 @@ def build_corpus_statistics(
 
         chunk_count += 1
         total_dl += dl
-        # DF counts a term at most once per chunk, regardless of its TF.
         document_frequency.update(str(term) for term in tf)
 
     return {

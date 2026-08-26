@@ -12,10 +12,24 @@ dependencies = [
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
     "openai>=1.0.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0,<2.0.0",
+    "python-docx>=1.2.0,<2.0.0",
     "python-dotenv>=1.0.0",
+    "requests>=2.32.0",
     "streamlit[pdf]>=1.49.0",
+    # Exact token counts when batching embedding requests. Without it the
+    # embedders fall back to an upper-bound estimate: correct, but it sends
+    # smaller batches than necessary.
+    "tiktoken>=0.13.0",
     "uvicorn[standard]>=0.30.0",
+    "xlrd>=2.0.1",
 ]
+
+[project.optional-dependencies]
+lift = ["datalab-python-sdk"]
+chandra2 = ["chandra-ocr>=0.2,<0.3"]
+chandra2-local = ["chandra-ocr[hf]>=0.2,<0.3"]
 
 [tool.setuptools.package-data]
 "src.ingestion.parsing.lift" = ["schemas/*.json"]

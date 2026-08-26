@@ -2,7 +2,7 @@
 
 The demo deliberately reads the persisted JSON contracts instead of rebuilding
 pipeline state.  This keeps the UI useful after a process restart and lets it
-display both current ``output-document-v4`` artifacts and older demo runs.
+display both current ``output-document-v5`` artifacts and older demo runs.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ from pathlib import Path
 import re
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
+
+from ..reading_order import reading_order_from_rows
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -227,6 +229,43 @@ def extract_document_view(payload: dict[str, Any]) -> dict[str, Any]:
         return _empty_document_view()
 
     contract = str(payload.get("contract_version") or "unknown")
+    if isinstance(payload.get("document"), dict) and isinstance(payload.get("enrich"), dict):
+        lineage = payload.get("lineage") if isinstance(payload.get("lineage"), dict) else {}
+        enriched = _mapping(_mapping(payload.get("enrich")).get("data"))
+        extraction = _first_extraction(enriched)
+        content = {
+            "main_text": extraction.get("main_text") or "",
+            "tables": _list_value(extraction.get("tables")),
+            "figures": _list_value(extraction.get("figures")),
+            "formulas": _list_value(extraction.get("formulas")),
+        }
+        for key in ("blocks", "reading_order", "reading_order_meta"):
+            if key in extraction:
+                content[key] = extraction[key]
+        if not any(key in extraction for key in ("blocks", "reading_order")):
+            blocks, reading_order, reading_order_meta = reading_order_from_rows(
+                enriched.get("rows", [])
+            )
+            content.update(
+                {
+                    "blocks": blocks,
+                    "reading_order": reading_order,
+                    "reading_order_meta": reading_order_meta,
+                }
+            )
+        if isinstance(enriched.get("annotations"), dict):
+            content["annotations"] = enriched["annotations"]
+        if isinstance(enriched.get("profile"), dict) and enriched["profile"]:
+            content["profile"] = enriched["profile"]
+        return {
+            "contract_version": contract,
+            "identity": dict(payload["document"]),
+            "content": content,
+            "retrieval": _mapping(payload.get("retrieval")),
+            "lineage": lineage,
+            "status": str(lineage.get("status") or "succeeded"),
+        }
+
     if isinstance(payload.get("document"), dict) and isinstance(payload.get("content"), dict):
         lineage = payload.get("lineage") if isinstance(payload.get("lineage"), dict) else {}
         return {

@@ -23,7 +23,18 @@
       ".pdf",
       ".png",
       ".jpg",
-      ".jpeg"
+      ".jpeg",
+      ".gif",
+      ".webp",
+      ".txt",
+      ".md",
+      ".json",
+      ".jsonl",
+      ".yaml",
+      ".yml",
+      ".pptx",
+      ".doc",
+      ".docx"
     ],
     "max_files": null
   },
@@ -37,19 +48,45 @@
     "ingestion",
     "cleaning",
     "enrichment",
-    "indexing_cataloging",
+    "chunking_embedding",
     "integration",
     "artifacts"
   ],
   "parsing": {
     "provider": "lift_api",
+    "pptx": {
+      "extract_images": true
+    },
+    "word": {
+      "extract_images": true,
+      "soffice_path": null,
+      "conversion_timeout_seconds": 120
+    },
+    "chandra2": {
+      "method": "vllm",
+      "continuous_page_queue": true,
+      "batch_size": 64,
+      "max_workers": 24,
+      "max_output_tokens": 12384,
+      "max_retries": 2,
+      "include_images": true,
+      "include_headers_footers": false,
+      "save_raw_outputs": true,
+      "refine_tables": true,
+      "table_max_workers": 8,
+      "table_max_output_tokens": 8192,
+      "table_crop_margin_ratio": 0.02,
+      "table_crop_min_short_side": 1536,
+      "table_crop_max_long_side": 3072,
+      "table_crop_max_pixels": 6291456
+    },
     "lift_api": {
       "api_key_env": "DATALAB_API_KEY",
       "mode": "accurate",
       "schema_path": "src/ingestion/parsing/lift/schemas/document_components.json",
       "fallback_to_local": false,
       "extract_images": true,
-      "save_raw_outputs": false
+      "save_raw_outputs": true
     }
   },
   "table_agent": {
@@ -72,9 +109,10 @@
     ]
   },
   "chunking_embedding": {
-    "chunker": "recursive",
+    "chunker": "fixed_overlap",
     "chunker_params": {
-      "target": 400
+      "n_words": 512,
+      "overlap": 128
     },
     "max_rows_per_chunk": 20,
     "embedder": "openrouter_te3s",
@@ -87,23 +125,6 @@
       "app_title": "AXIOM_DE-RD"
     },
     "retrieval_profile": "hybrid_default"
-  },
-  "indexing": {
-    "embeddings": {
-      "enabled": true,
-      "target_index_types": [
-        "text_chunk",
-        "table",
-        "image"
-      ],
-      "provider": "openrouter",
-      "model": "openai/text-embedding-3-small",
-      "dimension": 1536,
-      "batch_size": 32,
-      "fail_on_error": true,
-      "api_key_env": "OPENROUTER_API_KEY",
-      "app_title": "AXIOM_DE-RD"
-    }
   },
   "logging": {
     "level": "INFO"

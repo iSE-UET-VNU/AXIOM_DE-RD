@@ -32,7 +32,7 @@ from .table_agent import (
 from .utils.config import load_config
 from .utils.env import load_dotenv_file
 from .utils.paths import portable_path
-from .api.output import build_dataeng_output
+from .api.output import build_dataeng_output, public_dataeng_response
 from .api.schemas import DataEngRequest, PresignedFileRequest
 
 
@@ -58,10 +58,12 @@ def dispatch_dataeng_request(
     config_path: str | Path = DEFAULT_CONFIG_PATH,
 ) -> dict[str, Any]:
     """Return the existing DataEng response after API-level input routing."""
-    return dispatch_dataeng_inputs(
-        config_path=config_path,
-        presigned_inventory=request.to_inventory(),
-    ).response
+    return public_dataeng_response(
+        dispatch_dataeng_inputs(
+            config_path=config_path,
+            presigned_inventory=request.to_inventory(),
+        ).response
+    )
 
 
 def dispatch_dataeng_inputs(
@@ -420,8 +422,7 @@ def _merge_metadata(
     table_documents = [
         document
         for document in documents
-        if document.get("lineage", {}).get("processor", {}).get("name")
-        == "table_agent"
+        if _document_processor(document) == "table_agent"
     ]
     summary = metadata.get("summary")
     if not isinstance(summary, dict):
@@ -430,9 +431,9 @@ def _merge_metadata(
     summary["table_agent"] = {
         "document_count": len(table_documents),
         "job_ids": [
-            document.get("lineage", {}).get("processor", {}).get("job_id")
+            _document_processor_metadata(document).get("job_id")
             for document in table_documents
-            if document.get("lineage", {}).get("processor", {}).get("job_id")
+            if _document_processor_metadata(document).get("job_id")
         ],
     }
     completed = metadata.get("completed_modules")
@@ -447,7 +448,6 @@ def _merge_metadata(
 
 def _empty_output_metadata(run_id: str, input_source: str) -> dict[str, Any]:
     return {
-        "contract_version": "stage-metadata-v1",
         "run_id": run_id,
         "stage": "output",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -456,11 +456,11 @@ def _empty_output_metadata(run_id: str, input_source: str) -> dict[str, Any]:
         "documents": [],
         "schema": {
             "document_file": {
-                "contract_version": "string",
                 "document": "consumer-facing document identity and source summary",
-                "content": "semantic content",
+                "ingest": "source object and parsed data",
+                "clean": "cleaned data",
+                "enrich": "enriched data",
                 "retrieval": "retrieval items and embeddings",
-                "lineage": "run and processor references",
             },
             "records": {},
         },
@@ -469,6 +469,17 @@ def _empty_output_metadata(run_id: str, input_source: str) -> dict[str, Any]:
         "completed_modules": [],
         "stage_dirs": {},
     }
+
+
+def _document_processor(document: dict[str, Any]) -> str | None:
+    return str(_document_processor_metadata(document).get("processor") or "") or None
+
+
+def _document_processor_metadata(document: dict[str, Any]) -> dict[str, Any]:
+    enrich = document.get("enrich")
+    data = enrich.get("data") if isinstance(enrich, dict) else None
+    metadata = data.get("metadata") if isinstance(data, dict) else None
+    return metadata if isinstance(metadata, dict) else {}
 
 
 def _document_summary(document: dict[str, Any]) -> dict[str, Any]:
