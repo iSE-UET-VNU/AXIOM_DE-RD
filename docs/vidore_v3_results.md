@@ -1127,3 +1127,51 @@ new infrastructure — same served-pool JSON, same permutation harness.
 Reproduce: `python research/experiments/physics_colqwen_eval.py` (needs
 `data/work/vidore_physics_colqwen/{physics_colqwen_scores.npy,_keys.json,_qids.json}`
 from the Colab notebook — no GPU, no API for this step).
+
+---
+
+## 19. Local reranker — refuted, and it clarifies *why* rerank works (2026-08-27)
+
+§1b-iii measured Voyage `rerank-2.5` at +5.08 (depth-20), capped there by the free
+tier's 3 RPM / 10K TPM. `Xenova/bge-reranker-base` via ONNX Runtime on CPU (same
+torch-2.2.2 workaround as the CLIP and ColQwen2 arms — no API, no GPU) was meant to
+extend that lever past the API cap, matching the priority list in
+`docs/phan_tich_first_principles.md` item 2. `research/experiments/physics_rerank_local.py`.
+
+| depth | NDCG@10 | Δ | p | better/worse/tied |
+|---|---:|---:|---:|---|
+| served α=0.7 | 44.15 | — | — | — |
+| 10 | 43.21 | −0.95 | 0.2979 n.s. | 100/112/90 |
+| 20 (same depth Voyage was measured at) | 41.26 | **−2.89** | **0.0181** | 88/143/71 |
+| 50 | 38.82 | −5.34 | 0.0006 | 85/152/65 |
+| 100 | 37.56 | **−6.59** | **0.0001** | 76/161/65 |
+
+**Not a depth problem — a model problem.** At the exact depth Voyage was measured
+(20), Voyage gets +5.08 and this reranker gets −2.89: opposite sign, same setting.
+Damage grows monotonically with depth because the reranker's own bad calls
+compound — more candidates reordered, more chances to promote a false positive
+into the top-10 that the α=0.7 fusion had correctly excluded. This is computed as
+a free post-hoc slice of the depth-100 checkpoint (`physics_rerank_local_depth_sweep.py`),
+not a re-run, so all four rows share one scoring pass.
+
+### What this changes in the priority list
+
+`phan_tich_first_principles.md` item 2 read "a trained ranker helps, at ceiling
+71.68" — true, but incomplete: **it has to be a *good* trained ranker.**
+bge-reranker-base (278M, general multilingual) is trained, and it makes things
+markedly worse. The one working example remains Voyage rerank-2.5, a much
+stronger commercial model. The lesson is not "any cross-encoder helps" — it is
+"a weak cross-encoder actively hurts more than doing nothing," which raises the
+bar for what a free/local substitute would need to clear before it is worth
+depth-extending.
+
+### Standing
+
+Refuted as a way to extend the rerank lever for free. Worth trying a stronger
+open reranker (e.g. `BAAI/bge-reranker-v2-m3`, larger, more recent) if the ONNX
+export exists, but do not assume "trained beats untrained" transfers without
+re-measuring — this result is exactly the counter-example.
+
+Reproduce: `python research/experiments/physics_rerank_local.py --depth 100`,
+then `python research/experiments/physics_rerank_local_depth_sweep.py` for the
+depth breakdown from the same cached scores.
