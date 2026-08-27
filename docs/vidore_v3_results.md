@@ -1175,3 +1175,119 @@ re-measuring — this result is exactly the counter-example.
 Reproduce: `python research/experiments/physics_rerank_local.py --depth 100`,
 then `python research/experiments/physics_rerank_local_depth_sweep.py` for the
 depth breakdown from the same cached scores.
+
+---
+
+## 20. Stacking the three verified levers — Voyage alone is the ceiling (2026-08-27)
+
+handoff §5 priority 2: SEP (+2.41), Voyage rerank-2.5 (+5.08) and ColQwen2
+fusion (+3.22) were each measured against a slightly different baseline and
+never composed. `physics_stack.py` runs all of them on the **one**
+`vidore_page` α=0.7 pool (44.15), every arm scored on the same qrels, paired
+permutation, 10,000 resamples. Everything cached — no API, no GPU. Compose
+order is retrieve → rerank → structural/visual reorder: Voyage is applied to
+the base-pool top-20 (fully cached, reproduces §1b-iii's 49.23 exactly) and
+SEP / ColQwen2 reorder the result. Fusion arms reported as a `w`-band, not the
+argmax (§1b-ii/§18 convention).
+
+| arm | NDCG@10 | vs | Δ | p |
+|---|---:|---|---:|---:|
+| baseline α=0.7 | 44.15 | — | — | — |
+| SEP (λ=0.5) | 46.17 | baseline | +2.02 | 0.0026 |
+| ColQwen2 fusion (w 0.2–0.8) | 44.7–47.5 | baseline | up to +3.38 | ≤0.0001 at w≥0.4 |
+| **Voyage rerank-2.5 top-20** | **49.23** | baseline | **+5.07** | 0.0001 |
+| SEP + ColQwen2 (w 0.2–0.8) | 47.1–48.3 | baseline | +2.9…+4.1 | ≤0.0001 |
+| **Voyage + ColQwen2 (w 0.2–0.8)** | **47.5–49.8** | **Voyage** | **+0.6 … −1.8** | **0.34 → n.s. at every w** |
+| Voyage + SEP + ColQwen2 (w 0.2–0.8) | 47.1–48.3 | Voyage | −1.0…−2.2 | n.s. → 0.04 |
+
+**Nothing stacks onto the reranker.** Voyage rerank alone scores 49.23. Fusing
+ColQwen2 on top of the reranked order does **not** significantly beat it —
+peak +0.61 at w=0.3 (p=0.34), negative for w≥0.4. SEP+ColQwen2 without the
+reranker (48.3) is also below Voyage alone. All three levers fix the same
+failure (§7: gold file in top-10, wrong pages within it ranked); once the
+cross-encoder has reordered the top-20 on token-level interaction, the
+structural prior and the ColQwen2-2B visual arm have nothing left to add.
+
+The one informative signal in the ColQwen2 sweep: **the useful visual weight
+collapses once Voyage runs** — peak w moves 0.7 (over the raw fusion, +3.38)
+→ 0.3 (over the reranked order, +0.61 n.s.). The visual arm was mostly
+recovering ordering the reranker recovers better.
+
+**SEP after reranking is not cleanly measurable from cache** and the rows above
+carry a `[not clean]` flag in the script. SEP's file aggregate is built for a
+real score decay; fed a rank proxy of the reranked order (a linear ramp) it
+mis-fires. Direction (SEP does not help post-rerank) is expected — §7's
+mechanism needs a badly-ordered pool — but do not quote the −7 delta. A clean
+test needs the reranker's real scores carried through, or a fresh Voyage run
+over the SEP-reordered pool (the aborted `_scores_sep.json` covers 31/302).
+
+**Ceiling from the current toolkit: 49.23**, i.e. Voyage rerank and nothing
+else. For reference, the ViDoRe V3 leaderboard SOTA on physics is
+nemotron-colembed-vl-8b-v2 at **50.84** ([arXiv 2602.03992](https://arxiv.org/abs/2602.03992)
+Table 2) — but that is an average over 6 query languages and our ladder is
+French-only, so it is an approximate anchor, not a like-for-like target (cf.
+§4). Any material gain above ~49 needs a stronger *component* — see
+`docs/retrieval_research_plan.md`.
+
+Reproduce: `python research/experiments/physics_stack.py`
+
+---
+
+## 21. SEP and ColQwen2 on the KDL / light-prep pools — the fillable table rows (2026-08-27)
+
+§18/§20 measured Voyage and ColQwen2 on `vidore_page` (ViDoRe V3's own supplied
+text, baseline 44.15) — an arm that uses **none of our parsing**. The results
+table needs rows on the pool the pipeline actually ships: **KDL → fixed_512/128
+chunks → MaxP to pages → hybrid α=0.7** (the CSV "Baseline Legacy" recipe,
+43.86/46.73 reproduction) and the light-preparation equivalent. `physics_kdl_arms.py`,
+all cached — no API, no GPU. Paired permutation, 10,000 resamples.
+
+### KDL (Baseline Legacy recipe) — baseline 43.86 / 46.73
+
+| arm | NDCG@10 | R@10 | Δ | p | vs |
+|---|---:|---:|---:|---:|---|
+| baseline α=0.7 | 43.86 | 46.73 | — | — | — |
+| + SEP (λ=0.5) | 46.27 | 48.88 | +2.41 | 0.0004 | baseline |
+| + ColQwen2 fusion (w 0.6–0.8) | 47.4–47.5 | ~50.0 | +3.5…+3.7 | ≤0.0005 | baseline |
+| **+ SEP + ColQwen2 (w 0.6–0.7)** | **48.2–48.4** | ~50.6 | **+1.95…+2.08** | 0.02–0.03 | **SEP** |
+
+Total for the SEP+ColQwen2 stack vs baseline: **43.86 → ~48.3 (+4.5)**.
+
+### light-prep (pdf-inspector native text, fixed_512/128) — baseline 43.02 / 45.72
+
+| arm | NDCG@10 | R@10 | Δ | p | vs |
+|---|---:|---:|---:|---:|---|
+| baseline α=0.7 | 43.02 | 45.72 | — | — | — |
+| + SEP (λ=0.5) | 45.56 | 48.08 | +2.54 | 0.0001 | baseline |
+| + ColQwen2 fusion (w 0.7–0.8) | 47.2–47.6 | ~50.2 | +4.2…+4.6 | 0.0001 | baseline |
+| **+ SEP + ColQwen2 (w=0.6)** | **48.45** | 51.16 | **+2.89** | 0.0018 | **SEP** |
+
+Total for the stack vs baseline: **43.02 → 48.45 (+5.4)**.
+
+### What this establishes
+
+1. **SEP + ColQwen2 *does* stack when there is no reranker** — +2 on top of SEP,
+   significant, on both parses. Opposite of §20, where SEP + ColQwen2 *after
+   Voyage* added nothing. Reconciles cleanly: on the raw fusion order the
+   within-file ordering is still bad, so SEP and the visual arm each have work to
+   do; once the cross-encoder has done that work they do not.
+2. **The free stack (SEP + ColQwen2, ~48.3 on KDL) gets within ~1 point of
+   Voyage-alone (49.23)** — no API, one-time GPU pass for the visual index.
+3. **KDL retrieval buys ~0.8 NDCG over light-prep at the fusion** (43.86 vs
+   43.02); the levers behave the same on both, consistent with §10 (KDL's extra
+   content changes generation, not which pages rank).
+
+### Still missing: Voyage on the KDL pool
+
+Voyage rerank was only ever run on `vidore_page`. On the KDL pool it needs a
+fresh ~100 min API run (free-tier 3 RPM). `physics_kdl_arms.py` dumps
+`physics_KDL_pool.json` / `physics_light_prep_pool.json` as candidate lists;
+feed `physics_rerank_voyage.py --pool ... --texts ...` when budget allows.
+
+### QA (end-to-end) still only measured for SEP
+
+§16: SEP E2E on this exact KDL pool = 51.83 correct_only / 89.70 credited (both
+n.s. vs baseline). ColQwen2 fusion and the SEP+ColQwen2 stack have **no QA
+measurement**.
+
+Reproduce: `python research/experiments/physics_kdl_arms.py`
