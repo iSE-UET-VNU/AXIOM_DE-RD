@@ -39,9 +39,14 @@ toàn bộ từ cache — không API, không GPU. Paired permutation 10k.
 | + SEP (λ=0.5) | 46.27 | 48.88 | 51.83 | 89.70 | +2.41 (p=.0004) | miễn phí, +0.3ms/câu |
 | + ColQwen2 fusion (w≈0.6) | 47.47 | 49.77 | *chưa đo* | *chưa đo* | +3.61 (p<.001) | GPU Colab 1 lần |
 | **+ SEP + ColQwen2 (w≈0.7)** | **48.35** | 50.63 | *chưa đo* | *chưa đo* | **+4.49** | như trên |
-| + Voyage rerank-2.5 (trên KDL) | *CHƯA ĐO* | | | | (trên vidore_page: +5.08) | API ~100 phút, chặn ngân sách |
+| + Nemotron Rerank VL (free, depth-20, text) | 47.74 | 49.68 | *chưa đo* | *chưa đo* | +3.88 (p=.0007) | **miễn phí, không trần**, ~10 phút/302 câu |
+| + Voyage rerank-2.5 (trên KDL) | *CHƯA ĐO* | | | | (trên vidore_page: +5.08) | API ~100 phút |
 
-Light-prep: baseline 43.02 → SEP+ColQwen2 = **48.45** (+5.4). Chi tiết ledger §21.
+Light-prep: baseline 43.02 → SEP+ColQwen2 = **48.45** (+5.4). Chi tiết ledger §21–§22.
+
+**Reranker + prior = trùng lặp (đã xác nhận trên 2 reranker, §20 + §22):** đưa SEP/ColQwen2 vào
+trước hay sau một cross-encoder được huấn luyện đều không giúp (n.s. hoặc âm nhẹ). Kiến trúc:
+**hybrid tốt → 1 cross-encoder mạnh**, không phải chồng lever.
 
 ### 2b. Đo trên `vidore_page` (text ViDoRe cung cấp, KHÔNG dùng parse của ta) — chỉ để so sánh
 
@@ -121,13 +126,17 @@ Kế hoạch đầy đủ + lập luận: [`docs/retrieval_research_plan.md`](re
    (~100 phút API — **hỏi ngân sách trước**). `physics_kdl_arms.py` đã dump sẵn pool.
 2. **P1 — nâng visual arm ColQwen2-2B → Nemotron ColEmbed V2 4B/3B.** Kỳ vọng lợi lớn nhất.
    Check gating + khả thi Colab T4 trước. Dùng lại pattern `ColQwen2_visual_arm_physics.ipynb`.
-3. **P3 — reranker mạnh hơn: Qwen3-Reranker-4B trên Colab GPU** (depth 50/100, không cắt 1200 ký tự).
-   `bge-reranker-base` đã bị loại (§19) — **đo lại từ đầu**, đừng giả định thắng Voyage.
+3. **P3 — reranker mạnh hơn.** Đã có `nvidia/llama-nemotron-rerank-vl-1b-v2:free` (OpenRouter,
+   miễn phí, không trần) = +3.88 trên KDL (§22). Việc tiếp:
+   (a) **depth sweep Nemotron text** (50 — context 10.240 token nên depth>~40 không vừa; miễn phí);
+   (b) **Nemotron đa phương thức (kèm ảnh trang)** — probe chạy được nhưng chậm 15× + điểm nhìn yếu,
+   chạy subset nhỏ trước;
+   (c) Voyage trên pool KDL (`physics_KDL_pool.json` đã dump) nếu muốn so 1-1 — API ~100 phút;
+   (d) Qwen3-Reranker-4B trên Colab GPU.
 4. **P2 — leg dense: `text-embedding-3-small` → Qwen3-Embedding.** Leg dense (41.1 một mình) là mắt xích yếu nhất.
-5. **P4/P4b — α thích ứng theo truy vấn** (trần +8.60, §12). Hai hướng: cross-encoder làm router (P4),
-   hoặc LambdaMART/Metarank làm tầng fusion học được (P4b — xem plan; train `lightgbm.LGBMRanker`
-   thẳng, Metarank chỉ là serving layer).
-6. **Generator swap gpt-5.2, đủ 302 câu** — +27.73pp ở n=120, chặn ngân sách OpenRouter.
+5. **P4/P4b — α thích ứng theo truy vấn** (trần +8.60, §12). Cross-encoder làm router (P4), hoặc
+   LambdaMART/Metarank làm tầng fusion học được (P4b — train `lightgbm.LGBMRanker` thẳng).
+6. **Generator swap gpt-5.2, đủ 302 câu** — +27.73pp ở n=120. Có key OpenRouter mới (27/08).
 
 **Với MỌI component mới: đo paired vs Voyage-một-mình (49.23), không chỉ vs baseline** — §20/§21
 cho thấy delta vs baseline gây hiểu nhầm vì các lever trùng lặp.
@@ -138,8 +147,10 @@ cho thấy delta vs baseline gây hiểu nhầm vì các lever trùng lặp.
 
 | Loại | File |
 |---|---|
-| Ledger kỹ thuật đầy đủ (21 mục) | `docs/vidore_v3_results.md` |
+| Ledger kỹ thuật đầy đủ (22 mục) | `docs/vidore_v3_results.md` |
+| **Câu chuyện nghiên cứu (mạch suy nghĩ, để báo cáo)** | `docs/retrieval_story.md` |
 | Kế hoạch nghiên cứu tiếp (paper review + P1–P5 + Metarank) | `docs/retrieval_research_plan.md` |
+| Nemotron rerank trên KDL (miễn phí) | `research/experiments/physics_rerank_nemotron.py` |
 | Giải thích SEP tiếng Việt | `docs/sep_giai_thich.md` |
 | Phân tích first-principles tiếng Việt | `docs/phan_tich_first_principles.md` |
 | Notebook Colab ColQwen2 (template cho P1) | `ColQwen2_visual_arm_physics.ipynb` |
@@ -154,8 +165,11 @@ cho thấy delta vs baseline gây hiểu nhầm vì các lever trùng lặp.
 
 ## 7. Ràng buộc đang đứng — không tự ý vượt qua
 
-- **Hết ngân sách OpenRouter** (key giáo viên, hết hạn mức tháng) — không tự ý chạy thêm gì cần
-  API mà chưa hỏi lại.
+- **OpenRouter:** key mới thêm 27/08 (`OPENROUTER_API_KEY` trong `.env`). Model rerank
+  `nvidia/llama-nemotron-rerank-vl-1b-v2:free` chạy tốt, miễn phí, không trần rate-limit đáng kể
+  (302 lời gọi ~10 phút). Endpoint: `POST https://openrouter.ai/api/v1/rerank`,
+  body `{model, query, documents:[str|{text}|{image}], top_n}`, trả `{results:[{index, relevance_score}]}`.
+  Với model **có phí** (generation gpt-5.2, embedding): hỏi ngân sách trước.
 - GPU chỉ có qua Google Colab (không có CUDA/MPS cục bộ) — mọi arm cần GPU phải đóng gói thành
   notebook, theo đúng pattern `git archive` + upload zip (không dùng `git clone` vì repo private).
 - torch cục bộ pin ở 2.2.2 (giới hạn phần cứng Intel Mac x86_64, không phải lựa chọn) — mọi model

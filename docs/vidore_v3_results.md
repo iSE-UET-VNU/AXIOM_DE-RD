@@ -1291,3 +1291,55 @@ n.s. vs baseline). ColQwen2 fusion and the SEP+ColQwen2 stack have **no QA
 measurement**.
 
 Reproduce: `python research/experiments/physics_kdl_arms.py`
+
+---
+
+## 22. Nemotron Rerank VL — a free cross-encoder on the KDL pool (2026-08-27)
+
+`nvidia/llama-nemotron-rerank-vl-1b-v2:free` — a 1.7B **multimodal** cross-encoder,
+free via OpenRouter's `/api/v1/rerank` endpoint, **no rate-limit wall** (302
+calls in ~10 min at ~0.7 s each, cost 0). Fills the §21 gap — a reranker measured
+on the KDL production pool, not `vidore_page`. Text-only, depth 20 (Voyage's
+depth). `physics_rerank_nemotron.py`.
+
+| arm | NDCG@10 | R@10 | Δ | p | vs |
+|---|---:|---:|---:|---:|---|
+| baseline KDL α=0.7 | 43.86 | 46.73 | — | — | — |
+| **+ Nemotron rerank** | **47.74** | 49.68 | **+3.88** | 0.0007 | baseline |
+| + SEP → Nemotron | 47.14 | 48.98 | +3.28 | 0.0025 | baseline |
+| + SEP+ColQwen2 → Nemotron | 47.58 | 49.71 | +3.72 | 0.0010 | baseline |
+| + Nemotron → SEP+ColQwen2 | 47.59 | 50.48 | **−0.14** | 0.89 n.s. | Nemotron |
+
+### The redundancy finding replicates on a second, unrelated reranker
+
+§20 showed SEP and ColQwen2 add nothing on top of Voyage. Same here with a
+different model: **feeding SEP or SEP+ColQwen2 into Nemotron makes it slightly
+worse** (47.1–47.6 vs 47.7 plain), and stacking them *after* Nemotron is n.s.
+(−0.14). Two independent cross-encoders, same conclusion: **a trained reranker on
+the top-20 absorbs the structural prior and the visual arm.** This is now a
+robust result, not a one-model artifact.
+
+### But it does not beat the free SEP+ColQwen2 stack
+
+Nemotron rerank alone (47.74) is **below** the SEP+ColQwen2 stack (§21, 48.35) on
+the same pool, and below Voyage's 49.23 (different pool). So on physics/French/
+text it is not the strongest option — but it is the strongest *free, uncapped*
+one, and the only reranker measured on the shipped pool.
+
+### Not compared like-for-like with Voyage
+
+Voyage's +5.08 is on `vidore_page` (baseline 44.15); this is KDL (43.86). Voyage
+on the KDL pool is still unmeasured. The honest statement is "Nemotron gives
++3.88 on the production pool for free," not "Nemotron < Voyage."
+
+### Multimodal mode: works, slow, looks weak — not run
+
+A probe (1 query, 20 page images as base64) returned 200 in 10.8 s (~15× the
+text latency → ~1 h for 302) with a **top relevance score of 0.027** vs ~0.9 in
+text mode. Either the score scale differs for images or the model does not read
+these dense French text-pages well as images. The model card claims +6–7% recall
+on *visual* doc retrieval (charts/tables/infographics), which physics prose pages
+are mostly not. Recorded as untested; if pursued, run a small stratified subset
+first and check whether image scores discriminate at all before the full run.
+
+Reproduce: `python research/experiments/physics_rerank_nemotron.py --depth 20`
