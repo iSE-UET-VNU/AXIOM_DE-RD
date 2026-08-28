@@ -124,8 +124,10 @@ Kế hoạch đầy đủ + lập luận: [`docs/retrieval_research_plan.md`](re
 1. **Điền bảng team bằng số §2a** (KDL). Voyage-trên-KDL còn thiếu: chạy `physics_rerank_voyage.py
    --pool data/benchmark/vidore_v3/results/physics_KDL_pool.json --texts <kdl_page_texts>`
    (~100 phút API — **hỏi ngân sách trước**). `physics_kdl_arms.py` đã dump sẵn pool.
-2. **P1 — nâng visual arm ColQwen2-2B → Nemotron ColEmbed V2 4B/3B.** Kỳ vọng lợi lớn nhất.
-   Check gating + khả thi Colab T4 trước. Dùng lại pattern `ColQwen2_visual_arm_physics.ipynb`.
+2. **P1 — nâng visual arm ColQwen2-2B → webAI-ColVec1.1-4b (#3 ViDoRe V3).** Notebook đã viết:
+   `webAI_ColVec_visual_arm_physics.ipynb`. Cần Colab GPU (4b ~10GB → L4/A100). ⚠️ license
+   Non-Commercial — OK cho nghiên cứu, không cho sản phẩm. Chấm cục bộ:
+   `physics_kdl_slate.py --visual-dir data/work/vidore_physics_colvec --visual-name colvec`.
 3. **P3 — reranker mạnh hơn.** Đã có `nvidia/llama-nemotron-rerank-vl-1b-v2:free` (OpenRouter,
    miễn phí, không trần) = +3.88 trên KDL (§22). Việc tiếp:
    (a) **depth sweep Nemotron text** (50 — context 10.240 token nên depth>~40 không vừa; miễn phí);
@@ -153,7 +155,9 @@ cho thấy delta vs baseline gây hiểu nhầm vì các lever trùng lặp.
 | Nemotron rerank trên KDL (miễn phí) | `research/experiments/physics_rerank_nemotron.py` |
 | Giải thích SEP tiếng Việt | `docs/sep_giai_thich.md` |
 | Phân tích first-principles tiếng Việt | `docs/phan_tich_first_principles.md` |
-| Notebook Colab ColQwen2 (template cho P1) | `ColQwen2_visual_arm_physics.ipynb` |
+| Notebook Colab ColQwen2 (arm visual đầu, đã chạy) | `ColQwen2_visual_arm_physics.ipynb` |
+| **Notebook Colab webAI-ColVec (P1, chưa chạy)** | `webAI_ColVec_visual_arm_physics.ipynb` |
+| Full slate KDL (SEP/visual/rerank mọi tổ hợp) — nhận `--visual-dir/--visual-name` | `research/experiments/physics_kdl_slate.py` |
 | Stack 3 lever trên vidore_page | `research/experiments/physics_stack.py` |
 | SEP + ColQwen2 trên KDL / light-prep (số điền bảng) | `research/experiments/physics_kdl_arms.py` |
 | Eval ColQwen2 (đọc export Colab, không GPU) | `research/experiments/physics_colqwen_eval.py` |

@@ -111,6 +111,8 @@ phải retrieval — bỏ qua ở đây.
 | **Qwen3-VL-Embedding / Qwen3-VL-Reranker** | Framework hợp nhất: vừa là dense arm đa phương thức vừa là reranker. | [arXiv 2601.04720](https://arxiv.org/pdf/2601.04720) |
 | **Qwen3-Reranker** (0.6B/4B/8B, Apache 2.0, 100+ ngôn ngữ, 32k context) | Reranker open mạnh — `bge-reranker-base` (đã bị loại, ledger §19) yếu hơn hẳn. Chạy trên Colab GPU để thoát trần depth-20 + cắt 1200 ký tự của Voyage free-tier. | [Qwen blog](https://qwenlm.github.io/blog/qwen3-embedding/), [HF](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B) |
 | **Qwen3-Embedding** (text, 0.6B/4B/8B) | Thay `text-embedding-3-small` cho leg dense văn bản. Paper: Qwen3-0.6B đơn lẻ đã 43.8 vs fusion của ta 44.1. | như trên |
+| **webAI-ColVec1.1** (4b/8b, Qwen3.5 backbone, 640-dim multi-vector) | **#1 & #3 ViDoRe V3.** Thay ColQwen2 làm visual arm (P1). ⚠️ Non-Commercial license. | [HF 8b](https://huggingface.co/webAI-Official/webAI-ColVec1.1-8b), [blog](https://www.webai.com/blog/webai-colvec1-and-the-case-for-smarter-retrieval-models) |
+| **Nemotron Rerank VL 1B** (đã test §22) | Cross-encoder đa phương thức, free OpenRouter, không trần. +3.88 trên KDL. | [OpenRouter](https://openrouter.ai/nvidia/llama-nemotron-rerank-vl-1b-v2) |
 | **Visual RAG Toolkit** — training-free pooling + multi-stage search | Làm rẻ arm multi-vector kiểu ColQwen (nén số vector/trang). | [arXiv 2602.12510](https://arxiv.org/pdf/2602.12510) |
 | **Metarank** — LambdaMART LTR service, self-host | **KHÔNG phải cross-encoder ngữ nghĩa** — là GBDT xếp hạng theo *feature*, cần dữ liệu huấn luyện (qrels/click). Xem P4b. | [github](https://github.com/metarank/metarank), [docs](https://docs.metarank.ai/) |
 
@@ -121,21 +123,23 @@ phải retrieval — bỏ qua ở đây.
 Ràng buộc chi phối thứ tự (từ handoff §7): GPU chỉ qua Colab; hết ngân sách
 OpenRouter; torch cục bộ pin 2.2.2 (chỉ ONNX).
 
-### P1 — Nâng visual arm: ColQwen2-2B → lớp 4B *(kỳ vọng lợi lớn nhất)*
+### P1 — Nâng visual arm: ColQwen2-2B → lớp SOTA *(kỳ vọng lợi lớn nhất)* — **NOTEBOOK ĐÃ SẴN**
 
-- **Model:** `nvidia/nemotron-colembed-vl-4b-v2` (ưu tiên — SOTA), hoặc một
-  ColQwen3-4B. **Trước khi dựng notebook, check 2 thứ:** (a) license/gating trên
-  HF; (b) khả thi trên Colab T4 — backbone Qwen3-VL-4B multi-vector trên 1674
-  trang, T4 16GB không bf16 có thể là blocker cứng; nếu vậy cần A100 (Colab Pro)
-  hoặc bản 3B (`nemotron-colembed-vl-3b-v2`, avg 59.8).
-- **Cách làm:** đúng pattern `ColQwen2_visual_arm_physics.ipynb` — Colab GPU,
-  export ma trận điểm 302×1674 phẳng, chấm cục bộ bằng `physics_colqwen_eval.py`
-  (không GPU/API). Gần như chỉ đổi model id + kích thước ảnh render.
-- **Đo:** visual-only NDCG@10, fusion sweep w, complementarity vs text (như §18).
-  Rồi cắm vào `physics_stack.py` thay ColQwen2.
-- **Vì sao P1:** visual arm là nơi paper Snappy + leaderboard đều chỉ ra còn
-  nhiều dư địa; ColQwen2-2B alone chỉ 45.7 (n.s.), Nemotron-class có thể tự nó
-  vào high-40s/low-50s.
+- **Model chọn:** `webAI-Official/webAI-ColVec1.1-4b` (**#3 ViDoRe V3, 63.90**; 8b là **#1, 64.95**).
+  Cùng họ late-interaction/MaxSim với ColQwen2 → thay trực tiếp arm visual.
+  ⚠️ **License webAI Non-Commercial v1.0** — nghiên cứu OK, **sản phẩm thì không**.
+  Fallback thương mại: `nvidia/nemotron-colembed-vl-4b-v2` (#9, open) hoặc `tomoro-colqwen3-embed-4b` (#12).
+- **Notebook:** [`webAI_ColVec_visual_arm_physics.ipynb`](../webAI_ColVec_visual_arm_physics.ipynb) — đã viết,
+  cùng pattern ColQwen2 (bundle `git archive` + zip data → Colab GPU → export ma trận 302×1674).
+  4b cần ~9–10GB (T4 sát, nên L4/A100 Colab Pro); 8b ~17GB (switch `LOAD_8BIT` sẵn trong notebook).
+  MaxSim tính tay trên GPU nên không phụ thuộc chữ ký `processor.score_*`.
+- **Chấm cục bộ (không GPU):**
+  `python research/experiments/physics_kdl_slate.py --visual-dir data/work/vidore_physics_colvec --visual-name colvec`
+  → full slate trên pool KDL, permutation vs baseline **và vs Voyage/Nemotron**.
+- **Câu hỏi cần trả lời:** (a) visual-only NDCG trên physics/French (ColQwen2-2B chỉ 45.7 n.s.;
+  physics là domain KHÓ nhất, leaderboard mean 64 KHÔNG chuyển giao thẳng);
+  (b) fused có vượt SEP+ColQwen2 48.35 / Voyage 49.23 không;
+  (c) **arm visual mạnh có bị reranker hấp thụ như ColQwen2-2B không** (§20/§22) — nếu không, redundancy pattern bị phá.
 
 ### P2 — Thay leg dense văn bản: `text-embedding-3-small` → Qwen3-Embedding-4B
 
