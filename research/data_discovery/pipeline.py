@@ -14,11 +14,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
 import json
 import re
 
 from src.retrieval.sparse import BM25Index, positions_to_ids
+
+if TYPE_CHECKING:
+    from src import ingestion as ingestion_runner
 
 
 @dataclass(frozen=True)
@@ -162,10 +165,26 @@ class PageIndex:
         records = [page.as_record() for page in page_list]
         return cls(pages=page_list, bm25=BM25Index(analyzer_name="auto").build(records))
 
-    def search(self, query: str, *, top_k: int = 10) -> list[DiscoveryHit]:
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        allowed_page_ids: set[str] | None = None,
+    ) -> list[DiscoveryHit]:
         if top_k <= 0:
             return []
-        hits = positions_to_ids(self.bm25, self.bm25.search(query, top_k))
+        allowed_positions = None
+        if allowed_page_ids is not None:
+            allowed_positions = {
+                position
+                for position, page in enumerate(self.pages)
+                if page.page_id in allowed_page_ids
+            }
+        hits = positions_to_ids(
+            self.bm25,
+            self.bm25.search(query, top_k, allowed_positions),
+        )
         by_id = {page.page_id: page for page in self.pages}
         return [
             DiscoveryHit(evidence=by_id[page_id], score=score, rank=rank)
@@ -514,7 +533,7 @@ def _ingest_selected_pages(
                 subset_path = root / f"{len(inputs):06d}-{original.name}"
                 _write_page_subset(original, selected_indices, subset_path)
                 page_suffix = (
-                    f"#page={selected_indices[0]}"
+                    f"#page={selected_indices[0] + 1}"
                     if len(selected_indices) == 1
                     else ""
                 )
@@ -563,7 +582,17 @@ def _write_page_subset(source: Path, page_indices: Sequence[int], target: Path) 
         if any(index < 0 or index >= count for index in wanted):
             raise IndexError(f"Selected page is outside {source.name}: {wanted}")
         for index in wanted:
-            subset.insert_pdf(document, from_page=index, to_page=index)
+            # Links/annotations/widgets are irrelevant to page parsing and
+            # malformed named destinations in some DocBench PDFs can make
+            # PyMuPDF fail while copying them into the temporary subset.
+            subset.insert_pdf(
+                document,
+                from_page=index,
+                to_page=index,
+                links=False,
+                annots=False,
+                widgets=False,
+            )
         target.parent.mkdir(parents=True, exist_ok=True)
         subset.save(str(target))
 

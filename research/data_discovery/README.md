@@ -167,6 +167,95 @@ parser config. In `--on-demand-per-query` mode, `--query-workers` controls
 concurrent independent pipeline queries; `--workers` still controls only
 generator/judge requests.
 
+## DocBench: on-demand basic (native Python runner)
+
+`run_docbench_e2e.py` is the repository runner for the requested DocBench
+baseline. It does not use a notebook and keeps the expensive stages online and
+page-selective:
+
+```text
+light preparation: pdf-inspector page text
+light retrieval:   BM25 page retrieval
+accurate parse:    KDL + pdf-inspector for selected pages only
+baseline_legacy:   fixed_overlap 512/128 -> text-embedding-3-small -> hybrid
+answer/judge:      generator + binary DocBench judge
+```
+
+The original DocBench checkout is expected to have this shape. The runner
+accepts either `DocBench` or `DocBench/data` as `--docbench-root`:
+
+```text
+DocBench/
+  data/
+    0/0.pdf
+    0/0_qa.jsonl
+    1/1.pdf
+    1/1_qa.jsonl
+    ...
+```
+
+Set the remote KDL/vLLM endpoint from Colab and the local OpenRouter key in
+`AXIOM_DE-RD/.env` (the endpoint must be OpenAI-compatible):
+
+```dotenv
+VLLM_API_BASE=https://<your-colab-tunnel>/v1
+VLLM_MODEL_NAME=<served-kdl-model-name>
+VLLM_API_KEY=<optional>
+OPENROUTER_API_KEY=<your-openrouter-key>
+```
+
+Run the complete dataset with retrieval over the selected/evaluated document
+set (`file` mode):
+
+```powershell
+python -m research.data_discovery.run_docbench_e2e `
+  --docbench-root ..\DocBench `
+  --retrieval-scope file
+```
+
+Run the lake-retrieval variant, where each question searches all indexed
+DocBench PDFs, including documents outside the evaluated subset:
+
+```powershell
+python -m research.data_discovery.run_docbench_e2e `
+  --docbench-root ..\DocBench `
+  --retrieval-scope lake
+```
+
+Before spending a full run, use a small smoke run. `--max-documents` selects
+the first numeric document folders and `--limit` limits questions after that:
+
+```powershell
+python -m research.data_discovery.run_docbench_e2e `
+  --docbench-root ..\DocBench `
+  --retrieval-scope file `
+  --max-documents 2 `
+  --limit 10
+```
+
+The default config is
+`configs/pipeline.docbench-on-demand-basic.yaml`. It pins the requested
+`fixed_overlap` 512-word chunks with 128-word overlap, OpenRouter
+`openai/text-embedding-3-small`, hybrid alpha `0.7`, KDL's
+`global_two_phase` scheduler, and the existing generator/judge defaults.
+Override a parser concurrency setting with a CLI option such as
+`--kdl-request-batch-size 1`; this is useful when a tunnel or server does not
+implement the optional `/chat/completions/batch` endpoint. The parser already
+falls back to individual requests when that endpoint returns a 4xx.
+
+`--skip-qa` runs only retrieval. `--skip-judge` runs generation but leaves the
+score unset. Results are checkpointed after each question under
+`data/benchmark/docbench_on_demand_basic/` (or `--output-dir`):
+
+```text
+indexes/                    cached pdf-inspector page BM25 indexes
+cache/<scope>/               parsed pages and prepared chunks
+retrieval/<scope>_*.jsonl    page/chunk retrieval rows and timings
+qa/<scope>_*.jsonl           generated answers and judge results
+reports/<scope>_*.json       aggregate DocBench report
+manifest_<scope>.json        resolved run contract and paths
+```
+
 ## Output and caching
 
 - Discovery pipeline artifacts are isolated below
