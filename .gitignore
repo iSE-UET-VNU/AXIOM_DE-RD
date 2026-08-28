@@ -20,6 +20,7 @@ venv/
 !/configs/pipeline.kdl-pdf-inspector.yaml
 !/configs/pipeline.vidore-v3-physics-kdl-pdf-inspector.yaml
 !/configs/pipeline.data-discovery.yaml
+!/configs/pipeline.docbench-on-demand-basic.yaml
 !/configs/pipeline.vidore-v3-physics-discovery-pages-global-two-phase.yaml
 !/configs/pipeline.vidore-v3-industrial-discovery-pages-global-two-phase.yaml
 

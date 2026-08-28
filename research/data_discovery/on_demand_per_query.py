@@ -199,6 +199,7 @@ class OnDemandPerQueryRunner:
         microbatch_max_pages: int = 32,
         force_reparse: bool = False,
         validate_baseline: bool = True,
+        page_scope_for_query: Callable[[str, str], set[str] | None] | None = None,
     ) -> None:
         if not index.pages:
             raise ValueError("On-demand-per-query requires a non-empty PageIndex")
@@ -220,6 +221,7 @@ class OnDemandPerQueryRunner:
         self.alpha = float(alpha)
         self.query_workers = max(1, int(query_workers))
         self.force_reparse = bool(force_reparse)
+        self.page_scope_for_query = page_scope_for_query
 
         self._state_lock = Lock()
         self._chunk_lock = Lock()
@@ -302,7 +304,16 @@ class OnDemandPerQueryRunner:
                 self._stage_started_at = query_started
 
         light_started = time.perf_counter()
-        hits = self.index.search(query, top_k=self.top_k_pages)
+        allowed_page_ids = (
+            self.page_scope_for_query(query_id, query)
+            if self.page_scope_for_query is not None
+            else None
+        )
+        hits = self.index.search(
+            query,
+            top_k=self.top_k_pages,
+            allowed_page_ids=allowed_page_ids,
+        )
         light_bm25_seconds = time.perf_counter() - light_started
 
         parsed_ids, cached_ids, batch_result = self._ensure_parsed(hits)
@@ -367,16 +378,19 @@ class OnDemandPerQueryRunner:
             self._phase_work["retrieval"] += retrieval_seconds
             self._stage_ended_at = time.perf_counter()
 
-        with self._state_lock:
-            selected_pages = {
-                path: sorted(indices)
-                for path, indices in self._selected_pages.items()
-            }
+        selected_pages: defaultdict[str, set[int]] = defaultdict(set)
+        for hit in hits:
+            selected_pages[hit.evidence.file_path].add(
+                int(hit.evidence.page_index)
+            )
         return OnDemandQueryResult(
             query_id=query_id,
             query=query,
             hits=hits,
-            selected_pages=selected_pages,
+            selected_pages={
+                path: sorted(indices)
+                for path, indices in sorted(selected_pages.items())
+            },
             ranked_chunks=ranked,
             timing=timing,
             parsed_page_ids=tuple(sorted(parsed_ids)),
