@@ -1,9 +1,11 @@
 """Run page-discovery E2E QA settings on a ViDoRe V3 subset.
 
-The discovery index chooses pages with BM25.  The union of pages selected by
-the requested questions is then ingested once through the production parser
-(KDL over the vLLM endpoint from ``.env``), followed by the normal cleaning,
-enrichment and optional chunk/embed stages.
+The default mode chooses pages with BM25 and ingests the union of pages
+selected by the requested questions once through the production parser (KDL
+over the vLLM endpoint from ``.env``).  ``--on-demand-per-query`` switches to
+the online mode: each query retrieves its own BM25 pages, parses only missing
+pages, incrementally chunks/embeds/indexes them, and performs scoped hybrid
+retrieval.  Its parser and chunk caches persist below ``--work-dir``.
 
 Arms:
 
@@ -42,6 +44,9 @@ from research.data_discovery.pipeline import (  # noqa: E402
     run_from_parse_artifacts,
     run_selected_pages,
 )
+from research.data_discovery.on_demand_per_query import (  # noqa: E402
+    OnDemandPerQueryRunner,
+)
 from src.evaluation.benchmarks import load  # noqa: E402
 from src.evaluation.benchmarks.vidore_v3_judge import (  # noqa: E402
     ANSWER_PROMPT,
@@ -77,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser_config = _resolved_parser_config(args.parser_config, args.work_dir)
     chunking_config = _chunking_config(args)
+    index_started = time.perf_counter()
     index = PageIndex.load(args.index_dir)
+    index_load_seconds = time.perf_counter() - index_started
     if not index.pages:
         raise RuntimeError(f"Discovery index is empty: {args.index_dir}")
 
@@ -94,8 +101,24 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("No questions selected")
 
     if args.resume_arm:
+        if args.on_demand_per_query:
+            raise ValueError(
+                "--resume-arm is not supported with --on-demand-per-query; "
+                "reuse the per-query cache and rerun the mode instead."
+            )
         _resume_arm_from_checkpoint(args.resume_arm, questions, args)
         return 0
+
+    if args.on_demand_per_query:
+        return _run_on_demand_per_query(
+            args,
+            index=index,
+            questions=questions,
+            parser_config=parser_config,
+            chunking_config=chunking_config,
+            index_load_seconds=index_load_seconds,
+            run_started=run_started,
+        )
 
     discovery_started = time.perf_counter()
     hits_by_qid = {
@@ -228,6 +251,190 @@ def main(argv: list[str] | None = None) -> int:
     })
     _write_json(args.output_dir / "manifest.json", manifest)
     return 0
+
+
+def _run_on_demand_per_query(
+    args: argparse.Namespace,
+    *,
+    index: PageIndex,
+    questions: list[Any],
+    parser_config: dict[str, Any],
+    chunking_config: dict[str, Any],
+    index_load_seconds: float,
+    run_started: float,
+) -> int:
+    """Evaluate the stateful online pipeline, one query at a time."""
+    if args.reuse_parser_artifacts:
+        raise ValueError(
+            "--reuse-parser-artifacts is a batch-mode option. "
+            "Use --on-demand-cache-dir for per-query parser/chunk cache."
+        )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    parser_config = _on_demand_parser_config(parser_config, args)
+    cache_dir = args.on_demand_cache_dir or (args.work_dir / "on-demand-cache")
+    runner = OnDemandPerQueryRunner(
+        index,
+        parser_config=parser_config,
+        chunking_config=chunking_config,
+        project_root=ROOT,
+        work_dir=args.work_dir,
+        cache_dir=cache_dir,
+        top_k_pages=args.top_k_pages,
+        top_k_chunks=args.top_k_chunks,
+        depth=args.depth,
+        alpha=args.alpha,
+        query_workers=args.query_workers,
+        microbatch_window_seconds=args.kdl_microbatch_window_seconds,
+        microbatch_max_pages=args.kdl_microbatch_max_pages,
+        force_reparse=args.force_reparse_on_demand,
+    )
+    try:
+        query_results = runner.run_queries(
+            ((question.qid, question.query) for question in questions),
+            max_workers=args.query_workers,
+        )
+        timings_by_qid = {
+            qid: result.timing for qid, result in query_results.items()
+        }
+        hits_by_qid = {
+            qid: result.hits for qid, result in query_results.items()
+        }
+        chunk_ranked = {
+            qid: result.ranked_chunks for qid, result in query_results.items()
+        }
+        page_texts = runner.page_texts
+        timing_summary = runner.timing_summary(
+            light_preparation_seconds=index_load_seconds
+        )
+
+        retrieval_path = args.output_dir / (
+            f"{args.subset}_{args.language}_on_demand_per_query_retrieval.jsonl"
+        )
+        with retrieval_path.open("w", encoding="utf-8") as handle:
+            for question in questions:
+                result = query_results[question.qid]
+                handle.write(
+                    json.dumps(
+                        {
+                            "contract_version": "on-demand-per-query-retrieval-v1",
+                            "pipeline": "pdf_inspector -> bm25 -> KDL -> fixed512 -> te3s -> hybrid",
+                            "qid": question.qid,
+                            "query": question.query,
+                            "retriever_id": "on_demand_per_query_alpha0.7",
+                            "hits": [hit.as_dict() for hit in result.hits],
+                            "selected_pages": result.selected_pages,
+                            "chunks": [
+                                {
+                                    "chunk_id": chunk.record_id,
+                                    "doc_id": chunk.page_id,
+                                    "text": chunk.text,
+                                }
+                                for chunk in result.ranked_chunks
+                            ],
+                            "timing": result.timing,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+        timings_path = args.output_dir / (
+            f"{args.subset}_{args.language}_on_demand_per_query_timings.jsonl"
+        )
+        with timings_path.open("w", encoding="utf-8") as handle:
+            for question in questions:
+                handle.write(
+                    json.dumps(timings_by_qid[question.qid], ensure_ascii=False)
+                    + "\n"
+                )
+
+        arms = {arm.strip() for arm in args.arms.split(",") if arm.strip()}
+        unknown = arms - {"pages", "chunks"}
+        if unknown:
+            raise ValueError(f"Unknown arms: {sorted(unknown)}")
+        arm_timings: dict[str, Any] = {}
+        if "pages" in arms:
+            arm_timings["pages"] = _run_arm(
+                "pages",
+                questions,
+                hits_by_qid,
+                page_texts,
+                None,
+                args,
+                output_label="on_demand_per_query",
+                timings_by_qid=timings_by_qid,
+            )
+        if "chunks" in arms:
+            arm_timings["chunks"] = _run_arm(
+                "chunks",
+                questions,
+                hits_by_qid,
+                page_texts,
+                chunk_ranked,
+                args,
+                output_label="on_demand_per_query",
+                timings_by_qid=timings_by_qid,
+            )
+
+        selected_page_ids = {
+            hit.page_id
+            for result in query_results.values()
+            for hit in result.hits
+        }
+        manifest = {
+            "contract_version": "vidore-v3-on-demand-per-query-v1",
+            "pipeline": (
+                "light preparation=pdf-inspector; light retrieval=BM25; "
+                "per-query KDL parse/cache -> fixed 512 chunks -> "
+                "text-embedding-3-small -> hybrid alpha=0.7"
+            ),
+            "subset": args.subset,
+            "language": args.language,
+            "questions": len(questions),
+            "discovery_pages": len(index.pages),
+            "selected_unique_pages": len(selected_page_ids),
+            "parsed_pages": len(page_texts),
+            "prepared_chunks": runner.prepared_chunk_count,
+            "query_workers": args.query_workers,
+            "parser_config": str(args.parser_config),
+            "parser_cache_dir": str(cache_dir),
+            "kdl_config": dict(parser_config.get("kdl") or {}),
+            "retrieval_output": str(retrieval_path),
+            "timing_output": str(timings_path),
+            "timing_summary": timing_summary,
+            "arms": arm_timings,
+            "total_runtime_seconds": round(time.perf_counter() - run_started, 3),
+        }
+        _write_json(args.output_dir / "manifest.json", manifest)
+        print(
+            f"on-demand-per-query questions={len(questions)} "
+            f"selected_unique_pages={len(selected_page_ids)} "
+            f"parsed_pages={len(page_texts)} "
+            f"chunks={runner.prepared_chunk_count} "
+            f"wall_seconds={timing_summary['online_stage_wall_seconds']:.3f}",
+            flush=True,
+        )
+        return 0
+    finally:
+        runner.close()
+
+
+def _on_demand_parser_config(
+    parser_config: dict[str, Any], args: argparse.Namespace
+) -> dict[str, Any]:
+    """Apply the notebook's KDL concurrency settings without editing YAML."""
+    config = dict(parser_config)
+    kdl = dict(config.get("kdl") or {})
+    kdl.update({
+        "max_workers": args.kdl_max_workers,
+        "render_processes": args.kdl_render_processes,
+        "bbox_max_workers": args.kdl_bbox_max_workers,
+        "request_workers": args.kdl_request_workers,
+        "request_batch_size": args.kdl_request_batch_size,
+        "max_model_sequences": args.kdl_max_model_sequences,
+    })
+    config["kdl"] = kdl
+    return config
 
 
 def _resolved_parser_config(path: Path, work_dir: Path) -> dict[str, Any]:
@@ -405,8 +612,11 @@ def _run_arm(
     page_texts: dict[str, str],
     chunk_ranked: dict[str, list[PreparedChunk]] | None,
     args: argparse.Namespace,
+    *,
+    output_label: str = "discovery",
+    timings_by_qid: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    path = args.output_dir / f"{args.subset}_{args.language}_discovery_{arm}.json"
+    path = args.output_dir / f"{args.subset}_{args.language}_{output_label}_{arm}.json"
     existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
     rows = {str(row["qid"]): row for row in existing}
     order = [question.qid for question in questions]
@@ -429,6 +639,12 @@ def _run_arm(
             "context_chars": sum(len(text) for text in context_texts),
             "_context": render_documents(context_texts),
         })
+        if timings_by_qid and question.qid in timings_by_qid:
+            timing = dict(timings_by_qid[question.qid])
+            row["online_timing"] = timing
+            row["online_latency_seconds"] = timing.get(
+                "wall_clock_seconds", timing.get("overall_seconds")
+            )
 
     generation_started = time.perf_counter()
     pending = [row for row in rows.values() if not row.get("answer")]
@@ -483,7 +699,7 @@ def _run_arm(
             "judge_seconds": round(judge_seconds, 3),
         }
         _write_json(
-            args.output_dir / f"{args.subset}_{args.language}_discovery_{arm}.summary.json",
+            path.with_suffix(".summary.json"),
             summary,
         )
         print(json.dumps(summary, ensure_ascii=False), flush=True)
@@ -694,6 +910,48 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--top-k-chunks", type=int, default=10)
     parser.add_argument("--depth", type=int, default=100)
     parser.add_argument("--alpha", type=float, default=0.7)
+    parser.add_argument(
+        "--on-demand-per-query",
+        action="store_true",
+        help=(
+            "Run BM25 page discovery and KDL->chunk/embed->hybrid retrieval "
+            "per query with persistent caches"
+        ),
+    )
+    parser.add_argument(
+        "--query-workers",
+        type=int,
+        default=4,
+        help="Concurrent independent query workers in --on-demand-per-query mode",
+    )
+    parser.add_argument(
+        "--kdl-microbatch-window-seconds",
+        type=float,
+        default=0.30,
+        help="Time window for coalescing missing-page requests across queries",
+    )
+    parser.add_argument(
+        "--kdl-microbatch-max-pages",
+        type=int,
+        default=32,
+        help="Maximum unique pages in one cross-query KDL micro-batch",
+    )
+    parser.add_argument(
+        "--on-demand-cache-dir",
+        type=Path,
+        help="Persistent per-query parser/chunk cache (defaults below --work-dir)",
+    )
+    parser.add_argument(
+        "--force-reparse-on-demand",
+        action="store_true",
+        help="Ignore the per-query parser/chunk cache in online mode",
+    )
+    parser.add_argument("--kdl-max-workers", type=int, default=8)
+    parser.add_argument("--kdl-render-processes", type=int, default=8)
+    parser.add_argument("--kdl-bbox-max-workers", type=int, default=8)
+    parser.add_argument("--kdl-request-workers", type=int, default=24)
+    parser.add_argument("--kdl-request-batch-size", type=int, default=8)
+    parser.add_argument("--kdl-max-model-sequences", type=int, default=128)
     parser.add_argument("--retrieval-batch-size", type=int, default=64)
     parser.add_argument(
         "--arms",

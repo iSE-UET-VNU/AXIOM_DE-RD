@@ -10,7 +10,7 @@ The light retrieval unit is one PDF page. A lightweight `pdf-inspector` parser
 extracts page text once and a local BM25 index retrieves candidate pages for
 each query.
 
-There are currently two answer-generation settings:
+There are currently three answer-generation settings:
 
 ```text
 1. data_discovery
@@ -25,11 +25,24 @@ There are currently two answer-generation settings:
    -> accurate KDL + pdf-inspector ingestion
    -> page text / OCR evidence
    -> generator
+
+3. data_discovery (on-demand-per-query)
+   -> BM25 retrieved pages for one query
+   -> KDL + pdf-inspector only for missing pages
+   -> fixed 512-word chunks + text embeddings for newly parsed pages
+   -> hybrid keyword/dense retrieval (dense alpha=0.7)
+   -> generator
 ```
 
 The `chunks` arm evaluates the first flow. The `pages` arm evaluates the
 second flow and intentionally skips the second chunking, embedding and
 retrieval stage.
+
+The `on-demand-per-query` mode evaluates the third flow. It keeps a persistent
+page-parse cache and prepared-chunk cache, so a page parsed for an earlier
+query is not parsed or embedded again. Independent query workers share a short
+KDL micro-batch queue; this preserves query-local BM25 and hybrid scopes while
+allowing the hosted KDL model to receive batches.
 
 ## Current settings
 
@@ -116,6 +129,28 @@ python -m research.data_discovery.run_vidore_e2e `
   --parser-config configs/pipeline.data-discovery.yaml
 ```
 
+Run the stateful online pipeline (one query at a time, with concurrent query
+workers and shared KDL micro-batching):
+
+```powershell
+python -m research.data_discovery.run_vidore_e2e `
+  --subset physics `
+  --language french `
+  --on-demand-per-query `
+  --query-workers 4 `
+  --arms chunks `
+  --parser-config configs/pipeline.data-discovery.yaml `
+  --chunking-config configs/pipeline.data-discovery.yaml
+```
+
+The online cache defaults to `<work-dir>/on-demand-cache`. Override it with
+`--on-demand-cache-dir`. The micro-batch defaults are a `0.30` second window
+and at most `32` unique pages. KDL concurrency defaults in this mode are
+`max_workers=8`, `render_processes=8`, `bbox_max_workers=8`,
+`request_workers=24`, `request_batch_size=8`, and
+`max_model_sequences=128`; each can be overridden with the corresponding
+`--kdl-*` option.
+
 To test larger light-retrieval coverage, change only
 `--top-k-pages`, for example to `50` or `100`. The selected pages are deduplicated
 across queries before accurate ingestion.
@@ -128,7 +163,9 @@ If parser artifacts already exist, reuse them with:
 
 Here `--workers` controls concurrent generator/judge requests. It is separate
 from the parser's `request_workers` and `request_batch_size` settings in the
-parser config.
+parser config. In `--on-demand-per-query` mode, `--query-workers` controls
+concurrent independent pipeline queries; `--workers` still controls only
+generator/judge requests.
 
 ## Output and caching
 
@@ -137,6 +174,8 @@ parser config.
   `data/work/discovery/`.
 - BM25 indexes are written below `data/work/vidore_v3/`.
 - E2E reports are written below `data/benchmark/vidore_v3/results/`.
+- On-demand-per-query parser/chunk caches, per-query retrieval JSONL and
+  timing JSONL are written below the selected `--work-dir`/`--output-dir`.
 - Generated data, embeddings, parser outputs and `.env` are intentionally not
   committed to Git.
 - Reusing parser artifacts avoids re-running accurate ingestion when comparing
