@@ -391,7 +391,7 @@ class KdlPdfInspectorProvider(KDLProvider):
 
 
 def _pdf_page_dimensions(path: Path) -> tuple[tuple[float, float], ...]:
-    import fitz
+    import pymupdf as fitz
 
     with fitz.open(str(path)) as document:
         return tuple(

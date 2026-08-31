@@ -243,6 +243,87 @@ Override a parser concurrency setting with a CLI option such as
 implement the optional `/chat/completions/batch` endpoint. The parser already
 falls back to individual requests when that endpoint returns a 4xx.
 
+The three DocBench runners write timestamped text and JSONL events below
+`<output-dir>/logs/`. After `host_failure_threshold` consecutive KDL 5xx,
+408/429, timeout, or connection errors (default `3`), the KDL circuit opens
+and the current run exits. Retrieval/QA JSONL rows and parser caches are
+checkpointed as work completes; rerunning the same command skips successful
+questions/pages and resumes the rest. The threshold can be changed with
+`--kdl-host-failure-threshold N` or the corresponding `kdl` config field.
+
+All three DocBench runners handle the generator abstention sentinel
+`KHONG_DU_THONG_TIN` with one retry. If the first generation returns the
+sentinel, the runner generates and judges that question once more immediately.
+The QA JSONL stores `unanswerable_retry_count` (and `initial_sys_ans` when a
+retry occurred), so a later invocation automatically processes only completed
+questions that returned the sentinel and have not used their retry yet. A
+question whose retry also returns the sentinel is not regenerated repeatedly.
+
+## DocBench: pages-only generation
+
+For the page-context experiment, use the separate
+`run_docbench_pages.py` runner. It keeps BM25 as the light page-discovery
+step, parses the selected pages with KDL + pdf-inspector, and sends each
+question's parsed page text directly to the generator. Each successful page is
+checkpointed before the next KDL request. It does not
+run fixed chunking, embeddings, or a second retrieval stage:
+
+```text
+pdf-inspector page index -> BM25 pages -> KDL + pdf-inspector parse
+-> parsed page text -> generator -> DocBench judge
+```
+
+Example smoke run:
+
+```powershell
+python -m research.data_discovery.run_docbench_pages `
+  --config configs/pipeline.docbench-pages.yaml `
+  --docbench-root ..\DocBench `
+  --retrieval-scope file `
+  --max-documents 2 `
+  --limit 10 `
+  --top-k-pages 10 `
+  --workers 4
+```
+
+Use `--retrieval-scope lake` to build the light page index over every PDF in
+the lake while evaluating only the selected documents. `--workers` controls
+parallel generator/judge requests. Parsed page text is passed as one context
+unit per page; `--max-page-chars` and `--max-context-chars` only cap the LLM
+context and do not create chunks. The runner writes discovery rows to
+`discovery/<scope>_pages.jsonl`, answers to `qa/<scope>_pages.jsonl`, and a
+pages-specific report and manifest.
+
+If a run is interrupted, rerun the same command. Successful QA rows and
+successfully parsed pages are reused automatically; only missing or non-`ok`
+rows/pages are sent again. A KDL host circuit opens after three consecutive
+5xx, 408/429, timeout, or connection failures and stops the current run. The
+checkpoint is left intact for the next invocation.
+
+Each run also writes timestamped logs under `logs/`:
+
+```text
+logs/<scope>_on_demand_*.log       human-readable log with timestamps
+logs/<scope>_kdl_events.jsonl      request health/circuit events
+logs/<scope>_events.jsonl          pipeline/query/page events
+```
+
+To avoid calling KDL for already persisted parser artifacts, pass the
+parser-artifact directory:
+
+```bash
+.venv/bin/python -m research.data_discovery.run_docbench_pages \
+  --config configs/pipeline.docbench-pages.yaml \
+  --docbench-root /path/to/DocBench \
+  --output-dir data/benchmark/docbench_pages \
+  --retrieval-scope lake \
+  --reuse-parser-artifacts data/benchmark/docbench_pages/parser-assets/pages_lake \
+  --workers 4
+```
+
+With `--reuse-parser-artifacts`, the KDL endpoint is not contacted. The
+OpenRouter key is still required because failed questions are regenerated.
+
 `--skip-qa` runs only retrieval. `--skip-judge` runs generation but leaves the
 score unset. Results are checkpointed after each question under
 `data/benchmark/docbench_on_demand_basic/` (or `--output-dir`):
@@ -254,6 +335,7 @@ retrieval/<scope>_*.jsonl    page/chunk retrieval rows and timings
 qa/<scope>_*.jsonl           generated answers and judge results
 reports/<scope>_*.json       aggregate DocBench report
 manifest_<scope>.json        resolved run contract and paths
+logs/                        timestamped text and JSONL runtime events
 ```
 
 ## Output and caching

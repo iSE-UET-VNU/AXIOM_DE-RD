@@ -190,7 +190,8 @@ def _plain(path: Path) -> list[Block]:
 
 @handler(".pdf")
 def _pdf(path: Path) -> list[Block]:
-    import fitz
+    # import fitz
+    import pymupdf as fitz
 
     blocks: list[Block] = []
     with fitz.open(path) as document:

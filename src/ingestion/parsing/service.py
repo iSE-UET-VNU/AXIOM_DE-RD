@@ -17,6 +17,7 @@ from .backends import (
 from .chandra2 import Chandra2Config, Chandra2Provider
 from .kdl import KDLConfig, KDLProvider
 from .kdl_pdf_inspector import KdlPdfInspectorProvider
+from .kdl_health import KDLHostUnavailableError
 from .lift import LiftAPIConfig, LiftAPIParserClient
 from .router import ParserRouter
 
@@ -65,6 +66,8 @@ class ParsingService:
 
         try:
             result = backend.parse(path, data_object)
+        except KDLHostUnavailableError:
+            raise
         except Exception as exc:
             return ParseResult.failed(
                 data_object.object_id,
@@ -164,6 +167,8 @@ class ParsingService:
                         f"{provider_name} returned a different number of documents than inputs."
                     )
             except Exception as exc:
+                if isinstance(exc, KDLHostUnavailableError):
+                    raise
                 for index, _, data_object in group:
                     emit(
                         index,

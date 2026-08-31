@@ -58,6 +58,9 @@ import markdown as _markdown_lib
 from PIL import Image
 from pydantic import BaseModel, Field, computed_field, model_validator
 
+from ...utils.observability import JsonEventLogger
+from .kdl_health import KDLHostHealth, KDLHostUnavailableError
+
 logger = logging.getLogger("kdl_frontier_nano")
 
 
@@ -2789,6 +2792,7 @@ async def _nano_chat(
     usage: NanoUsage | None = None,
     sequence_limiter: SequenceLimiter | None = None,
     headers: dict[str, str] | None = None,
+    host_health: KDLHostHealth | None = None,
 ) -> str | None:
     """POST a chat/completions request. Returns content, or None on failure
     (the orchestrator keeps failed elements with content='')."""
@@ -2799,24 +2803,41 @@ async def _nano_chat(
     limiter = sequence_limiter or SequenceLimiter(1)
     async with semaphore, limiter.hold(1):
         for attempt in range(max_retries + 1):
+            if host_health is not None:
+                host_health.before_request(stage=stage)
+            attempt_started = time.perf_counter()
             try:
                 resp = await client.post(
                     url,
                     json={**payload, "chat_template_kwargs": {"enable_thinking": False}},
                     headers=headers,
                 )
-                if resp.status_code >= 500:
+                if resp.status_code >= 500 or resp.status_code in {408, 429}:
                     raise httpx.HTTPStatusError(
                         f"{resp.status_code}", request=resp.request, response=resp
                     )
                 if resp.status_code >= 400:
                     logger.warning("4xx from endpoint (not retried): %s", resp.text[:200])
                     break
+                if host_health is not None:
+                    host_health.record_success(
+                        stage=stage,
+                        latency_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                    )
                 data = resp.json()
                 result = data["choices"][0]["message"]["content"]
                 break
+            except KDLHostUnavailableError:
+                raise
             except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as e:
                 last_exc = e
+                if host_health is not None:
+                    host_health.record_failure(
+                        e,
+                        stage=stage,
+                        attempt=attempt + 1,
+                        latency_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                    )
                 if attempt < max_retries:
                     retries += 1
                     await asyncio.sleep(min(10.0, 2.0 * (2 ** attempt)))
@@ -2844,6 +2865,7 @@ async def _nano_chat_batch(
     usage: NanoUsage | None = None,
     sequence_limiter: SequenceLimiter | None = None,
     headers: dict[str, str] | None = None,
+    host_health: KDLHostHealth | None = None,
 ) -> List[str | None]:
     """Send homogeneous independent conversations through the batch endpoint."""
 
@@ -2861,9 +2883,12 @@ async def _nano_chat_batch(
     limiter = sequence_limiter or SequenceLimiter(len(payloads))
     async with semaphore, limiter.hold(len(payloads)):
         for attempt in range(max_retries + 1):
+            if host_health is not None:
+                host_health.before_request(stage=stage)
+            attempt_started = time.perf_counter()
             try:
                 resp = await client.post(url, json=batch_payload, headers=headers)
-                if resp.status_code >= 500:
+                if resp.status_code >= 500 or resp.status_code in {408, 429}:
                     raise httpx.HTTPStatusError(
                         f"{resp.status_code}", request=resp.request, response=resp
                     )
@@ -2873,14 +2898,28 @@ async def _nano_chat_batch(
                         resp.text[:200],
                     )
                     break
+                if host_health is not None:
+                    host_health.record_success(
+                        stage=stage,
+                        latency_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                    )
                 choices = resp.json().get("choices") or []
                 for fallback_index, choice in enumerate(choices):
                     index = int(choice.get("index", fallback_index))
                     if 0 <= index < len(results):
                         results[index] = (choice.get("message") or {}).get("content")
                 break
+            except KDLHostUnavailableError:
+                raise
             except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as exc:
                 last_exc = exc
+                if host_health is not None:
+                    host_health.record_failure(
+                        exc,
+                        stage=stage,
+                        attempt=attempt + 1,
+                        latency_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                    )
                 if attempt < max_retries:
                     retries += 1
                     await asyncio.sleep(min(10.0, 2.0 * (2 ** attempt)))
@@ -3218,6 +3257,10 @@ class _NanoEngine:
         text_router: Any | None = None,
         request_batch_size: int = 1,
         max_model_sequences: int = 32,
+        host_failure_threshold: int = 3,
+        host_abort_on_open: bool = True,
+        event_log_path: str | None = None,
+        host_health: KDLHostHealth | None = None,
     ):
         base = endpoint_url.rstrip("/")
         self._url = (
@@ -3245,10 +3288,28 @@ class _NanoEngine:
         )
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
+        self._event_logger = (
+            JsonEventLogger(event_log_path, run_name="kdl")
+            if event_log_path
+            else None
+        )
+        self._host_health = host_health or KDLHostHealth(
+            base,
+            failure_threshold=host_failure_threshold,
+            abort_on_open=host_abort_on_open,
+            event_logger=self._event_logger,
+        )
         # Optional async component invoked after layout grouping and before
         # KDL text recognition. It returns indices in the text bucket whose
         # content it supplied. With the default None, pure KDL is unchanged.
         self._text_router = text_router
+
+    @property
+    def host_health(self) -> KDLHostHealth:
+        return self._host_health
+
+    def health_snapshot(self) -> dict[str, Any]:
+        return self._host_health.snapshot()
 
     async def layout_batch(
         self,
@@ -3299,6 +3360,7 @@ class _NanoEngine:
                     usage=usage,
                     sequence_limiter=sequence_limiter,
                     headers=self._headers,
+                    host_health=self._host_health,
                 )
             ]
         else:
@@ -3312,6 +3374,7 @@ class _NanoEngine:
                 usage=usage,
                 sequence_limiter=sequence_limiter,
                 headers=self._headers,
+                host_health=self._host_health,
             )
 
         missing_indexes = [
@@ -3331,6 +3394,7 @@ class _NanoEngine:
                         usage=usage,
                         sequence_limiter=sequence_limiter,
                         headers=self._headers,
+                        host_health=self._host_health,
                     )
                     for index in missing_indexes
                 )
@@ -3400,6 +3464,7 @@ class _NanoEngine:
                     usage=usage,
                     sequence_limiter=sequence_limiter,
                     headers=self._headers,
+                    host_health=self._host_health,
                 )
             ]
         else:
@@ -3413,6 +3478,7 @@ class _NanoEngine:
                 usage=usage,
                 sequence_limiter=sequence_limiter,
                 headers=self._headers,
+                host_health=self._host_health,
             )
 
         missing_indexes = [
@@ -3432,6 +3498,7 @@ class _NanoEngine:
                         usage=usage,
                         sequence_limiter=sequence_limiter,
                         headers=self._headers,
+                        host_health=self._host_health,
                     )
                     for index in missing_indexes
                 )
@@ -3502,6 +3569,7 @@ class _NanoEngine:
 
         raw = self.finalize_elements(elements)
         raw["usage"] = usage.snapshot()
+        raw["kdl_host_health"] = self.health_snapshot()
         return raw
 
     def finalize_elements(self, elements: List[Dict[str, Any]]) -> dict:
@@ -3574,6 +3642,7 @@ class _NanoEngine:
             usage=usage,
             sequence_limiter=sequence_limiter,
             headers=self._headers,
+            host_health=self._host_health,
         )
         if not layout_content or not layout_content.strip():
             return []
@@ -3640,6 +3709,7 @@ class _NanoEngine:
                 usage=usage,
                 sequence_limiter=sequence_limiter,
                 headers=self._headers,
+                host_health=self._host_health,
             )
             if stage == "picture":
                 _nano_apply_picture_result(el, content)
@@ -3689,6 +3759,7 @@ class _NanoEngine:
                 usage=usage,
                 sequence_limiter=sequence_limiter,
                 headers=self._headers,
+                host_health=self._host_health,
             )
             missing_indexes = [
                 index for index, content in enumerate(contents) if content is None
@@ -3713,6 +3784,7 @@ class _NanoEngine:
                             usage=usage,
                             sequence_limiter=sequence_limiter,
                             headers=self._headers,
+                            host_health=self._host_health,
                         )
                         for index in missing_indexes
                     )
@@ -3753,6 +3825,7 @@ class _NanoEngine:
                 usage=usage,
                 sequence_limiter=sequence_limiter,
                 headers=self._headers,
+                host_health=self._host_health,
             )
             if content is not None and _nano_is_single_clean_otsl(content):
                 el["content"] = content

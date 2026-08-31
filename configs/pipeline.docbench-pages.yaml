@@ -2,15 +2,9 @@
   "docbench": {
     "root": null,
     "retrieval_scope": "file",
-    "output_dir": "data/benchmark/docbench_on_demand_basic_lake_rerun_full",
+    "output_dir": "data/benchmark/docbench_pages_file",
     "top_k_pages": 10,
-    "top_k_chunks": 10,
-    "chunk_retrieval_depth": 100,
-    "chunk_retrieval_alpha": 0.7,
-    "query_workers": 32,
     "qa_workers": 4,
-    "kdl_microbatch_window_seconds": 0.3,
-    "kdl_microbatch_max_pages": 512,
     "max_context_chars": 12000,
     "max_unit_chars": 8000,
     "max_output_tokens": 2048,
@@ -24,17 +18,17 @@
       "endpoint_url": null,
       "model": null,
       "continuous_page_queue": true,
-      "scheduler": "parsebench_document",
-      "max_workers": 64,
-      "render_processes": 32,
-      "bbox_max_workers": 256,
+      "scheduler": "global_two_phase",
+      "max_workers": 8,
+      "render_processes": 8,
+      "bbox_max_workers": 8,
       "request_workers": 24,
       "request_batch_size": 1,
-      "max_model_sequences": 32,
+      "max_model_sequences": 128,
       "dpi": 144,
       "request_timeout_seconds": 3600,
       "max_retries": 2,
-      "host_failure_threshold": 20,
+      "host_failure_threshold": 3,
       "host_abort_on_open": true,
       "max_pages": 1024,
       "layout_max_output_tokens": 6000,
@@ -44,23 +38,6 @@
       "formula_max_output_tokens": 128,
       "save_raw_outputs": true
     }
-  },
-  "chunking_embedding": {
-    "chunker": "fixed_overlap",
-    "chunker_params": {
-      "n_words": 512,
-      "overlap": 128
-    },
-    "max_rows_per_chunk": 20,
-    "embedder": "openrouter_te3s",
-    "embedder_params": {
-      "model": "openai/text-embedding-3-small",
-      "dimension": 1536,
-      "api_key_env": "OPENROUTER_API_KEY",
-      "batch_size": 64,
-      "app_title": "AXIOM DE-RD"
-    },
-    "retrieval_profile": "hybrid_default"
   },
   "logging": {
     "level": "INFO"

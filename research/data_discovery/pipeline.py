@@ -574,7 +574,7 @@ def _ingest_selected_pages(
 
 
 def _write_page_subset(source: Path, page_indices: Sequence[int], target: Path) -> None:
-    import fitz
+    import pymupdf as fitz
 
     with fitz.open(str(source)) as document, fitz.open() as subset:
         count = len(document)
@@ -655,7 +655,7 @@ def _rebase_component_id(value: str, mapping: dict[int, int]) -> str:
 
 
 def _pdf_page_dimensions(path: Path) -> Sequence[tuple[float, float]]:
-    import fitz
+    import pymupdf as fitz
 
     with fitz.open(str(path)) as document:
         return [(float(page.rect.width), float(page.rect.height)) for page in document]

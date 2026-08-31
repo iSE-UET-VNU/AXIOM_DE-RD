@@ -1,0 +1,42 @@
+tmux set-option -t kdl-colab mouse on
+
+
+python -m research.data_discovery.run_docbench_e2e \
+  --config configs/pipeline.docbench-on-demand-basic-file.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope file \
+  --max-documents 10 \
+  --limit 20 
+
+  python -m research.data_discovery.run_docbench_per_question \
+  --config configs/pipeline.docbench-on-demand-per-querry.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope file 
+
+  python -m research.data_discovery.run_docbench_pages \
+  --config configs/pipeline.docbench-pages.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope file \
+  --max-documents 2 \
+  --limit 10 \
+
+
+
+
+  basic file:
+  python -m research.data_discovery.run_docbench_e2e   --config configs/pipeline.docbench-on-demand-basic-file.yaml   --docbench-root data/raw/DocBench   --retrieval-scope file
+  basic lake:
+  python -m research.data_discovery.run_docbench_e2e   --config configs/pipeline.docbench-on-demand-basic-lake.yaml   --docbench-root data/raw/DocBench   --retrieval-scope lake
+  query file:
+  python -m research.data_discovery.run_docbench_per_question \
+  --config configs/pipeline.docbench-on-demand-per-query-file.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope file 
+  query lake:
+  python -m research.data_discovery.run_docbench_per_question \
+  --config configs/pipeline.docbench-on-demand-per-query-lake.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope lake
+
+
+  đối với docbench, có nhiều câu hỏi KHONG_DU_THONG_TIN, có thể là chúng thuôc loại Una. (unanswerable) và nếu kết quả trả về KHONG_DU_THONG_TIN thì judge không chấp nhận nó đúng. Hãy implement thêm đoạn rejudge lại những câu hỏi mà kết quả trả về là KHONG_DU_THONG_TIN. Implement theo 2 hướng: nếu câu trả lời là KHONG_DU_THONG_TIN thì ngay lúc nó nhận được câu trả lời thì regen & rejudge lại luôn (nếu nó vẫn là KHONG_DU_THONG_TIN thì không regen & rejudge lại nữa); và hướng thứ 2 là nếu đã chạy hết các câu hỏi rồi thì khi chạy lại nó chỉ chạy những câu hỏi mà có câu trả lời là KHONG_DU_THONG_TIN thôi. Lý do là tôi muốn từ lần sau nó sẽ chạy theo hướng 1 để tôi không cần chạy lại nữa; còn hiện tại tôi đang chạy gần xong các câu hỏi rồi nên tôi cần chờ nó chạy xong rồi chạy lại. Implement chức năng này cho cả 3 pipeline docbench. 

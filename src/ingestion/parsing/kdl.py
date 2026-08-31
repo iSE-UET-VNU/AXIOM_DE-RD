@@ -29,6 +29,7 @@ from .kdl_frontier_engine import (
     layout_recognition_bucket,
     preprocess_for_vlm,
 )
+from .kdl_health import KDLHostHealth, KDLHostUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,10 @@ class KDLConfig:
     save_raw_outputs: bool = True
     output_dir: str | None = "data/work/kdl"
     project_root: str | None = None
+    host_failure_threshold: int = 3
+    host_abort_on_open: bool = True
+    event_log_path: str | None = None
+    host_health: KDLHostHealth | None = None
 
     @classmethod
     def from_mapping(cls, config: dict[str, Any] | None) -> "KDLConfig":
@@ -143,6 +148,18 @@ class KDLConfig:
             save_raw_outputs=bool(values.get("save_raw_outputs", True)),
             output_dir=_optional_string(values.get("output_dir", "data/work/kdl")),
             project_root=_optional_string(values.get("project_root")),
+            host_failure_threshold=_positive_int(
+                values,
+                "host_failure_threshold",
+                int(os.getenv("KDL_HOST_FAILURE_THRESHOLD", "3")),
+            ),
+            host_abort_on_open=_as_bool(values.get("host_abort_on_open", True)),
+            event_log_path=_optional_string(values.get("event_log_path")),
+            host_health=(
+                values.get("_host_health")
+                if isinstance(values.get("_host_health"), KDLHostHealth)
+                else None
+            ),
         )
 
 
@@ -206,6 +223,8 @@ class KDLProvider:
             for index, (path, data_object) in enumerate(documents):
                 try:
                     outcome = self._parse_one(path, data_object)
+                except KDLHostUnavailableError:
+                    raise
                 except Exception as exc:
                     outcome = exc
                 outcomes.append(outcome)
@@ -239,6 +258,7 @@ class KDLProvider:
         finally:
             for image in images:
                 image.close()
+        raw["kdl_host_health"] = self._health_snapshot(engine)
         self._attach_routing_metadata(raw, routing_context)
         return self._to_parsed_data(
             file_path, data_object, raw, started, page_count
@@ -335,6 +355,7 @@ class KDLProvider:
             try:
                 raw = engine.finalize_elements(elements)
                 raw["usage"] = document.usage.snapshot()
+                raw["kdl_host_health"] = self._health_snapshot(engine)
                 self._attach_routing_metadata(raw, document.routing_context)
                 parsed = self._to_parsed_data(
                     document.path,
@@ -397,6 +418,9 @@ class KDLProvider:
                             finally:
                                 if image is not None:
                                     image.close()
+                    except KDLHostUnavailableError as exc:
+                        document.failure = exc
+                        raise
                     except Exception as exc:
                         document.failure = RuntimeError(
                             f"page {page_index + 1}: {type(exc).__name__}: {exc}"
@@ -485,6 +509,17 @@ class KDLProvider:
 
             persistence_task = asyncio.create_task(persist_completed_documents())
 
+        async def close_persistence() -> None:
+            if persistence_task is None:
+                return
+            if not persistence_task.done():
+                await persistence_queue.join()
+                persistence_queue.put_nowait(None)
+                await persistence_queue.join()
+                await persistence_task
+            if persistence_executor is not None:
+                await asyncio.to_thread(persistence_executor.shutdown, True)
+
         recognition_active = False
 
         def publish(index: int, outcome: ParsedData | Exception) -> None:
@@ -516,6 +551,7 @@ class KDLProvider:
             ]
             try:
                 raw = engine.finalize_elements(elements)
+                raw["kdl_host_health"] = self._health_snapshot(engine)
                 self._attach_routing_metadata(raw, document.routing_context)
                 raw_by_document[index] = raw
                 parsed = self._to_parsed_data(
@@ -537,15 +573,19 @@ class KDLProvider:
         ]
         if valid_indexes:
             layout_started = time.perf_counter()
-            await self._run_global_layout_phase(
-                prepared,
-                valid_indexes,
-                engine,
-                usage,
-                request_semaphore,
-                sequence_limiter,
-                telemetry,
-            )
+            try:
+                await self._run_global_layout_phase(
+                    prepared,
+                    valid_indexes,
+                    engine,
+                    usage,
+                    request_semaphore,
+                    sequence_limiter,
+                    telemetry,
+                )
+            except KDLHostUnavailableError:
+                await close_persistence()
+                raise
             telemetry["layout_phase_latency_ms"] = round(
                 (time.perf_counter() - layout_started) * 1000.0, 3
             )
@@ -586,17 +626,21 @@ class KDLProvider:
                 if remaining_jobs[index] == 0:
                     finalize_document(index)
             if crop_tasks:
-                await self._run_global_recognition_phase(
-                    prepared,
-                    crop_tasks,
-                    job_map,
-                    engine,
-                    usage,
-                    request_semaphore,
-                    sequence_limiter,
-                    telemetry,
-                    complete_jobs,
-                )
+                try:
+                    await self._run_global_recognition_phase(
+                        prepared,
+                        crop_tasks,
+                        job_map,
+                        engine,
+                        usage,
+                        request_semaphore,
+                        sequence_limiter,
+                        telemetry,
+                        complete_jobs,
+                    )
+                except KDLHostUnavailableError:
+                    await close_persistence()
+                    raise
             recognition_active = False
             telemetry["recognition_phase_latency_ms"] = round(
                 (time.perf_counter() - recognition_started) * 1000.0, 3
@@ -611,11 +655,7 @@ class KDLProvider:
 
         persistence_drain_started = time.perf_counter()
         if on_document_complete is not None:
-            await persistence_queue.join()
-            persistence_queue.put_nowait(None)
-            await persistence_queue.join()
-            assert persistence_task is not None
-            await persistence_task
+            await close_persistence()
         telemetry["post_recognition_persistence_drain_ms"] = round(
             (time.perf_counter() - persistence_drain_started) * 1000.0,
             3,
@@ -629,6 +669,7 @@ class KDLProvider:
             if not isinstance(outcome, ParsedData):
                 continue
             raw["usage"] = final_usage
+            raw["kdl_host_health"] = self._health_snapshot(engine)
             raw["_global_scheduler"] = telemetry
             raw_paths = self._write_raw_outputs(
                 prepared[index].path,
@@ -649,8 +690,6 @@ class KDLProvider:
             3,
         )
 
-        if persistence_executor is not None:
-            persistence_executor.shutdown(wait=True)
         if persistence_errors:
             raise RuntimeError(
                 "KDL completion persistence failed: " + str(persistence_errors[0])
@@ -781,6 +820,8 @@ class KDLProvider:
                         batch = in_flight.pop(task)
                         try:
                             grouped_pages = task.result()
+                        except KDLHostUnavailableError:
+                            raise
                         except Exception as exc:
                             grouped_pages = [
                                 {"text": [], "table": [], "picture": [], "formula": []}
@@ -1074,6 +1115,8 @@ class KDLProvider:
                         queue_name, elements = in_flight.pop(task)
                         try:
                             table_fallbacks = task.result()
+                        except KDLHostUnavailableError:
+                            raise
                         except Exception as exc:
                             logger.warning("global recognition batch failed: %s", exc)
                             table_fallbacks = []
@@ -1150,7 +1193,16 @@ class KDLProvider:
             text_router=self._text_router,
             request_batch_size=self.config.request_batch_size,
             max_model_sequences=self.config.max_model_sequences,
+            host_failure_threshold=self.config.host_failure_threshold,
+            host_abort_on_open=self.config.host_abort_on_open,
+            event_log_path=self.config.event_log_path,
+            host_health=self.config.host_health,
         )
+
+    @staticmethod
+    def _health_snapshot(engine: Any) -> dict[str, Any]:
+        snapshot = getattr(engine, "health_snapshot", None)
+        return dict(snapshot()) if callable(snapshot) else {}
 
     def _prepare_routing_context(self, file_path: Path) -> Any | None:
         if self._text_router is None:
@@ -1223,6 +1275,9 @@ class KDLProvider:
         usage = raw.get("usage")
         if isinstance(usage, dict):
             metadata["kdl_usage"] = usage
+        host_health = raw.get("kdl_host_health")
+        if isinstance(host_health, dict):
+            metadata["kdl_host_health"] = host_health
         scheduler_metadata = raw.get("_global_scheduler")
         if isinstance(scheduler_metadata, dict):
             metadata["kdl_global_scheduler"] = scheduler_metadata
@@ -1297,7 +1352,7 @@ def _render_open_document_page(
             raise IndexError(f"Image has no page {page_index + 1}")
         with Image.open(file_path) as image:
             return image.convert("RGB").copy()
-    import fitz
+    import pymupdf as fitz
 
     page = document.load_page(page_index)
     pixmap = page.get_pixmap(
@@ -1327,7 +1382,7 @@ def _kdl_document_worker(
         document: Any | None = None
         try:
             if file_path.suffix.lower() == ".pdf":
-                import fitz
+                import pymupdf as fitz
 
                 document = fitz.open(str(file_path))
                 page_indexes = (
@@ -1493,7 +1548,7 @@ def _render_page(path: str, page_index: int, dpi: int) -> Image.Image:
             raise IndexError(f"Image has no page {page_index + 1}")
         with Image.open(file_path) as image:
             return image.convert("RGB").copy()
-    import fitz
+    import pymupdf as fitz
 
     with fitz.open(str(file_path)) as document:
         page = document.load_page(page_index)
@@ -1505,7 +1560,7 @@ def _render_page(path: str, page_index: int, dpi: int) -> Image.Image:
 def _page_count(path: Path, max_pages: int) -> int:
     if path.suffix.lower() != ".pdf":
         return 1
-    import fitz
+    import pymupdf as fitz
 
     with fitz.open(str(path)) as document:
         count = int(document.page_count)
@@ -1664,6 +1719,12 @@ def _optional_string(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
 
 
 __all__ = ["KDLConfig", "KDLProvider"]

@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Event
 from typing import Any
 import argparse
 import hashlib
@@ -42,10 +43,21 @@ from research.data_discovery.pipeline import (  # noqa: E402
     PdfInspectorPageParser,
     build_page_index,
 )
-from src.evaluation.generate import ContextChunk, generate  # noqa: E402
+from src.evaluation.generate import (  # noqa: E402
+    ABSTAIN,
+    ContextChunk,
+    Generation,
+    generate,
+)
 from src.evaluation.llm import complete  # noqa: E402
 from src.utils.config import load_config, resolve_parser_config  # noqa: E402
 from src.utils.env import load_dotenv_file  # noqa: E402
+from src.ingestion.parsing.kdl_health import KDLHostUnavailableError  # noqa: E402
+from src.utils.observability import (  # noqa: E402
+    JsonEventLogger,
+    configure_run_logging,
+    utc_now_iso,
+)
 
 
 LOGGER = logging.getLogger("docbench_on_demand")
@@ -85,6 +97,71 @@ Evaluation Form (score ONLY):
 - Correctness:"""
 
 
+def _is_unanswerable_answer(answer: Any) -> bool:
+    """Return whether an answer contains DocBench's abstention sentinel."""
+
+    return ABSTAIN in str(answer or "").upper()
+
+
+def _unanswerable_retry_count(row: dict[str, Any] | None) -> int:
+    """Read the durable, at-most-once retry marker from a QA row."""
+
+    if not row:
+        return 0
+    try:
+        return max(int(row.get("unanswerable_retry_count", 0) or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _should_retry_unanswerable(row: dict[str, Any] | None) -> bool:
+    """Whether a completed row needs the one allowed unanswerable retry."""
+
+    return bool(row) and _is_unanswerable_answer(row.get("sys_ans")) and (
+        _unanswerable_retry_count(row) < 1
+    )
+
+
+def _generate_with_unanswerable_retry(
+    qid: str,
+    question: str,
+    context: list[ContextChunk],
+    *,
+    model: str,
+    max_chars: int,
+    max_output_tokens: int,
+    previous_row: dict[str, Any] | None = None,
+) -> tuple[Generation, int, str | None]:
+    """Generate an answer and retry once if it abstains.
+
+    The retry count is stored in the QA checkpoint so a second process does not
+    keep regenerating a question whose retry also abstained.  The returned
+    third value is the first answer, when a retry was performed, and is kept
+    only for auditability.
+    """
+
+    retry_count = _unanswerable_retry_count(previous_row)
+    generation = generate(
+        qid,
+        question,
+        context,
+        model=model,
+        max_chars=max_chars,
+        max_output_tokens=max_output_tokens,
+    )
+    if _is_unanswerable_answer(generation.answer) and retry_count < 1:
+        retry_generation = generate(
+            qid,
+            question,
+            context,
+            model=model,
+            max_chars=max_chars,
+            max_output_tokens=max_output_tokens,
+        )
+        return retry_generation, retry_count + 1, generation.answer
+    return generation, retry_count, None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _arguments().parse_args(argv)
     logging.basicConfig(
@@ -112,6 +189,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     assert output_dir is not None
     output_dir.mkdir(parents=True, exist_ok=True)
+    configure_run_logging(
+        output_dir / "logs" / f"{scope}_on_demand_basic.log",
+        level=getattr(logging, str(args.log_level).upper()),
+    )
+    event_logger = JsonEventLogger(
+        output_dir / "logs" / f"{scope}_events.jsonl",
+        run_name="on-demand-basic",
+    )
+    run_started_at = utc_now_iso()
+    event_logger.emit("run_started", scope=scope, config=str(config_path))
 
     top_k_pages = _positive(
         args.top_k_pages or docbench_config.get("top_k_pages") or 10,
@@ -220,6 +307,9 @@ def main(argv: list[str] | None = None) -> int:
         output_dir / "parser-assets" / scope,
     )
     parser_config = _apply_kdl_overrides(parser_config, args)
+    parser_config = _with_kdl_event_log(
+        parser_config, output_dir / "logs" / f"{scope}_kdl_events.jsonl"
+    )
     if parser_config.get("provider") != "kdl_pdf_inspector":
         raise ValueError(
             "DocBench on-demand basic requires parsing.provider=kdl_pdf_inspector"
@@ -247,8 +337,16 @@ def main(argv: list[str] | None = None) -> int:
     retrieval_config_hash = _hash_payload(retrieval_config)
     retrieval_path = output_dir / "retrieval" / f"{scope}_baseline_legacy.jsonl"
     timings_path = output_dir / "retrieval" / f"{scope}_timings.jsonl"
-    retrieval_rows: dict[str, dict[str, Any]] = {}
-    timing_rows: dict[str, dict[str, Any]] = {}
+    retrieval_rows = {
+        qid: row
+        for qid, row in _read_latest_jsonl(retrieval_path).items()
+        if row.get("retrieval_config_hash") == retrieval_config_hash
+    }
+    timing_rows = {
+        qid: row
+        for qid, row in _read_latest_jsonl(timings_path).items()
+        if retrieval_rows.get(qid, {}).get("status") == "ok"
+    }
 
     runner = OnDemandPerQueryRunner(
         page_index,
@@ -265,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         microbatch_window_seconds=microbatch_window,
         microbatch_max_pages=microbatch_max_pages,
         force_reparse=args.force_reparse,
+        event_logger=event_logger,
     )
     try:
         _run_retrieval(
@@ -279,6 +378,8 @@ def main(argv: list[str] | None = None) -> int:
             query_workers,
         )
         timing_summary = runner.timing_summary(light_preparation_seconds=index_seconds)
+        timing_summary["run_started_at_utc"] = run_started_at
+        timing_summary["run_finished_at_utc"] = utc_now_iso()
         if not args.skip_qa:
             qa_rows = _run_qa(
                 questions,
@@ -348,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         _write_json(output_dir / f"manifest_{scope}.json", manifest)
         _update_summary(output_dir / "summary.json", scope, report, timing_summary)
+        event_logger.emit("run_completed", scope=scope, questions=len(questions))
         print(
             json.dumps(
                 {"report": report, "timing": timing_summary},
@@ -386,6 +488,11 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--kdl-request-workers", type=int)
     parser.add_argument("--kdl-request-batch-size", type=int)
     parser.add_argument("--kdl-max-model-sequences", type=int)
+    parser.add_argument(
+        "--kdl-host-failure-threshold",
+        type=int,
+        help="Stop after this many consecutive KDL host failures (default: 3).",
+    )
     parser.add_argument("--max-context-chars", type=int)
     parser.add_argument("--max-unit-chars", type=int)
     parser.add_argument("--max-output-tokens", type=int)
@@ -640,10 +747,19 @@ def _apply_kdl_overrides(
         "request_workers": args.kdl_request_workers,
         "request_batch_size": args.kdl_request_batch_size,
         "max_model_sequences": args.kdl_max_model_sequences,
+        "host_failure_threshold": getattr(args, "kdl_host_failure_threshold", None),
     }
     for key, value in names.items():
         if value is not None:
             kdl[key] = value
+    result["kdl"] = kdl
+    return result
+
+
+def _with_kdl_event_log(config: dict[str, Any], path: Path) -> dict[str, Any]:
+    result = dict(config)
+    kdl = dict(result.get("kdl") or {})
+    kdl["event_log_path"] = str(path)
     result["kdl"] = kdl
     return result
 
@@ -659,36 +775,76 @@ def _run_retrieval(
     timings_path: Path,
     query_workers: int,
 ) -> None:
+    pending = [
+        question
+        for question in questions
+        if not (
+            str(question["qid"]) in retrieval_rows
+            and retrieval_rows[str(question["qid"])].get("status") == "ok"
+            and retrieval_rows[str(question["qid"])].get("retrieval_config_hash")
+            == retrieval_config_hash
+        )
+    ]
+
     def execute(
         question: dict[str, Any],
-    ) -> tuple[str, OnDemandQueryResult | None, str | None]:
+    ) -> tuple[str, OnDemandQueryResult | None, str | None, Exception | None]:
+        if abort_event.is_set():
+            return (
+                str(question["qid"]),
+                None,
+                "run aborted because the KDL host circuit is open",
+                None,
+            )
         try:
             result = runner.run_query(
                 question["question"], query_id=str(question["qid"])
             )
-            return str(question["qid"]), result, None
+            return str(question["qid"]), result, None, None
+        except KDLHostUnavailableError as error:
+            abort_event.set()
+            return str(question["qid"]), None, f"{type(error).__name__}: {error}", error
         except Exception as error:  # noqa: BLE001 - persist per-query failures
-            return str(question["qid"]), None, f"{type(error).__name__}: {error}"
+            return str(question["qid"]), None, f"{type(error).__name__}: {error}", None
 
-    LOGGER.info("Running on-demand retrieval for %d questions", len(questions))
+    LOGGER.info(
+        "Running on-demand retrieval: pending=%d/%d workers=%d",
+        len(pending),
+        len(questions),
+        query_workers,
+    )
+    if not pending:
+        return
+    abort_event = Event()
+    host_failure: Exception | None = None
     with ThreadPoolExecutor(max_workers=query_workers) as pool:
-        futures = {pool.submit(execute, question): question for question in questions}
+        futures = {pool.submit(execute, question): question for question in pending}
         for number, future in enumerate(as_completed(futures), start=1):
             question = futures[future]
-            qid, result, error = future.result()
+            qid, result, error, detected_host_failure = future.result()
+            if detected_host_failure is not None and host_failure is None:
+                host_failure = detected_host_failure
+                abort_event.set()
+            finished_at = utc_now_iso()
             if result is None:
                 row = {
                     **question,
                     "pipeline": "pdf_inspector -> bm25 -> baseline_legacy",
                     "retrieval_config": retrieval_config,
                     "retrieval_config_hash": retrieval_config_hash,
-                    "status": "error",
+                    "status": "aborted" if detected_host_failure else "error",
                     "error": error,
+                    "finished_at_utc": finished_at,
                     "hits": [],
                     "chunks": [],
                     "timing": {},
                 }
-                timing = {"qid": qid, "status": "error", "error": error}
+                timing = {
+                    "qid": qid,
+                    "status": row["status"],
+                    "error": error,
+                    "finished_at_utc": finished_at,
+                }
             else:
                 row = _encode_retrieval_result(
                     question, result, retrieval_config, retrieval_config_hash
@@ -701,10 +857,16 @@ def _run_retrieval(
             LOGGER.info(
                 "Retrieval %d/%d: qid=%s status=%s",
                 number,
-                len(questions),
+                len(pending),
                 qid,
                 row["status"],
             )
+    if host_failure is not None:
+        LOGGER.error(
+            "Stopping pipeline because KDL host is unavailable; "
+            "successful checkpoints are preserved for resume"
+        )
+        raise host_failure
 
 
 def _encode_retrieval_result(
@@ -771,12 +933,14 @@ def _run_qa(
             str(question["qid"]) in rows
             and rows[str(question["qid"])].get("qa_config_hash") == qa_config_hash
             and rows[str(question["qid"])].get("status") == "ok"
+            and not _should_retry_unanswerable(rows[str(question["qid"])])
         )
     ]
     LOGGER.info("QA baseline_legacy: pending=%d/%d", len(pending), len(questions))
 
     def execute(question: dict[str, Any]) -> dict[str, Any]:
         qid = str(question["qid"])
+        previous_row = rows.get(qid)
         retrieval = retrieval_rows.get(qid) or {}
         if retrieval.get("status") != "ok":
             return {
@@ -797,13 +961,14 @@ def _run_qa(
             for item in retrieval.get("chunks") or []
             if str(item.get("text") or "").strip()
         ]
-        generation = generate(
+        generation, retry_count, initial_answer = _generate_with_unanswerable_retry(
             qid,
             question["question"],
             context,
             model=generator_model,
             max_chars=max_context_chars,
             max_output_tokens=max_output_tokens,
+            previous_row=previous_row,
         )
         result: dict[str, Any] = {
             **question,
@@ -819,7 +984,11 @@ def _run_qa(
             "retrieved_page_count": len(retrieval.get("hits") or []),
             "retrieval_timing": retrieval.get("timing") or {},
             "qa_config_hash": qa_config_hash,
+            "unanswerable_retry_count": retry_count,
         }
+        if initial_answer is not None:
+            result["initial_sys_ans"] = initial_answer
+            LOGGER.info("QA qid=%s abstained; regenerated answer once", qid)
         if generation.error:
             result.update(
                 {
@@ -830,7 +999,9 @@ def _run_qa(
                 }
             )
             return result
-        if generation.abstained or not generation.answer.strip():
+        if not generation.answer.strip() or (
+            generation.abstained and initial_answer is None
+        ):
             result.update(
                 {"status": "ok", "score": 0, "judge_raw": "abstained", "error": None}
             )

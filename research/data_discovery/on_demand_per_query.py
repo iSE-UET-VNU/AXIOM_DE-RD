@@ -25,6 +25,7 @@ from typing import Any, Callable, Iterable, Sequence
 import copy
 import hashlib
 import json
+import os
 import time
 
 import numpy as np
@@ -34,6 +35,8 @@ from src.retrieval.fusion import alpha_fuse
 from src.retrieval.index import LocalIndex
 from src.retrieval.protocol import ChunkRecord
 from src.retrieval.sparse import BM25Index
+from src.ingestion.parsing.kdl_health import KDLHostHealth, KDLHostUnavailableError
+from src.utils.observability import JsonEventLogger, utc_now_iso
 
 
 PIPELINE_VERSION = "on-demand-per-query-v1"
@@ -80,11 +83,13 @@ class _KDLBatcher:
         *,
         window_seconds: float,
         max_pages: int,
+        event_logger: JsonEventLogger | None = None,
     ) -> None:
         self._parse_batch = parse_batch
         self._page_ids = page_ids
         self._window_seconds = max(0.0, float(window_seconds))
         self._max_pages = max(1, int(max_pages))
+        self._event_logger = event_logger
         self._queue: Queue[_ParseRequest | None] = Queue()
         self._closed = Event()
         self._batch_number = 0
@@ -152,10 +157,25 @@ class _KDLBatcher:
             self._batch_number += 1
             batch_id = f"kdl-batch-{self._batch_number:05d}"
             batch_started = time.perf_counter()
+            if self._event_logger is not None:
+                self._event_logger.emit(
+                    "kdl_batch_started",
+                    batch_id=batch_id,
+                    requested_pages=len(self._page_ids(merged)),
+                    queued_requests=len(requests),
+                )
             try:
                 batch_result = self._parse_batch(merged, batch_id)
                 parsed_ids = set(batch_result.get("parsed_ids") or set())
                 finished = time.perf_counter()
+                if self._event_logger is not None:
+                    self._event_logger.emit(
+                        "kdl_batch_completed",
+                        batch_id=batch_id,
+                        requested_pages=len(self._page_ids(merged)),
+                        parsed_pages=len(parsed_ids),
+                        elapsed_seconds=round(finished - batch_started, 6),
+                    )
                 for item in requests:
                     request_ids = self._page_ids(item.selected)
                     result = dict(batch_result)
@@ -168,6 +188,16 @@ class _KDLBatcher:
                     )
                     item.future.set_result(result)
             except Exception as error:  # noqa: BLE001 - propagated to query
+                if self._event_logger is not None:
+                    self._event_logger.emit(
+                        "kdl_batch_failed",
+                        batch_id=batch_id,
+                        requested_pages=len(self._page_ids(merged)),
+                        elapsed_seconds=round(time.perf_counter() - batch_started, 6),
+                        error_type=type(error).__name__,
+                        error=str(error),
+                        host_unavailable=isinstance(error, KDLHostUnavailableError),
+                    )
                 for item in requests:
                     item.future.set_exception(error)
 
@@ -200,6 +230,7 @@ class OnDemandPerQueryRunner:
         force_reparse: bool = False,
         validate_baseline: bool = True,
         page_scope_for_query: Callable[[str, str], set[str] | None] | None = None,
+        event_logger: JsonEventLogger | None = None,
     ) -> None:
         if not index.pages:
             raise ValueError("On-demand-per-query requires a non-empty PageIndex")
@@ -222,6 +253,7 @@ class OnDemandPerQueryRunner:
         self.query_workers = max(1, int(query_workers))
         self.force_reparse = bool(force_reparse)
         self.page_scope_for_query = page_scope_for_query
+        self.event_logger = event_logger
 
         self._state_lock = Lock()
         self._chunk_lock = Lock()
@@ -259,15 +291,47 @@ class OnDemandPerQueryRunner:
         if self._chunks_by_id:
             with self._chunk_lock:
                 self._rebuild_chunk_index()
+        self._kdl_host_health = self._build_kdl_host_health()
 
         self._batcher = _KDLBatcher(
             self._parse_kdl_batch,
             self._requested_page_ids,
             window_seconds=microbatch_window_seconds,
             max_pages=microbatch_max_pages,
+            event_logger=event_logger,
         )
         self.microbatch_window_seconds = float(microbatch_window_seconds)
         self.microbatch_max_pages = max(1, int(microbatch_max_pages))
+
+    def _build_kdl_host_health(self) -> KDLHostHealth | None:
+        kdl = dict(self.parser_config.get("kdl") or {})
+        if not kdl:
+            return None
+        existing = kdl.get("_host_health")
+        if isinstance(existing, KDLHostHealth):
+            return existing
+        endpoint = str(
+            kdl.get("endpoint_url")
+            or os.getenv("VLLM_API_BASE")
+            or os.getenv("KDL_NANO_ENDPOINT_URL")
+            or "http://127.0.0.1:8000/v1"
+        ).rstrip("/")
+        kdl_health = KDLHostHealth(
+            endpoint,
+            failure_threshold=int(kdl.get("host_failure_threshold", 3)),
+            abort_on_open=(
+                str(kdl.get("host_abort_on_open", True)).lower()
+                not in {"0", "false", "no", "off"}
+            ),
+            event_logger=(
+                JsonEventLogger(kdl.get("event_log_path"), run_name="kdl")
+                if kdl.get("event_log_path")
+                else None
+            ),
+        )
+        kdl["_host_health"] = kdl_health
+        self.parser_config["kdl"] = kdl
+        return kdl_health
 
     @property
     def page_texts(self) -> dict[str, str]:
@@ -299,6 +363,9 @@ class OnDemandPerQueryRunner:
         query_id = str(query_id if query_id is not None else query)
         query = str(query)
         query_started = time.perf_counter()
+        started_at = utc_now_iso()
+        if self.event_logger is not None:
+            self.event_logger.emit("query_started", query_id=query_id)
         with self._timing_lock:
             if self._stage_started_at is None:
                 self._stage_started_at = query_started
@@ -348,6 +415,8 @@ class OnDemandPerQueryRunner:
                 "text-embedding-3-small -> hybrid alpha=0.7"
             ),
             "query_id": query_id,
+            "started_at_utc": started_at,
+            "finished_at_utc": utc_now_iso(),
             "light_retrieval_seconds": round(light_bm25_seconds, 6),
             "parsing_seconds": round(batch_total_seconds, 6),
             "kdl_batch_id": batch_id,
@@ -361,6 +430,12 @@ class OnDemandPerQueryRunner:
             "retrieval_seconds": round(retrieval_seconds, 6),
             "overall_seconds": round(overall_seconds, 6),
             "wall_clock_seconds": round(wall_clock_seconds, 6),
+            "elapsed_seconds": round(wall_clock_seconds, 6),
+            "kdl_host_health": (
+                self._kdl_host_health.snapshot()
+                if self._kdl_host_health is not None
+                else {}
+            ),
             "hit_pages": len(hits),
             "cache_hit_pages": len(cached_ids),
             "parsed_pages_this_query": len(parsed_ids),
@@ -377,6 +452,15 @@ class OnDemandPerQueryRunner:
             self._phase_work["chunk_embed_index"] += chunk_stage_seconds
             self._phase_work["retrieval"] += retrieval_seconds
             self._stage_ended_at = time.perf_counter()
+
+        if self.event_logger is not None:
+            self.event_logger.emit(
+                "query_completed",
+                query_id=query_id,
+                elapsed_seconds=round(wall_clock_seconds, 6),
+                parsed_pages=len(parsed_ids),
+                cache_hit_pages=len(cached_ids),
+            )
 
         selected_pages: defaultdict[str, set[int]] = defaultdict(set)
         for hit in hits:
@@ -484,6 +568,11 @@ class OnDemandPerQueryRunner:
             "online_stage_wall_seconds": round(overall_wall, 3),
             "parsed_page_cache": len(self._records_by_page),
             "prepared_chunk_cache": len(self._chunks_by_id),
+            "kdl_host_health": (
+                self._kdl_host_health.snapshot()
+                if self._kdl_host_health is not None
+                else {}
+            ),
             "notes": (
                 "Overall is wall-clock runtime including light preparation. "
                 "Phase columns are aggregate work and may overlap under concurrent "
