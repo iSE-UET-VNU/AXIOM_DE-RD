@@ -1343,3 +1343,82 @@ are mostly not. Recorded as untested; if pursued, run a small stratified subset
 first and check whether image scores discriminate at all before the full run.
 
 Reproduce: `python research/experiments/physics_rerank_nemotron.py --depth 20`
+
+## 23. webAI-ColVec1.1-8b — a SOTA visual arm breaks the redundancy pattern (2026-09-02)
+
+P1 executed. Ran `webAI-ColVec1.1-8b` (#1 ViDoRe V3, 64.95 mean-task) as a
+drop-in replacement for the ColQwen2-2B visual arm: same late-interaction /
+MaxSim recipe, bigger base (Qwen3.5-VL ~9B), fully bidirectional attention,
+640-dim tokens, up to 1792 visual tokens. Pages rendered at 144 DPI (matched to
+the ColQwen2 run for a clean comparison). Colab L4, fp16, one-time index; scoring
+matrix cached at `data/work/vidore_physics_colvec/`. Slate on the KDL Baseline
+Legacy pool (`physics_kdl_slate.py --visual-name colvec --wv 0.8`):
+
+| arm | NDCG@10 | R@10 | Δ vs base | p | vs |
+|---|---:|---:|---:|---:|---|
+| baseline KDL α=0.7 | 43.86 | 46.73 | — | — | — |
+| + SEP | 46.27 | 48.88 | +2.41 | 0.0004 | baseline |
+| + ColVec only (pool-reranked) | 51.62 | 55.81 | +7.76 | 0.0001 | baseline |
+| + ColVec fusion (wv=0.8) | 51.99 | 55.85 | +8.13 | 0.0001 | baseline |
+| **+ SEP + ColVec** | **52.91** | **56.12** | **+9.05** | 0.0001 | baseline |
+| + Nemotron rerank | 47.74 | 49.68 | +3.88 | 0.0007 | baseline |
+| + ColVec → Nemotron | 48.30 | 50.66 | +4.44 | 0.0002 | baseline |
+| + Nemotron → ColVec | 51.79 | 56.42 | **+4.06** | 0.0001 | Nemotron |
+| + SEP+ColVec → Nemotron | 48.65 | 51.47 | +4.79 | 0.0001 | baseline |
+| + Nemotron → SEP+ColVec | 51.95 | 55.99 | **+4.22** | 0.0001 | Nemotron |
+
+Fusion-weight sweep: NDCG rises monotonically with wv; SEP+ColVec sits in a
+52.5–52.9 band for wv ∈ [0.7, 0.9], 52.91 at wv=0.8. ColVec-only ≈ ColVec-fusion
+— at this weight the text leg contributes almost nothing; the visual arm is
+carrying the result.
+
+### The visual arm was the bottleneck
+
+ColQwen2-2B standalone was 45.70, n.s. (§18). ColVec-8b standalone is **51.62,
+p<1e-4** — same architecture, same pool, +5.9 purely from a stronger model. This
+is the largest single-component gain in the whole ladder and it says the ceiling
+we kept hitting (§7 "right file, wrong page") was a *capacity* limit of the 2B
+visual encoder, not a structural property of the task.
+
+### 52.91 is past the free stack, past Voyage, past published physics SOTA
+
+SEP+ColVec = 52.91, **free** (one-time GPU index, no API). Prior best free stack
+was SEP+ColQwen2 = 48.35 (§21); Voyage rerank = 49.23 (§20, different pool);
+best published physics number = 50.84 (nemotron-colembed-vl-8b-v2, 6-lang avg).
+The "~60" target is still ~7 away but this is the first result above world SOTA
+on the physics slice.
+
+### The redundancy pattern from §20/§22 **inverts**
+
+With ColQwen2, a trained cross-encoder absorbed both SEP and the visual arm
+(feeding them into Voyage/Nemotron was n.s.). With ColVec the reranker is now the
+*weak* lever:
+
+- **ColVec → Nemotron: 51.99 → 48.30.** Reranking a strong late-interaction
+  ranking with the 1B cross-encoder *destroys* ~3.7 points — it pulls the top-20
+  back toward the text baseline it was trained near.
+- **Nemotron → ColVec: +4.06 vs Nemotron alone (p<1e-4).** Applying ColVec after
+  Nemotron recovers everything. ColVec dominates Nemotron, not the reverse.
+- Same for SEP+ColVec: Nemotron-last = 48.65, Nemotron-first = 51.95.
+
+Conclusion: "one strong cross-encoder absorbs the cheap levers" (§20) was
+conditional on the levers being weak relative to the cross-encoder. A visual arm
+that is *stronger* than the available reranker flips it — now the reranker is the
+redundant component, and stacking it on top is actively harmful. SEP still adds
+~+0.9–1.0 on top of ColVec (52.91 vs 51.99) because it fixes a different failure
+(neighbour-page / same-file structure) that a page-independent visual score does
+not see.
+
+### Open
+
+- 144 DPI is low for a model that accepts 1792 visual tokens (~200+ DPI
+  equivalent) — physics equations/subscripts may be under-resolved. Re-index at
+  higher DPI is the cheapest next gain.
+- Full-corpus visual-only (not pool-restricted) NDCG not recorded here — the
+  in-Colab quick check prints it; worth capturing to know the recall ceiling.
+- License: webAI Non-Commercial. Research-only. Commercial path =
+  `nvidia/nemotron-colembed-vl-4b-v2` (#9, open) on the same notebook.
+- End-to-end QA (Correct_only) for the SEP+ColVec arm not yet measured.
+
+Reproduce: run `webAI_ColVec_visual_arm_physics.ipynb` on GPU →
+`python research/experiments/physics_kdl_slate.py --visual-dir data/work/vidore_physics_colvec --visual-name colvec --wv 0.8`
