@@ -27,28 +27,36 @@ Cập nhật lần cuối: **27/08/2026, 21:15**.
 
 ## 2. Kết quả đã xác nhận
 
-### 2a. Đo trên pool KDL production (recipe "Baseline Legacy": KDL → fixed_512/128 → MaxP → α0.7)
+### 2a. Pool "Baseline Legacy" = **pdf-inspector + KDL** → fixed_512/128 → MaxP → α0.7
 
-**Đây là các con số điền được vào bảng của team.** Baseline tái lập 43.86 / 46.73
-(CSV ghi 44.2 / 47.47 — lệch ~0.35 do biến động run KDL). Ledger §21, `physics_kdl_arms.py`,
-toàn bộ từ cache — không API, không GPU. Paired permutation 10k.
+**Con số điền bảng team.** ⚠️ 03/09: parse đã sửa — "Baseline Legacy" dùng
+`kdl_pdf_inspector` (pdf-inspector + KDL layout), KHÔNG phải plain-`kdl` mà §21–§24
+đã đo. Teammate's run `32c32a45a92c45bb` (42 docs) đã wire vào; script nhận
+`--parse {pdf-inspector,kdl}`, mặc định pdf-inspector. Mọi arm lệch ~0.5 so với
+plain-kdl, **kết luận không đổi**. Ledger §25. Baseline tái lập 43.45 / 46.36
+(CSV ghi 44.2 / 47.47).
 
-| Giải pháp | NDCG@10 | R@10 | Correct_only | Correct+partial | Δ NDCG | Chi phí |
+| Giải pháp (parse pdf-inspector) | NDCG@10 | R@10 | Correct_only | Correct+partial | Δ NDCG | Chi phí |
 |---|---:|---:|---:|---:|---:|---|
-| Baseline Legacy (tái lập) | 43.86 | 46.73 | 50.17 | 91.03 | — | — |
-| + SEP (λ=0.5) | 46.27 | 48.88 | 51.83 | 89.70 | +2.41 (p=.0004) | miễn phí, +0.3ms/câu |
-| + ColQwen2 fusion (w≈0.6) | 47.47 | 49.77 | *chưa đo* | *chưa đo* | +3.61 (p<.001) | GPU Colab 1 lần |
-| **+ SEP + ColQwen2 (w≈0.7)** | **48.35** | 50.63 | *chưa đo* | *chưa đo* | **+4.49** | như trên |
-| + Nemotron Rerank VL (free, depth-20, text) | 47.74 | 49.68 | *chưa đo* | *chưa đo* | +3.88 (p=.0007) | **miễn phí, không trần**, ~10 phút/302 câu |
-| + **webAI-ColVec1.1-8b** fusion (wv=0.8) | 51.99 | 55.85 | *chưa đo* | *chưa đo* | +8.13 (p<1e-4) | GPU Colab 1 lần (~30m L4) |
-| **+ SEP + ColVec-8b (wv=0.8)** | **52.91** | **56.12** | *chưa đo* | *chưa đo* | **+9.05** | như trên |
-| + SEP+ColVec → LambdaMART rerank (5-fold OOF) | 52.67 | 56.51 | *chưa đo* | *chưa đo* | +8.81 | miễn phí, µs/câu |
-| + Voyage rerank-2.5 (trên KDL) | *đang chạy 03/09* | | | | (trên vidore_page: +5.08 → 49.23) | API ~vài giờ, resumable |
+| Baseline Legacy (tái lập) | 43.45 | 46.36 | *chưa đo lại* | *chưa đo lại* | — | — |
+| + SEP (λ=0.5) | 45.52 | 48.24 | ~51.8 (plain-kdl) | ~89.7 | +2.08 (p=.004) | miễn phí, +0.3ms/câu |
+| + Nemotron Rerank VL (free, depth-20) | 47.42 | 48.95 | *chưa đo* | *chưa đo* | +3.98 (p=.0006) | miễn phí, không trần |
+| + **webAI-ColVec1.1-8b** fusion (wv=0.8) | 51.73 | 56.16 | *chưa đo* | *chưa đo* | +8.28 (p<1e-4) | GPU 1 lần |
+| **+ SEP + ColVec-8b (wv=0.8)** | **53.15** | **55.91** | *chưa đo* | *chưa đo* | **+9.70** | như trên |
+| + SEP+ColVec → LambdaMART/Metarank (5-fold OOF) | 51.14 | 55.15 | — | — | +7.69 | miễn phí, µs/câu |
+| + Voyage rerank-2.5 (trên KDL) | *chưa đo — pool cũ đã hủy 03/09* | | | | (vidore_page: 49.23) | API ~10h |
 
-Light-prep: baseline 43.02 → SEP+ColQwen2 = **48.45** (+5.4). Chi tiết ledger §21–§24.
+Plain-kdl (§21–§24, `--parse kdl`): baseline 43.86, SEP+ColVec **52.91**, LambdaMART 52.67.
 
-**Best hiện tại = SEP + ColVec-8b = 52.91, miễn phí** (index visual 1 lần trên GPU, không API).
-Vượt Voyage (49.23) và SOTA physics công bố (50.84). Ledger §23.
+**Best = SEP + ColVec-8b = 53.15, miễn phí** (index visual 1 lần trên GPU, không API).
+Vượt Voyage (49.23) và SOTA physics công bố (50.84). Ledger §25.
+
+**KHÔNG có DPI gain (§25):** processor ColVec đã downscale mọi trang xuống 1.835 Mpx
+(1792 token) ngay ở 144 DPI — rào ~140 DPI. Đòn bẩy visual duy nhất còn lại là nâng
+`MAX_VISUAL_TOKENS` (3584) — off-distribution, cần thí nghiệm. Notebook Kaggle sẵn.
+
+**ColQwen2 export CŨ vẫn dùng được** (visual arm không phụ thuộc parse; ColQwen2 cũng
+đã saturate). Không cần chạy lại — tiết kiệm GPU quota.
 
 **Reranker + prior = trùng lặp — NHƯNG có điều kiện (§23):** với visual arm yếu (ColQwen2-2B) thì
 một cross-encoder huấn luyện hấp thụ hết SEP + visual. Với visual arm **mạnh hơn reranker**
