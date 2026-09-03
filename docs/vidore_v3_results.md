@@ -1456,3 +1456,27 @@ served reranker (vs the one-time offline stack), `physics_ltr.py` is the model t
 export to it.
 
 Reproduce: `python research/experiments/physics_ltr.py`
+
+### Metarank itself, run for real (2026-09-03)
+
+`physics_ltr.py` is the LambdaMART *core*; to close the hand-wave, also ran the
+actual Metarank 0.8.0 JAR (JDK 21). Converter `scratchpad/to_metarank.py` emits
+the same 17 features as per-item `ranking.<name>` fields on 302 ranking events
+(graded `label` from qrels + `click` interactions on the relevant pages) →
+`metarank standalone` → XGBoost `rank:pairwise` backend, its own random 80/20
+split (242/60 rankings), early-stopped at ~27 trees.
+
+```
+NDCG@10:  source (input order) = 0.501   reranked = 0.591   random = 0.079
+```
+
+That is **Metarank's own NDCG** — linear `label` gain and a 60-query test split —
+so it is *not* on the same scale as the 43.86 / 52.91 pytrec numbers above
+(pytrec uses `2^rel−1` gain over all 302). What transfers is the shape: a solid
+rerank lift over the raw retrieval order, and the feature ranking — `file_agg`
+weight 314, far ahead of everything else, exactly as in the sklearn/lightgbm run.
+Same model, same conclusion: it leans on the SEP file-aggregate and adds nothing
+a hand-tuned blend of these signals doesn't already have. To get a number
+directly comparable to the ladder would need Metarank's per-doc scores exported
+over all 302 and re-scored with pytrec_eval — not done; the LGBMRanker OOF
+(52.67) already answers that question.
