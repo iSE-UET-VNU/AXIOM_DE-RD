@@ -40,13 +40,22 @@ toàn bộ từ cache — không API, không GPU. Paired permutation 10k.
 | + ColQwen2 fusion (w≈0.6) | 47.47 | 49.77 | *chưa đo* | *chưa đo* | +3.61 (p<.001) | GPU Colab 1 lần |
 | **+ SEP + ColQwen2 (w≈0.7)** | **48.35** | 50.63 | *chưa đo* | *chưa đo* | **+4.49** | như trên |
 | + Nemotron Rerank VL (free, depth-20, text) | 47.74 | 49.68 | *chưa đo* | *chưa đo* | +3.88 (p=.0007) | **miễn phí, không trần**, ~10 phút/302 câu |
-| + Voyage rerank-2.5 (trên KDL) | *CHƯA ĐO* | | | | (trên vidore_page: +5.08) | API ~100 phút |
+| + **webAI-ColVec1.1-8b** fusion (wv=0.8) | 51.99 | 55.85 | *chưa đo* | *chưa đo* | +8.13 (p<1e-4) | GPU Colab 1 lần (~30m L4) |
+| **+ SEP + ColVec-8b (wv=0.8)** | **52.91** | **56.12** | *chưa đo* | *chưa đo* | **+9.05** | như trên |
+| + SEP+ColVec → LambdaMART rerank (5-fold OOF) | 52.67 | 56.51 | *chưa đo* | *chưa đo* | +8.81 | miễn phí, µs/câu |
+| + Voyage rerank-2.5 (trên KDL) | *đang chạy 03/09* | | | | (trên vidore_page: +5.08 → 49.23) | API ~vài giờ, resumable |
 
-Light-prep: baseline 43.02 → SEP+ColQwen2 = **48.45** (+5.4). Chi tiết ledger §21–§22.
+Light-prep: baseline 43.02 → SEP+ColQwen2 = **48.45** (+5.4). Chi tiết ledger §21–§24.
 
-**Reranker + prior = trùng lặp (đã xác nhận trên 2 reranker, §20 + §22):** đưa SEP/ColQwen2 vào
-trước hay sau một cross-encoder được huấn luyện đều không giúp (n.s. hoặc âm nhẹ). Kiến trúc:
-**hybrid tốt → 1 cross-encoder mạnh**, không phải chồng lever.
+**Best hiện tại = SEP + ColVec-8b = 52.91, miễn phí** (index visual 1 lần trên GPU, không API).
+Vượt Voyage (49.23) và SOTA physics công bố (50.84). Ledger §23.
+
+**Reranker + prior = trùng lặp — NHƯNG có điều kiện (§23):** với visual arm yếu (ColQwen2-2B) thì
+một cross-encoder huấn luyện hấp thụ hết SEP + visual. Với visual arm **mạnh hơn reranker**
+(ColVec-8b) thì ngược lại — Nemotron 1B *làm hại* (ColVec→Nemotron 51.99→48.30). Quy tắc:
+rerank chỉ giúp khi reranker mạnh hơn retrieval mà nó rerank. LambdaMART/Metarank (§24) chỉ
+rơi đúng vào blend cố định (52.67 OOF) — cùng lớp model với quy tắc cố định của ta, không phải
+cross-encoder ngữ nghĩa.
 
 ### 2b. Đo trên `vidore_page` (text ViDoRe cung cấp, KHÔNG dùng parse của ta) — chỉ để so sánh
 
