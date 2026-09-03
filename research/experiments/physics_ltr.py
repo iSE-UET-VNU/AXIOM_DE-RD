@@ -47,12 +47,13 @@ from src.retrieval.sparse import BM25Index
 SUB, LANG, ALPHA, POOL = "physics", "french", 0.7, 100
 LAM, SEP_W = 0.5, 2
 RESULTS = ROOT / "data/benchmark/vidore_v3/results"
+PARSE_RUNS = {"pdf-inspector": "vidore-v3-physics-kdl-pdf-inspector", "kdl": "vidore-v3-physics-kdl"}
 norm = lambda m: m / np.clip(np.linalg.norm(m, axis=-1, keepdims=True), 1e-12, None)
 
 
-def kdl_pool_scored():
+def kdl_pool_scored(parse: str = "pdf-inspector"):
     """KDL alpha0.7 pool, keeping the bm25 / dense / fused component per candidate."""
-    run = next((ROOT / f"data_vidore_parsed_physics/output/benchmarks/vidore-v3-{SUB}-kdl").iterdir())
+    run = next((ROOT / f"data_vidore_parsed_physics/output/benchmarks/{PARSE_RUNS[parse]}").iterdir())
     pages = {}
     for d in documents(run):
         doc = canonical_doc(d.get("document", {}).get("file_name"))
@@ -62,7 +63,8 @@ def kdl_pool_scored():
     bench = load("vidore_v3", subset=SUB, language=LANG)
     qrels = bench.qrels()
     qs = [q for q in bench.questions() if qrels.get(q.qid)]
-    emb = OpenRouterEmbedder(cache_dir=ROOT / "data/work/vidore_physics_kdl_chunk_emb", batch_size=64)
+    emb = OpenRouterEmbedder(
+        cache_dir=ROOT / f"data/work/vidore_physics_{parse.replace('-', '_')}_chunk_emb", batch_size=64)
     qv = norm(np.asarray(emb.embed([q.query for q in qs]), dtype=np.float32))
 
     recs, owner = [], []
@@ -183,9 +185,10 @@ def main() -> None:
     ap.add_argument("--visual-name", default="colvec")
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--parse", default="pdf-inspector", choices=list(PARSE_RUNS))
     args = ap.parse_args()
 
-    qrels, pool = kdl_pool_scored()
+    qrels, pool = kdl_pool_scored(args.parse)
 
     vdir = ROOT / args.visual_dir
     prefix = f"physics_{args.visual_name}"
@@ -226,8 +229,7 @@ def main() -> None:
 
     n, r = ndcg10(oof, qrels)
     print(f"LambdaMART (5-fold OOF)    {n:6.2f}  {r:.2f}")
-    print(f"  ref: SEP+ColVec fixed     52.91  56.12")
-    print(f"  ref: ColVec only          51.62  55.81\n")
+    print(f"  ref: SEP+ColVec fixed     {'53.15' if args.parse == 'pdf-inspector' else '52.91'}  (physics_kdl_slate)\n")
 
     imp = sorted(zip(FEAT_NAMES, importances / args.folds), key=lambda t: -t[1])
     print("feature importance (mean split gain count):")

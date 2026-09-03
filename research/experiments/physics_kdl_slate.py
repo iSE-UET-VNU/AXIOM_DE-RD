@@ -39,9 +39,16 @@ RESULTS = ROOT / "data/benchmark/vidore_v3/results"
 NEM = RESULTS / "physics_rerank_nemotron_scores.json"
 norm = lambda m: m / np.clip(np.linalg.norm(m, axis=-1, keepdims=True), 1e-12, None)
 
+# "Baseline Legacy" in the results CSV = pdf-inspector + KDL layout. "kdl" is the
+# plain-KDL parse §21-§24 were measured on; kept so those numbers stay reproducible.
+PARSE_RUNS = {
+    "pdf-inspector": "vidore-v3-physics-kdl-pdf-inspector",
+    "kdl": "vidore-v3-physics-kdl",
+}
 
-def kdl_pool():
-    run = next((ROOT / f"data_vidore_parsed_physics/output/benchmarks/vidore-v3-{SUB}-kdl").iterdir())
+
+def kdl_pool(parse: str = "pdf-inspector"):
+    run = next((ROOT / f"data_vidore_parsed_physics/output/benchmarks/{PARSE_RUNS[parse]}").iterdir())
     pages = {}
     for d in documents(run):
         doc = canonical_doc(d.get("document", {}).get("file_name"))
@@ -50,7 +57,7 @@ def kdl_pool():
     bench = load("vidore_v3", subset=SUB, language=LANG)
     qrels = bench.qrels()
     qs = [q for q in bench.questions() if qrels.get(q.qid)]
-    emb = OpenRouterEmbedder(cache_dir=ROOT / "data/work/vidore_physics_kdl_chunk_emb", batch_size=64)
+    emb = OpenRouterEmbedder(cache_dir=ROOT / f"data/work/vidore_physics_{parse.replace('-', '_')}_chunk_emb", batch_size=64)
     qv = norm(np.asarray(emb.embed([q.query for q in qs]), dtype=np.float32))
     recs, owner = [], []
     for u, t in pages.items():
@@ -90,9 +97,11 @@ def main() -> None:
     ap.add_argument("--visual-dir", default="data/work/vidore_physics_colqwen")
     ap.add_argument("--visual-name", default="colqwen", help="label + file prefix: physics_<name>_{scores.npy,keys.json,qids.json}")
     ap.add_argument("--wv", type=float, default=WV, help="visual fusion weight")
+    ap.add_argument("--parse", default="pdf-inspector", choices=list(PARSE_RUNS),
+                    help="parse run: pdf-inspector = 'Baseline Legacy' (default); kdl = the §21-§24 numbers")
     args = ap.parse_args()
 
-    qrels, pool = kdl_pool()
+    qrels, pool = kdl_pool(args.parse)
     ev = pytrec_eval.RelevanceEvaluator(qrels, {"ndcg_cut_10", "recall_10"})
     nem = json.loads(NEM.read_text())
 
@@ -163,7 +172,7 @@ def main() -> None:
         (f"+ Nemotron → SEP+{V}", fuse(sep(rerank(pool)), wv), "Nemotron"),
     ]
 
-    print(f"visual arm: {V}  (fusion weight wv={wv})\n")
+    print(f"parse: {args.parse}   visual arm: {V}  (fusion weight wv={wv})\n")
     print(f"{'arm':32s} {'NDCG@10':>8s} {'R@10':>7s} {'Δ':>7s} {'p':>9s}  vs")
     print(f"{'baseline KDL α=0.7':32s} {nb:8.2f} {rb:7.2f}")
     out = [{"arm": "baseline", "ndcg10": round(nb, 2), "recall10": round(rb, 2)}]
@@ -175,7 +184,7 @@ def main() -> None:
         print(f"{name:32s} {n:8.2f} {r:7.2f} {d:+7.2f} {p:9.4f}  {ref}{flag}")
         out.append({"arm": name, "ndcg10": round(n, 2), "recall10": round(r, 2),
                     "delta": round(d, 3), "p": round(p, 5), "vs": ref})
-    tag = "" if V == "colqwen" else f"_{V}"
+    tag = ("" if V == "colqwen" else f"_{V}") + ("" if args.parse == "pdf-inspector" else f"_{args.parse}")
     (RESULTS / f"physics_kdl_slate{tag}.json").write_text(json.dumps(out, indent=2))
     print(f"\n-> {RESULTS / f'physics_kdl_slate{tag}.json'}")
 

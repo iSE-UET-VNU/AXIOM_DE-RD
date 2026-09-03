@@ -1480,3 +1480,53 @@ a hand-tuned blend of these signals doesn't already have. To get a number
 directly comparable to the ladder would need Metarank's per-doc scores exported
 over all 302 and re-scored with pytrec_eval — not done; the LGBMRanker OOF
 (52.67) already answers that question.
+
+## 25. The parse was wrong — "Baseline Legacy" is pdf-inspector + KDL (2026-09-03)
+
+§21–§24 read page text from the plain-`kdl` parse
+(`data_vidore_parsed_physics/output/benchmarks/vidore-v3-physics-kdl`). The
+results CSV's "Baseline Legacy" is **`kdl_pdf_inspector`** — pdf-inspector region
+detection feeding KDL layout parsing (`configs/pipeline.vidore-v3-physics-kdl-pdf-inspector.yaml`).
+A teammate's run of it (`run_id 32c32a45a92c45bb`, 42 docs) was wired in as the
+default parse; the slate/LTR scripts take `--parse {pdf-inspector,kdl}` and the
+plain-kdl numbers still reproduce exactly.
+
+Joins verified: 1674 page ids (= rendered image count), 42/42 docs, 962/962 gold
+ids present, page numbering aligned. Text delta: mean chars 1378 vs 1331; 29
+pages >2× shorter, 35 >2× longer (local redistribution); **1903 `[Image: ImageNN]`
+placeholder tokens** in the pdf-inspector text vs 0 in plain-kdl — not stripped
+(that would be a new variable).
+
+Slate on the corrected parse (`--parse pdf-inspector`, ColVec-8b, wv=0.8):
+
+| arm | NDCG@10 | R@10 | Δ | vs plain-kdl (§23) |
+|---|---:|---:|---:|---:|
+| baseline α=0.7 | 43.45 | 46.36 | — | 43.86 |
+| + SEP | 45.52 | 48.24 | +2.08 | 46.27 |
+| + ColVec only | 51.55 | 55.82 | +8.10 | 51.62 |
+| + ColVec fusion | 51.73 | 56.16 | +8.28 | 51.99 |
+| **+ SEP + ColVec** | **53.15** | 55.91 | **+9.70** | 52.91 |
+| + Nemotron | 47.42 | 48.95 | +3.98 | 47.74 |
+| + Nemotron → SEP+ColVec | 52.07 | 55.76 | +4.64 vs Nem | 51.95 |
+
+**Every arm within ~0.5 of the plain-kdl number, every conclusion unchanged.**
+The `[Image:]` placeholders don't hurt. Best free result on the correct
+"Baseline Legacy" pool: **SEP + ColVec-8b = 53.15 / 55.91**.
+
+### There is no cheap DPI gain — 144 DPI already saturates the visual budget
+
+ColVec's processor (`processor_config.json`): `patch_size 16`, `merge_size 2` →
+each visual token covers 32×32 = 1024 px; `max_num_visual_tokens 1792` →
+`max_pixels = 1,835,008` (the config states this exactly). A Letter/A4 page hits
+1.835 Mpx at **~140 DPI** — so at the 144 DPI we rendered, the processor is
+*already downscaling every page* to the 1792-token budget. Re-rendering at 200 or
+300 DPI feeds the model a pixel-identical input. The earlier "re-index at higher
+DPI is the cheapest next gain" note (§23) is **withdrawn**.
+
+The real resolution lever is raising `max_num_visual_tokens` itself (e.g. 3584 →
+`max_pixels` 3.67 Mpx, ~220 DPI equivalent) so the model sees finer patches — but
+that is off-distribution (trained at 1792) and ~2× the activation memory, so it
+is an experiment, not a free win. That is the one visual re-run worth GPU:
+`webAI_ColVec_visual_arm_physics_kaggle.ipynb`, `MAX_VISUAL_TOKENS` knob.
+
+Reproduce: `python research/experiments/physics_kdl_slate.py --parse pdf-inspector --visual-dir data/work/vidore_physics_colvec --visual-name colvec --wv 0.8`
