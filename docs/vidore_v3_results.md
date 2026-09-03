@@ -1422,3 +1422,37 @@ not see.
 
 Reproduce: run `webAI_ColVec_visual_arm_physics.ipynb` on GPU →
 `python research/experiments/physics_kdl_slate.py --visual-dir data/work/vidore_physics_colvec --visual-name colvec --wv 0.8`
+
+## 24. LambdaMART / Metarank on the SEP+ColVec pool — lands on the fixed blend (2026-09-03)
+
+P4b. Metarank (github.com/metarank/metarank) is a LightGBM LambdaMART ranker plus
+a feature store and an HTTP serving layer — not a semantic cross-encoder, and
+~µs/candidate to run. With no click stream the benchmark reduction is the model
+itself: `lgb.LGBMRanker(objective="lambdarank")` on 17 per-(query, page) features
+of the KDL pool (component scores fused/bm25/dense, SEP score + its file-aggregate
+and neighbour terms, ColVec MaxSim, the fixed SEP+ColVec stack score, ranks, page
+number, same-file count, query length). 5-fold `GroupKFold` by query; only
+held-out folds scored. `research/experiments/physics_ltr.py`.
+
+| model | NDCG@10 | R@10 |
+|---|---:|---:|
+| baseline fused α=0.7 | 43.86 | 46.73 |
+| SEP + ColVec, fixed wv=0.8 | 52.91 | 56.12 |
+| **LambdaMART, 5-fold OOF** | **52.67** | **56.51** |
+| — without the stack feature | 52.12 | 55.20 |
+
+**The learned ranker reproduces the hand-tuned blend and no more** — 52.67 vs
+52.91 is within query-level noise (n=302), recall a touch higher. Top feature by
+gain is `file_agg` (the SEP file-aggregate); the model is relearning "SEP prior +
+ColVec" rather than finding a per-query policy. This is the third independent
+confirmation of ledger §12: the +8.60 oracle-α headroom has no predictor in
+score/structure features. A LambdaMART trained on clicks might differ, but we
+have no click data and the benchmark has none.
+
+**So Metarank is not a lever here.** Its model class = our fixed rule; it would
+serve the same 52.9 over HTTP with lower latency than a cross-encoder, which
+matters for production but not for the score. If the pipeline ever needs a fast
+served reranker (vs the one-time offline stack), `physics_ltr.py` is the model to
+export to it.
+
+Reproduce: `python research/experiments/physics_ltr.py`
