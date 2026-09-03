@@ -1,0 +1,518 @@
+<title>ViDoRe Physics Retrieval</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #f5f6f8;
+    --surface: #ffffff;
+    --surface-2: #eceff3;
+    --ink: #1b2431;
+    --ink-2: #55606f;
+    --ink-3: #868f9d;
+    --rule: #dde1e7;
+    --accent: #15697b;
+    --accent-ink: #0e4b58;
+    --accent-soft: #e0edef;
+    --pos: #2f7d4f;
+    --neg: #b0442c;
+    --warn: #8a6a1c;
+    --shadow: 20px 30px 60px -32px rgba(20, 34, 48, .22);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0f131a;
+      --surface: #171c25;
+      --surface-2: #1f2530;
+      --ink: #e3e7ee;
+      --ink-2: #a0abb9;
+      --ink-3: #6a7482;
+      --rule: #2a313d;
+      --accent: #46b7cd;
+      --accent-ink: #7fd0e0;
+      --accent-soft: #123138;
+      --pos: #61b081;
+      --neg: #db765d;
+      --warn: #c6a352;
+      --shadow: 20px 30px 60px -30px rgba(0, 0, 0, .5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0f131a;
+    --surface: #171c25;
+    --surface-2: #1f2530;
+    --ink: #e3e7ee;
+    --ink-2: #a0abb9;
+    --ink-3: #6a7482;
+    --rule: #2a313d;
+    --accent: #46b7cd;
+    --accent-ink: #7fd0e0;
+    --accent-soft: #123138;
+    --pos: #61b081;
+    --neg: #db765d;
+    --warn: #c6a352;
+    --shadow: 20px 30px 60px -30px rgba(0, 0, 0, .5);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-size: 17px;
+    line-height: 1.66;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+  .wide { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3, .eyebrow, th, .chip, .kicker, nav, .tag { font-family: "IBM Plex Sans", system-ui, sans-serif; }
+  code, kbd, .mono, .num, pre { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+  h1 {
+    font-size: 2.05rem; line-height: 1.15; font-weight: 600; letter-spacing: -.015em;
+    margin: 0 0 .5rem; text-wrap: balance;
+  }
+  h2 {
+    font-size: 1.4rem; font-weight: 600; letter-spacing: -.01em; line-height: 1.25;
+    margin: 0 0 .9rem; text-wrap: balance;
+  }
+  h3 {
+    font-size: 1.06rem; font-weight: 600; font-family: "IBM Plex Sans", sans-serif;
+    margin: 1.8rem 0 .4rem;
+  }
+  p { margin: 0 0 1.1rem; }
+  a { color: var(--accent-ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  strong { font-weight: 600; }
+  em { color: var(--ink-2); }
+
+  .eyebrow {
+    font-size: .72rem; font-weight: 500; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--accent-ink); margin: 0 0 .35rem;
+  }
+
+  header.masthead {
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .masthead .wrap { padding-top: 56px; padding-bottom: 40px; }
+  .kicker {
+    font-size: .74rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 500;
+    color: var(--ink-3); display: flex; gap: .6rem; align-items: center; margin-bottom: 20px;
+  }
+  .kicker .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .standfirst { font-size: 1.12rem; color: var(--ink-2); margin: .2rem 0 0; }
+
+  section { padding: 46px 0; border-bottom: 1px solid var(--rule); }
+  section:last-of-type { border-bottom: 0; }
+
+  /* pipeline spine */
+  .spine { list-style: none; margin: 1.5rem 0 0; padding: 0; }
+  .stage { display: grid; grid-template-columns: 40px 1fr; gap: 18px; padding-bottom: 26px; position: relative; }
+  .stage:not(:last-child)::before {
+    content: ""; position: absolute; left: 19px; top: 34px; bottom: 0; width: 2px; background: var(--rule);
+  }
+  .stage .n {
+    width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--surface); border: 2px solid var(--accent); color: var(--accent-ink);
+    font-family: "IBM Plex Mono", monospace; font-size: .95rem; font-weight: 500; z-index: 1;
+  }
+  .stage h3 { margin: 6px 0 .3rem; }
+  .stage p { margin: 0 0 .5rem; font-size: .97rem; }
+  .trace {
+    font-family: "IBM Plex Mono", monospace; font-size: .82rem; line-height: 1.55;
+    background: var(--surface-2); border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0;
+    padding: 10px 14px; color: var(--ink-2); margin-top: 8px;
+  }
+  .trace b { color: var(--ink); font-weight: 500; }
+
+  .callout {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 20px 22px; margin: 1.4rem 0; box-shadow: var(--shadow);
+  }
+  .callout .eyebrow { margin-bottom: .5rem; }
+  .callout.query p { margin: 0; font-style: italic; font-size: 1.04rem; }
+  .callout.query .fr { color: var(--ink); }
+  .callout.query .en { color: var(--ink-3); font-size: .88rem; font-style: normal; display: block; margin-top: 6px; font-family: "IBM Plex Sans", sans-serif; }
+
+  /* arms table */
+  .tablecard { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; font-weight: 600;
+    color: var(--ink-3); background: var(--surface-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: "IBM Plex Mono", monospace; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td .arm-name { font-family: "IBM Plex Sans", sans-serif; font-weight: 500; font-size: .95rem; display: block; }
+  td .arm-sub { color: var(--ink-3); font-size: .82rem; font-family: "IBM Plex Sans", sans-serif; }
+  tr.best td { background: var(--accent-soft); }
+  tr.best .arm-name { color: var(--accent-ink); }
+
+  .chip {
+    display: inline-block; font-size: .68rem; font-weight: 600; letter-spacing: .04em;
+    padding: 3px 8px; border-radius: 999px; text-transform: uppercase; white-space: nowrap;
+  }
+  .chip.pos { background: color-mix(in srgb, var(--pos) 15%, transparent); color: var(--pos); }
+  .chip.neg { background: color-mix(in srgb, var(--neg) 15%, transparent); color: var(--neg); }
+  .chip.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+  .chip.mute { background: var(--surface-2); color: var(--ink-3); }
+
+  /* two-pipeline diagram */
+  .rails { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 1.5rem 0; }
+  .rail { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; }
+  .rail h4 { font-family: "IBM Plex Sans", sans-serif; font-size: .95rem; margin: 0 0 .3rem; }
+  .rail .sub { font-size: .8rem; color: var(--ink-3); font-family: "IBM Plex Sans", sans-serif; margin-bottom: 12px; }
+  .rail ol { margin: 0; padding: 0; list-style: none; font-family: "IBM Plex Mono", monospace; font-size: .8rem; }
+  .rail li { padding: 5px 0; color: var(--ink-2); border-top: 1px solid var(--rule); }
+  .rail li:first-child { border-top: 0; }
+  .rail li.hot { color: var(--accent-ink); font-weight: 500; }
+  .rail li.hot::before { content: "▸ "; }
+  .join {
+    text-align: center; font-family: "IBM Plex Mono", monospace; font-size: .82rem;
+    background: var(--accent-soft); color: var(--accent-ink); border-radius: 8px; padding: 12px; margin-top: 4px;
+  }
+
+  ul.notes { padding-left: 1.1rem; margin: 0 0 1.1rem; }
+  ul.notes li { margin-bottom: .5rem; }
+  ul.notes li::marker { color: var(--accent); }
+
+  .verdict {
+    background: var(--surface); border: 1px solid var(--accent); border-radius: 12px;
+    padding: 26px 26px 8px; box-shadow: var(--shadow); margin-top: 1.5rem;
+  }
+  .verdict .eyebrow { color: var(--accent-ink); }
+  .verdict h2 { margin-bottom: .6rem; }
+  .decision-list { display: grid; gap: 14px; margin: 1.2rem 0 1.4rem; }
+  .decision {
+    display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;
+    padding: 14px; border: 1px solid var(--rule); border-radius: 9px; background: var(--ground);
+  }
+  .decision .rank {
+    font-family: "IBM Plex Mono", monospace; font-size: .7rem; font-weight: 500; letter-spacing: .06em;
+    text-transform: uppercase; padding: 4px 9px; border-radius: 6px; white-space: nowrap; height: fit-content;
+  }
+  .decision.do .rank { background: color-mix(in srgb, var(--pos) 16%, transparent); color: var(--pos); }
+  .decision.maybe .rank { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .decision.dont .rank { background: color-mix(in srgb, var(--neg) 15%, transparent); color: var(--neg); }
+  .decision h4 { font-family: "IBM Plex Sans", sans-serif; font-size: .96rem; margin: 1px 0 .3rem; }
+  .decision p { font-size: .9rem; margin: 0; color: var(--ink-2); }
+
+  .statline { display: flex; flex-wrap: wrap; gap: 10px; margin: 1.3rem 0 .3rem; }
+  .stat { background: var(--surface); border: 1px solid var(--rule); border-radius: 9px; padding: 12px 16px; flex: 1 1 130px; }
+  .stat .v { font-family: "IBM Plex Mono", monospace; font-size: 1.35rem; font-weight: 500; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: .74rem; font-family: "IBM Plex Sans", sans-serif; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+
+  footer { padding: 34px 0 60px; color: var(--ink-3); font-size: .82rem; font-family: "IBM Plex Sans", sans-serif; }
+
+  @media (max-width: 620px) {
+    body { font-size: 16px; }
+    h1 { font-size: 1.7rem; }
+    .rails { grid-template-columns: 1fr; }
+    .decision { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="kicker"><span class="dot"></span> iSE · Data Engineering R&amp;D &nbsp;/&nbsp; ViDoRe V3 · Physics · French</div>
+    <h1>How the retrieval works, every arm we tried, and what to do next</h1>
+    <p class="standfirst">302 physics questions, 1,674 candidate pages, 42 French documents. One query goes in; the pages that answer it should come out on top. The scoreboard is NDCG@10.</p>
+    <div class="statline">
+      <div class="stat"><div class="v">43.45</div><div class="l">text baseline · NDCG@10</div></div>
+      <div class="stat"><div class="v">53.15</div><div class="l">best pipeline · SEP + ColVec · @10</div></div>
+      <div class="stat"><div class="v">47.84</div><div class="l">ColVec alone · NDCG@5 · vs leaderboard 48.5</div></div>
+      <div class="stat"><div class="v">~60</div><div class="l">team target · above ViDoRe V3 SOTA</div></div>
+    </div>
+    <p style="font-size:.82rem;color:var(--ink-3);font-family:'IBM Plex Sans',sans-serif;margin-top:14px;">The internal ladder is quoted at NDCG@10; the ViDoRe V3 leaderboard uses NDCG@5. At the leaderboard's own metric our ColVec matches it (§ &ldquo;Does this match the leaderboard&rdquo; below).</p>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The measuring stick</p>
+    <h2>What a run actually produces</h2>
+    <p>Every method here does one thing: take a question, score all 1,674 pages, sort them. <strong>NDCG@10</strong> grades the top ten &mdash; a gold page at rank 2 is worth much more than the same page at rank 9, and anything past rank 10 scores zero. Recall@10 is the blunter companion: did any gold page make the top ten at all.</p>
+    <p>We measure on <strong>French only</strong>, the hardest slice of the hardest domain in ViDoRe V3. One caveat that runs through everything below: the internal ladder is quoted at <strong>NDCG@10</strong>, but the public ViDoRe V3 leaderboard uses <strong>NDCG@5</strong>, averaged over six languages. The internal deltas are all valid against each other; only the comparison to a leaderboard cell needs the metric aligned &mdash; done in the last section.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The pipeline · step by step</p>
+    <h2>Baseline Legacy, walked through one query</h2>
+    <p>&ldquo;Baseline Legacy&rdquo; is the text pipeline the results table is built on: <span class="mono">pdf-inspector + KDL parse &rarr; fixed 512/128 chunks &rarr; text-embedding-3-small &rarr; hybrid BM25 + dense &rarr; MaxP &rarr; &alpha;-fuse</span>. Here it is on a real question, with a real failure.</p>
+
+    <div class="callout query">
+      <p class="eyebrow">Query · physics::12</p>
+      <p class="fr">&laquo;&nbsp;Quelle gamme d'&eacute;nergie en &eacute;lectronvolts correspond aux transitions mol&eacute;culaires dans le spectre &eacute;lectromagn&eacute;tique&nbsp;?&nbsp;&raquo;</p>
+      <span class="en">Which electronvolt energy range corresponds to molecular transitions in the electromagnetic spectrum? &mdash; gold answer: pages 24 and 32 of <span class="mono">Les_2_infinis_Ch-2b-Quantique-Etats-Lies-Lasers</span></span>
+    </div>
+
+    <ol class="spine">
+      <li class="stage">
+        <div class="n">1</div>
+        <div>
+          <h3>Parse</h3>
+          <p>pdf-inspector finds the regions on each page; KDL reads the layout inside them. Output: clean text per page for all 1,674 pages. <em>This is the stage that was just corrected &mdash; we had been on a plain-KDL parse; the CSV means pdf-inspector + KDL.</em></p>
+        </div>
+      </li>
+      <li class="stage">
+        <div class="n">2</div>
+        <div>
+          <h3>Chunk</h3>
+          <p>Each page's text is cut into overlapping windows of 512 words, 128-word overlap. A page becomes one or more chunks; a chunk always knows which page it came from.</p>
+        </div>
+      </li>
+      <li class="stage">
+        <div class="n">3</div>
+        <div>
+          <h3>Embed &amp; index</h3>
+          <p>Every chunk is embedded with <span class="mono">text-embedding-3-small</span> (one 1,536-d vector) and also added to a BM25 keyword index. The query gets the same treatment.</p>
+        </div>
+      </li>
+      <li class="stage">
+        <div class="n">4</div>
+        <div>
+          <h3>Search &mdash; two rankings</h3>
+          <p>BM25 returns chunks by keyword overlap; the dense index returns chunks by vector similarity. Two separate ranked lists of chunks.</p>
+          <div class="trace">BM25 top hit: a chunk from <b>Les_ondes_Ch-3</b> (&ldquo;spectre &eacute;lectromagn&eacute;tique&rdquo; matches literally)<br>dense top hit: a chunk from <b>Les_ondes_Ch-3</b> too &mdash; both leaning toward the wrong book</div>
+        </div>
+      </li>
+      <li class="stage">
+        <div class="n">5</div>
+        <div>
+          <h3>MaxP &mdash; chunks become pages</h3>
+          <p>Each page takes the score of its single best chunk. Now both lists are rankings of <em>pages</em>, not chunks.</p>
+        </div>
+      </li>
+      <li class="stage">
+        <div class="n">6</div>
+        <div>
+          <h3>&alpha;-fuse &rarr; the pool</h3>
+          <p>Normalise both lists, then blend: <span class="mono">0.3&nbsp;&times;&nbsp;BM25 + 0.7&nbsp;&times;&nbsp;dense</span>. Keep the top ~100. That's the pool every downstream arm re-orders.</p>
+          <div class="trace">Pool for physics::12 &mdash; gold page 24 lands at <b>rank 9</b>, gold page 32 at <b>rank 68</b>.<br>Ranks 1&ndash;5 are all <b>Les_ondes_Ch-3</b> and <b>L_energie_Ch-1</b> &mdash; wrong books, sitting above the gold.</div>
+        </div>
+      </li>
+    </ol>
+
+    <h3>The failure signature</h3>
+    <p>The pool almost always <em>contains</em> the gold page &mdash; recall into the top 100 is ~98%. The problem is the ordering inside it. In roughly <strong>69% of the misses the right document is already in the top 10, but the wrong pages of it rank first</strong>, and a handful of pages from neighbouring chapters slip above the gold. physics::12 is exactly this: the right book is represented (page 24 at rank 9), but its two gold pages aren't ranked together and four wrong-book pages sit on top. Every arm below is an attempt to fix that one thing.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wide">
+    <p class="eyebrow">The arms · everything tried</p>
+    <h2>Nine ways to re-order the pool</h2>
+    <p class="wrap" style="padding-left:0;padding-right:0;">All measured on the corrected pdf-inspector pool (baseline 43.45), 302 queries, paired significance tests. &ldquo;Free&rdquo; means no API and no per-query GPU &mdash; at most one offline pass to build an index.</p>
+    <div class="tablecard scroll">
+      <table>
+        <thead>
+          <tr><th>Arm</th><th>What it does</th><th>NDCG@10</th><th>&Delta;</th><th>Verdict</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="arm-name">Text baseline</span><span class="arm-sub">pdf-inspector + KDL, &alpha;=0.7</span></td>
+            <td>The pipeline above. Hybrid keyword + vector, MaxP to page.</td>
+            <td class="num">43.45</td>
+            <td class="num">&mdash;</td>
+            <td><span class="chip mute">baseline</span></td>
+          </tr>
+          <tr>
+            <td><span class="arm-name">+ SEP</span><span class="arm-sub">structural evidence propagation</span></td>
+            <td>Free post-hoc nudge: if several pages of one book score well, lift that book's other pages and each page's immediate neighbours. No model, +0.3&nbsp;ms/query.</td>
+            <td class="num">45.52</td>
+            <td class="num" style="color:var(--pos)">+2.1</td>
+            <td><span class="chip pos">helps · free</span></td>
+          </tr>
+          <tr>
+            <td><span class="arm-name">CLIP ViT-B/32</span><span class="arm-sub">visual · natural-image encoder</span></td>
+            <td>Match the question against a 224px picture of each page.</td>
+            <td class="num">4.45</td>
+            <td class="num" style="color:var(--neg)">&minus;39</td>
+            <td><span class="chip neg">refuted</span></td>
+          </tr>
+          <tr>
+            <td><span class="arm-name">ColQwen2-2B</span><span class="arm-sub">visual · small document-VLM</span></td>
+            <td>Late-interaction MaxSim on rendered page images. A real doc model, but only 2B.</td>
+            <td class="num">45.70</td>
+            <td class="num">n.s.</td>
+            <td><span class="chip warn">superseded</span></td>
+          </tr>
+          <tr class="best">
+            <td><span class="arm-name">SEP + ColVec-8b</span><span class="arm-sub">visual · #1 leaderboard doc-VLM, fused</span></td>
+            <td>Same MaxSim family as ColQwen2 but an 8B SOTA model, fused with the text pool at weight 0.8, then SEP on top. ColVec alone already scores 51.6.</td>
+            <td class="num">53.15</td>
+            <td class="num" style="color:var(--pos)">+9.7</td>
+            <td><span class="chip pos">best now · free</span></td>
+          </tr>
+          <tr>
+            <td><span class="arm-name">Nemotron Rerank VL 1B</span><span class="arm-sub">free cross-encoder</span></td>
+            <td>Reads query + page text <em>together</em> and re-scores the top 20. Free via OpenRouter, no rate cap.</td>
+            <td class="num">47.42</td>
+            <td class="num" style="color:var(--pos)">+4.0</td>
+            <td><span class="chip warn">helps alone · hurts on ColVec</span></td>
+          </tr>
+          <tr>
+            <td><span class="arm-name">Voyage rerank-2.5</span><span class="arm-sub">paid cross-encoder</span></td>
+            <td>Same idea, stronger proprietary model, depth 20.</td>
+            <td class="num">49.23<span style="color:var(--ink-3)">*</span></td>
+            <td class="num" style="color:var(--pos)">+5.1*</td>
+            <td><span class="chip mute">*other pool</span></td>
+          </tr>
+          <tr>
+            <td><span class="arm-name">LambdaMART / Metarank</span><span class="arm-sub">learned fusion</span></td>
+            <td>Train a gradient-boosted ranker on 17 features of the pool to learn the best recipe for combining every signal &mdash; ideally a different recipe per query.</td>
+            <td class="num">51.14</td>
+            <td class="num" style="color:var(--pos)">+7.7</td>
+            <td><span class="chip warn">lands on the fixed blend</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="wrap" style="padding-left:0;padding-right:0;font-size:.9rem;color:var(--ink-2);margin-top:1rem;">
+      <span style="color:var(--ink-3)">*</span> Voyage was measured on the earlier <span class="mono">vidore_page</span> pool, not re-run on this one &mdash; and since a cross-encoder <em>hurts</em> on top of ColVec (Nemotron drops ColVec 52&nbsp;&rarr;&nbsp;48), it is not worth the ~10&nbsp;h of API to find out.
+    </p>
+
+    <div class="wrap" style="padding-left:0;padding-right:0;">
+      <h3>Read across the table and one pattern holds</h3>
+      <p>Every arm fixes the <em>same</em> failure &mdash; right book, wrong page. So they don't add up. Whichever single strong lever you apply, the others have little left to correct. The big jump was never a clever combination; it was making one component genuinely better: <strong>ColQwen2-2B &rarr; ColVec-8B, +5.9 from the model alone.</strong> The visual reader was the bottleneck the whole time.</p>
+      <p>The one lever on a different axis entirely: swapping the <strong>answer generator</strong> (DeepSeek-V4-Flash &rarr; GPT-5.2) moved end-to-end answer accuracy <strong>+27.7 points</strong> &mdash; about 20&times; the entire retrieval ladder. Retrieval and generation are separate dials; almost all the headroom is on the other one.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">A common question</p>
+    <h2>Why the parser fix needed no GPU re-run</h2>
+    <p>The pipeline is two independent halves that meet only at the end, joined by page number. The parser lives in <em>one</em> of them.</p>
+  </div>
+  <div class="wide">
+    <div class="rails">
+      <div class="rail">
+        <h4>Text arm</h4>
+        <div class="sub">the parser feeds this</div>
+        <ol>
+          <li class="hot">PDF &rarr; parse (pdf-inspector + KDL)</li>
+          <li>page text &rarr; chunk</li>
+          <li>embed + BM25 index</li>
+          <li>search &rarr; MaxP &rarr; &alpha;-fuse</li>
+          <li>pool: {page &rarr; text score}</li>
+        </ol>
+      </div>
+      <div class="rail">
+        <h4>Visual arm</h4>
+        <div class="sub">the parser never touches this</div>
+        <ol>
+          <li class="hot">PDF &rarr; render page to a PNG</li>
+          <li>image &rarr; ColVec model</li>
+          <li>page multi-vector</li>
+          <li>MaxSim vs query</li>
+          <li>{page &rarr; visual score}</li>
+        </ol>
+      </div>
+    </div>
+    <div class="wrap" style="padding-left:0;padding-right:0;">
+      <div class="join">0.2 &times; text score[page] &nbsp;+&nbsp; 0.8 &times; visual score[page] &nbsp;&rarr;&nbsp; final rank</div>
+    </div>
+  </div>
+  <div class="wrap">
+    <p style="margin-top:1.4rem;">Rendering a page to an image rasterises the PDF's actual content &mdash; it doesn't read what the parser extracted. So the ColVec score for a page is identical no matter how (or whether) we parsed. When the parse was corrected, what re-ran was the text arm (local, ~3&nbsp;min, cached embeddings) and the fusion arithmetic (instant). <strong>The 302&times;1,674 ColVec score matrix from the Colab run is still exactly valid</strong> &mdash; the 53.15 number <em>is</em> that re-run: the new text pool fused with the untouched visual matrix.</p>
+    <p>The only reason to touch a GPU again is a genuinely new visual experiment (below), or to regenerate the matrix from scratch if it's ever lost &mdash; which is why the notebook was ported to Kaggle, not because anything broke.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The last experiment</p>
+    <h2>Metarank &mdash; what it is and why it didn't help</h2>
+    <p>Metarank is an open-source ranking service. Its model is <strong>LambdaMART</strong> &mdash; a gradient-boosted tree ranker &mdash; plus a feature store and an HTTP server. It is <em>not</em> a cross-encoder: it never reads query and page text together. It re-orders using numeric features you give it, and normally learns from a click stream.</p>
+    <h3>What we did</h3>
+    <p>We have no clicks, so we used the benchmark's own relevance labels. Each query became one &ldquo;ranking event&rdquo; carrying its ~100 pool pages, each page tagged with 17 features (the component scores, the SEP signals, the ColVec score, ranks, page number, same-book count, query length) and its gold grade. We ran the real Metarank 0.8 JAR &mdash; <span class="mono">metarank standalone</span> &rarr; XGBoost backend, its own 80/20 split &mdash; and, in parallel, the same LambdaMART core directly with proper 5-fold cross-validation.</p>
+    <h3>The result</h3>
+    <div class="statline">
+      <div class="stat"><div class="v">51.14</div><div class="l">LambdaMART · 5-fold held-out</div></div>
+      <div class="stat"><div class="v">53.15</div><div class="l">the hand-tuned SEP + ColVec blend</div></div>
+      <div class="stat"><div class="v">+8.60</div><div class="l">oracle per-query headroom · still locked</div></div>
+    </div>
+    <p>The learned ranker <strong>reproduces the hand-tuned blend and no more</strong> &mdash; 51.1 is within noise of the fixed 53.2, slightly under. Its single most-used feature, by a wide margin, is the SEP book-level score. It re-derived &ldquo;trust SEP + trust ColVec&rdquo; &mdash; the rule we already wrote by hand. It did <em>not</em> find a per-query strategy (&ldquo;for this kind of question trust the text, for that kind trust the picture&rdquo;).</p>
+    <p>That matters because we know an oracle picking the perfect text-vs-visual weight <em>per query</em> would gain <strong>+8.6</strong> &mdash; the largest unexploited number in the whole project. Three separate attempts have now confirmed there is no signal in the features that predicts, per query, how to combine the arms. Closing that gap needs something we don't have: real user click data, or a much stronger judge model. Metarank's value here is serving latency (microseconds per query), not the score.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Sanity check</p>
+    <h2>Does this match the leaderboard?</h2>
+    <p>A fair question &mdash; the ViDoRe V3 leaderboard shows webAI-ColVec at <strong>0.4851</strong> on physics, <em>below</em> our 53.15. Three things differ, and aligning them makes the numbers agree.</p>
+  </div>
+  <div class="wide">
+    <div class="tablecard scroll">
+      <table>
+        <thead><tr><th>our measurement · physics · French</th><th>NDCG@5</th><th>NDCG@10</th></tr></thead>
+        <tbody>
+          <tr><td>text baseline, KDL pool</td><td class="num">40.51</td><td class="num">43.45</td></tr>
+          <tr class="best"><td><span class="arm-name">ColVec visual-only, full 1,674-page corpus</span></td><td class="num">47.84</td><td class="num">51.63</td></tr>
+          <tr><td>ColVec visual-only, pool-restricted (~100/q)</td><td class="num">48.17</td><td class="num">51.55</td></tr>
+          <tr><td>SEP + ColVec fused, pool</td><td class="num">49.76</td><td class="num">53.15</td></tr>
+          <tr><td>leaderboard · webAI-ColVec1.1-9b · Physics <span class="arm-sub">(NDCG@5, 6-lang avg)</span></td><td class="num">48.51</td><td class="num">&mdash;</td></tr>
+          <tr><td>leaderboard · nemotron-colembed-vl-8b-v2 · Physics</td><td class="num">50.84</td><td class="num">&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="wrap">
+    <ul class="notes" style="margin-top:1.3rem;">
+      <li><strong>Metric.</strong> ViDoRe V3's primary score is <span class="mono">NDCG@5</span>, not @10. Our whole ladder was quoted at @10 &mdash; self-consistent, but one cutoff higher than the leaderboard.</li>
+      <li><strong>Language.</strong> The leaderboard column is a 6-language average; we run French only, which is consistently the harder half (FinanceFr 0.54 vs FinanceEn 0.68).</li>
+      <li><strong>System.</strong> Our 53.15 is a <em>pipeline</em> number &mdash; text pool + SEP + visual fusion &mdash; not a standalone model.</li>
+    </ul>
+    <p>Align them: our <strong>ColVec visual-only at NDCG@5 = 47.84</strong> (French), against the leaderboard's <strong>48.51</strong> (6-language). Gap 0.7, all of it language. Same 1,674-page corpus, same gold labels (962/962 present), same scoring library MTEB uses. <strong>The eval reproduces the leaderboard.</strong> The pool-restriction worry also dissolves &mdash; 48.17 vs 47.84 is nothing.</p>
+    <p>What it means: <strong>we are at leaderboard level, not past it.</strong> The &ldquo;past SOTA&rdquo; framing came from comparing our @10 to a @5 board. ViDoRe V3 overall SOTA is ~57&ndash;59 NDCG@5; physics is the floor at ~48&ndash;51; &ldquo;~60&rdquo; on physics-French is well beyond anything reported.</p>
+  </div>
+</section>
+
+<section style="border-bottom:0;">
+  <div class="wrap">
+    <div class="verdict">
+      <p class="eyebrow">The call</p>
+      <h2>Freeze retrieval. Move to the answer axis.</h2>
+      <p>SEP + ColVec-8B sits <strong>at leaderboard level</strong> for this domain (NDCG@5 47.8 standalone, 49.8 as a pipeline), and every retrieval lever now fixes the same 69% failure &mdash; they've stopped stacking, proven on SEP, ColQwen2, two cross-encoders, and a learned combiner. The one lever left (more visual tokens) is a maybe. Meanwhile the generator swap moved end-to-end answer accuracy <strong>+27.7 points</strong>, and that number is <em>unmeasured</em> on the current retrieval stack. The ceiling is not where we've been digging.</p>
+
+      <div class="decision-list">
+        <div class="decision do">
+          <span class="rank">Do next</span>
+          <div>
+            <h4>Measure end-to-end QA on SEP + ColVec top-10</h4>
+            <p>Run Correct_only / Correct+partial with a strong generator on the current stack. This is the number the pipeline actually delivers to a user, and we've never measured it on anything better than the raw baseline.</p>
+          </div>
+        </div>
+        <div class="decision maybe">
+          <span class="rank">Parallel · cheap</span>
+          <div>
+            <h4>ColVec at max_visual_tokens = 3584</h4>
+            <p>The one retrieval lever left. At 144 DPI the model already downscales every page to its 1,792-token budget, so more DPI does nothing &mdash; but doubling the token budget gives it finer patches to read equations with. One overnight Kaggle run; notebook is ready. Only pursue if it beats 53.15 by more than ~0.7.</p>
+          </div>
+        </div>
+        <div class="decision dont">
+          <span class="rank">Don't</span>
+          <div>
+            <h4>Voyage-on-KDL · more fusion permutations · tuning LambdaMART</h4>
+            <p>A cross-encoder on top of ColVec <em>hurts</em>. Stacking is redundant &mdash; shown three times. LambdaMART lands on the blend. All three spend effort where the evidence says there's nothing left.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="wrap">
+    <footer>
+      Sources: <span class="mono">docs/vidore_v3_results.md</span> §21&ndash;§25 &nbsp;·&nbsp; <span class="mono">physics_kdl_slate.py</span>, <span class="mono">physics_ltr.py</span>, <span class="mono">to_metarank.py</span> &nbsp;·&nbsp; all numbers on ViDoRe V3 physics, French, 302 queries, corrected pdf-inspector parse.
+    </footer>
+  </div>
+</section>

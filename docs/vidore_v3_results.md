@@ -1380,13 +1380,16 @@ is the largest single-component gain in the whole ladder and it says the ceiling
 we kept hitting (§7 "right file, wrong page") was a *capacity* limit of the 2B
 visual encoder, not a structural property of the task.
 
-### 52.91 is past the free stack, past Voyage, past published physics SOTA
+### 52.91 is our best internal number — NOT comparable to the leaderboard (see §26)
 
-SEP+ColVec = 52.91, **free** (one-time GPU index, no API). Prior best free stack
-was SEP+ColQwen2 = 48.35 (§21); Voyage rerank = 49.23 (§20, different pool);
-best published physics number = 50.84 (nemotron-colembed-vl-8b-v2, 6-lang avg).
-The "~60" target is still ~7 away but this is the first result above world SOTA
-on the physics slice.
+SEP+ColVec = 52.91 **NDCG@10**, **free** (one-time GPU index, no API). Prior best
+free stack was SEP+ColQwen2 = 48.35 (§21); Voyage rerank = 49.23 (§20, different
+pool). ⚠️ The leaderboard's physics number (webAI-ColVec ≈ 48.5,
+nemotron-colembed 50.84) is **NDCG@5, ~6-language average, full corpus** — a
+different metric on different data. Our ColVec full-corpus visual-only at the
+leaderboard's own metric is **NDCG@5 = 47.84** (French), which lines up with the
+48.51 leaderboard entry once you correct for language. We are *at* leaderboard
+level, not past it. §26.
 
 ### The redundancy pattern from §20/§22 **inverts**
 
@@ -1530,3 +1533,61 @@ is an experiment, not a free win. That is the one visual re-run worth GPU:
 `webAI_ColVec_visual_arm_physics_kaggle.ipynb`, `MAX_VISUAL_TOKENS` knob.
 
 Reproduce: `python research/experiments/physics_kdl_slate.py --parse pdf-inspector --visual-dir data/work/vidore_physics_colvec --visual-name colvec --wv 0.8`
+
+## 26. Metric reconciliation — our numbers vs the ViDoRe V3 leaderboard (2026-09-03)
+
+Prompted by a leaderboard screenshot: `webAI-ColVec1.1-9b` scores **0.4851** on
+Physics, `nemotron-colembed-vl-8b-v2` **0.5084** — both *below* our SEP+ColVec
+52.91 / 53.15. Investigated whether our eval is sound.
+
+### It is. Three axes differ; align them and the numbers match.
+
+| axis | ViDoRe V3 leaderboard | our internal ladder (§1–§25) |
+|---|---|---|
+| **metric** | **NDCG@5** | NDCG@10 |
+| **languages** | ~6-language average per domain | **French only** |
+| **corpus** | full domain corpus | full corpus *or* the KDL α=0.7 text pool (~100/q) |
+| **system** | standalone retriever | full pipeline (text pool + SEP + visual fusion) |
+
+ViDoRe V3's primary metric is **NDCG@5**, not @10 (illuin-tech/vidore-benchmark;
+the HF pipeline leaderboard, MTEB scoring). Our whole ladder has been quoted at
+@10 — internally consistent, every paired delta valid, but **not** comparable to
+a leaderboard cell.
+
+### The apples-to-apples check (cached ColVec-8b matrix, `physics_colvec_scores.npy`)
+
+| our measurement (physics, French) | NDCG@5 | NDCG@10 |
+|---|---:|---:|
+| text baseline, KDL pool | 40.51 | 43.45 |
+| **ColVec visual-only, full 1674-page corpus** | **47.84** | 51.63 |
+| ColVec visual-only, pool-restricted (~100/q) | 48.17 | 51.55 |
+| SEP + ColVec fused, pool, wv=0.8 | 49.76 | 53.15 |
+| leaderboard: webAI-ColVec1.1-9b, Physics (NDCG@5, 6-lang avg) | 48.51 | — |
+| leaderboard: nemotron-colembed-vl-8b-v2, Physics | 50.84 | — |
+
+**Our full-corpus ColVec visual-only at the leaderboard's own metric = NDCG@5
+47.84**, vs the leaderboard's 48.51. Gap 0.67, explained by French-only vs
+6-language average (cf. FinanceFr 0.5399 vs FinanceEn 0.6830 — French is
+consistently harder). Same 1674-page corpus, same qrels (962/962 gold present),
+`pytrec_eval` (what MTEB uses). **The eval is not made up; it reproduces the
+leaderboard.**
+
+### What this changes
+
+- **Pool restriction is a non-issue here.** Full-corpus 47.84 ≈ pool-restricted
+  48.17 at @5 (and 51.63 ≈ 51.55 at @10). Recall@100 of the pool is high enough
+  that top-k ranking is unaffected. The earlier worry that the pool inflates the
+  number is unfounded.
+- **We are at leaderboard level, not past it.** SEP+ColVec is a *pipeline* number
+  (text + structure + visual), NDCG@10 53.15 / **@5 49.76**. The standalone-model
+  comparison is 47.84 (ours, Fr) vs 48.51 (leaderboard, 6-lang) vs 50.84
+  (nemotron). Delete every "past world SOTA" / "first result above SOTA" claim —
+  those compared our @10 to a @5 leaderboard.
+- **The internal ladder still stands.** ColVec ≫ ColQwen2, rerankers redundant,
+  LambdaMART lands on the blend, SEP +~2 — all paired internal comparisons,
+  direction is cutoff-independent. Only the *external* framing was wrong.
+- **"~60" is even further off.** ViDoRe V3 overall SOTA is ~57–59 NDCG@5; physics
+  is the worst domain at ~48–51. ~60 on physics/French is well above anything
+  reported.
+
+For all future external comparison, quote **NDCG@5** and state French-only.
