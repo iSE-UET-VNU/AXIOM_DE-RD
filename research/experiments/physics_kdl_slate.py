@@ -102,8 +102,8 @@ def main() -> None:
     args = ap.parse_args()
 
     qrels, pool = kdl_pool(args.parse)
-    # ndcg_cut_5 is the ViDoRe V3 leaderboard metric; _10 is this ladder's internal
-    # working number. Report both -- see ledger §26.
+    # NDCG@10 is the MTEB ViDoRe V3 leaderboard metric and this ladder's working
+    # number; @5 kept alongside as the V1/V2-era cutoff. See ledger §26.
     ev = pytrec_eval.RelevanceEvaluator(qrels, {"ndcg_cut_5", "ndcg_cut_10", "recall_10"})
     nem = json.loads(NEM.read_text())
 
@@ -176,7 +176,7 @@ def main() -> None:
     ]
 
     print(f"parse: {args.parse}   visual arm: {V}  (fusion weight wv={wv})")
-    print("NDCG@5 = ViDoRe V3 leaderboard metric; @10 = internal working number (ledger §26)\n")
+    print("NDCG@10 = MTEB ViDoRe V3 leaderboard metric + this ladder's working number; @5 for reference (ledger §26)\n")
     print(f"{'arm':32s} {'NDCG@5':>7s} {'NDCG@10':>8s} {'R@10':>7s} {'Δ@10':>7s} {'p':>9s}  vs")
     print(f"{'baseline KDL α=0.7':32s} {nb5:7.2f} {nb:8.2f} {rb:7.2f}")
     out = [{"arm": "baseline", "ndcg5": round(nb5, 2), "ndcg10": round(nb, 2), "recall10": round(rb, 2)}]

@@ -48,10 +48,12 @@ plain-kdl, **kết luận không đổi**. Ledger §25. Baseline tái lập 43.4
 
 Plain-kdl (§21–§24, `--parse kdl`): baseline 43.86, SEP+ColVec **52.91**, LambdaMART 52.67.
 
-**Best pipeline = SEP + ColVec-8b = NDCG@10 53.15 / @5 49.76, miễn phí.** ⚠️ KHÔNG
-so được với leaderboard: ViDoRe V3 dùng **NDCG@5**, trung bình 6 ngôn ngữ, full corpus.
-ColVec visual-only của ta ở @5 = **47.84** (Pháp) ≈ leaderboard 48.51 (6 ngôn ngữ) —
-eval khớp, ta *ngang* leaderboard chứ không vượt. Ledger §26.
+**Best pipeline = SEP + ColVec-8b = NDCG@10 53.15, miễn phí.** MTEB ViDoRe V3
+leaderboard cũng dùng **NDCG@10**, trung bình 6 ngôn ngữ. ColVec1.1-8b visual-only
+của ta = **51.63** (Pháp, full corpus) ≈ webAI công bố **51.50** (mean 6 ngôn ngữ)
+— **eval khớp chính xác**. nemotron-colembed physics = 50.84. Pipeline của ta
+(53.15) hơn nhẹ các model đơn lẻ (pipeline + chỉ Pháp), gọi là "ở frontier + lợi
+thế pipeline" chứ không "vượt SOTA". Ledger §26.
 
 **KHÔNG có DPI gain (§25):** processor ColVec đã downscale mọi trang xuống 1.835 Mpx
 (1792 token) ngay ở 144 DPI — rào ~140 DPI. Đòn bẩy visual duy nhất còn lại là nâng
@@ -81,8 +83,8 @@ cross-encoder ngữ nghĩa.
 - **KHÔNG reranker (pool KDL):** SEP + ColQwen2 CÓ stack → 48.35, cách Voyage-một-mình ~1 điểm, hoàn toàn miễn phí.
 - Generator swap gpt-5.2: Correct 71.67% (+27.73pp, p=.0001) ở n=120/302 — QA, không phải NDCG; chặn ngân sách OpenRouter.
 
-Mốc tham khảo (NDCG@5): leaderboard physics ≈ 48.5 (webAI-ColVec) / 50.84 (nemotron-colembed), trung bình
-6 ngôn ngữ. Ladder nội bộ của ta ở @10, chỉ Pháp — chỉ so delta nội bộ, không so tuyệt đối với leaderboard. §26.
+Mốc tham khảo (NDCG@10, mean 6 ngôn ngữ): leaderboard physics = 51.50 (webAI-ColVec1.1-8b) / 50.84
+(nemotron-colembed). Ladder nội bộ ở @10 chỉ Pháp; ColVec-8b visual-only của ta = 51.63, khớp. §26.
 Kế hoạch: [`docs/retrieval_research_plan.md`](retrieval_research_plan.md).
 
 ---

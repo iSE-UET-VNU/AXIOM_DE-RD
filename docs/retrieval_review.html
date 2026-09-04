@@ -225,10 +225,10 @@
     <div class="statline">
       <div class="stat"><div class="v">43.45</div><div class="l">text baseline · NDCG@10</div></div>
       <div class="stat"><div class="v">53.15</div><div class="l">best pipeline · SEP + ColVec · @10</div></div>
-      <div class="stat"><div class="v">47.84</div><div class="l">ColVec alone · NDCG@5 · vs leaderboard 48.5</div></div>
-      <div class="stat"><div class="v">~60</div><div class="l">team target · above ViDoRe V3 SOTA</div></div>
+      <div class="stat"><div class="v">51.63</div><div class="l">ColVec alone · @10 · vs webAI's own 51.50</div></div>
+      <div class="stat"><div class="v">~60</div><div class="l">team target · above ViDoRe V3 physics ceiling</div></div>
     </div>
-    <p style="font-size:.82rem;color:var(--ink-3);font-family:'IBM Plex Sans',sans-serif;margin-top:14px;">The internal ladder is quoted at NDCG@10; the ViDoRe V3 leaderboard uses NDCG@5. At the leaderboard's own metric our ColVec matches it (§ &ldquo;Does this match the leaderboard&rdquo; below).</p>
+    <p style="font-size:.82rem;color:var(--ink-3);font-family:'IBM Plex Sans',sans-serif;margin-top:14px;">All numbers are NDCG@10, which is also the MTEB ViDoRe V3 leaderboard metric. Our ColVec-8B alone reproduces the model author's published physics score to within 0.13 (§ &ldquo;Does this match the leaderboard&rdquo; below).</p>
   </div>
 </header>
 
@@ -237,7 +237,7 @@
     <p class="eyebrow">The measuring stick</p>
     <h2>What a run actually produces</h2>
     <p>Every method here does one thing: take a question, score all 1,674 pages, sort them. <strong>NDCG@10</strong> grades the top ten &mdash; a gold page at rank 2 is worth much more than the same page at rank 9, and anything past rank 10 scores zero. Recall@10 is the blunter companion: did any gold page make the top ten at all.</p>
-    <p>We measure on <strong>French only</strong>, the hardest slice of the hardest domain in ViDoRe V3. One caveat that runs through everything below: the internal ladder is quoted at <strong>NDCG@10</strong>, but the public ViDoRe V3 leaderboard uses <strong>NDCG@5</strong>, averaged over six languages. The internal deltas are all valid against each other; only the comparison to a leaderboard cell needs the metric aligned &mdash; done in the last section.</p>
+    <p>We measure on <strong>French only</strong>, the hardest slice of the hardest domain in ViDoRe V3. The metric is <strong>NDCG@10</strong> throughout &mdash; the same metric the MTEB ViDoRe V3 leaderboard reports (its per-domain values are 6-language means). Our standalone ColVec-8B number lands on the model author's published figure; the check is in the last section.</p>
   </div>
 </section>
 
@@ -450,31 +450,26 @@
   <div class="wrap">
     <p class="eyebrow">Sanity check</p>
     <h2>Does this match the leaderboard?</h2>
-    <p>A fair question &mdash; the ViDoRe V3 leaderboard shows webAI-ColVec at <strong>0.4851</strong> on physics, <em>below</em> our 53.15. Three things differ, and aligning them makes the numbers agree.</p>
+    <p>A fair question &mdash; a leaderboard screenshot showed a <span class="mono">webAI-ColVec1-9b</span> physics score of <strong>0.4851</strong>, below our numbers. Two things: that row is the <em>previous</em> ColVec1 release (the model card says so), and the metric is <strong>NDCG@10</strong>, not @5. Line up the right model and the numbers agree.</p>
   </div>
   <div class="wide">
     <div class="tablecard scroll">
       <table>
-        <thead><tr><th>our measurement · physics · French</th><th>NDCG@5</th><th>NDCG@10</th></tr></thead>
+        <thead><tr><th>measurement · physics · NDCG@10</th><th>language</th><th>score</th></tr></thead>
         <tbody>
-          <tr><td>text baseline, KDL pool</td><td class="num">40.51</td><td class="num">43.45</td></tr>
-          <tr class="best"><td><span class="arm-name">ColVec visual-only, full 1,674-page corpus</span></td><td class="num">47.84</td><td class="num">51.63</td></tr>
-          <tr><td>ColVec visual-only, pool-restricted (~100/q)</td><td class="num">48.17</td><td class="num">51.55</td></tr>
-          <tr><td>SEP + ColVec fused, pool</td><td class="num">49.76</td><td class="num">53.15</td></tr>
-          <tr><td>leaderboard · webAI-ColVec1.1-9b · Physics <span class="arm-sub">(NDCG@5, 6-lang avg)</span></td><td class="num">48.51</td><td class="num">&mdash;</td></tr>
-          <tr><td>leaderboard · nemotron-colembed-vl-8b-v2 · Physics</td><td class="num">50.84</td><td class="num">&mdash;</td></tr>
+          <tr><td>text baseline, KDL pool</td><td>French</td><td class="num">43.45</td></tr>
+          <tr class="best"><td><span class="arm-name">ColVec1.1-8B visual-only, full 1,674-page corpus</span></td><td>French</td><td class="num">51.63</td></tr>
+          <tr><td>ColVec1.1-8B visual-only, pool-restricted (~100/q)</td><td>French</td><td class="num">51.55</td></tr>
+          <tr><td>SEP + ColVec fused (pipeline)</td><td>French</td><td class="num">53.15</td></tr>
+          <tr><td><span class="arm-name">webAI model card &mdash; ColVec1.1-8B, Physics</span></td><td>6-lang mean</td><td class="num">51.50</td></tr>
+          <tr><td>leaderboard &mdash; nemotron-colembed-vl-8b-v2, Physics</td><td>6-lang mean</td><td class="num">50.84</td></tr>
         </tbody>
       </table>
     </div>
   </div>
   <div class="wrap">
-    <ul class="notes" style="margin-top:1.3rem;">
-      <li><strong>Metric.</strong> ViDoRe V3's primary score is <span class="mono">NDCG@5</span>, not @10. Our whole ladder was quoted at @10 &mdash; self-consistent, but one cutoff higher than the leaderboard.</li>
-      <li><strong>Language.</strong> The leaderboard column is a 6-language average; we run French only, which is consistently the harder half (FinanceFr 0.54 vs FinanceEn 0.68).</li>
-      <li><strong>System.</strong> Our 53.15 is a <em>pipeline</em> number &mdash; text pool + SEP + visual fusion &mdash; not a standalone model.</li>
-    </ul>
-    <p>Align them: our <strong>ColVec visual-only at NDCG@5 = 47.84</strong> (French), against the leaderboard's <strong>48.51</strong> (6-language). Gap 0.7, all of it language. Same 1,674-page corpus, same gold labels (962/962 present), same scoring library MTEB uses. <strong>The eval reproduces the leaderboard.</strong> The pool-restriction worry also dissolves &mdash; 48.17 vs 47.84 is nothing.</p>
-    <p>What it means: <strong>we are at leaderboard level, not past it.</strong> The &ldquo;past SOTA&rdquo; framing came from comparing our @10 to a @5 board. ViDoRe V3 overall SOTA is ~57&ndash;59 NDCG@5; physics is the floor at ~48&ndash;51; &ldquo;~60&rdquo; on physics-French is well beyond anything reported.</p>
+    <p style="margin-top:1.3rem;">Our ColVec-8B visual-only, French, full corpus = <strong>51.63</strong>. webAI's own published number for the same model = <strong>51.50</strong>. A 0.13 gap, and French sits right on the 6-language mean here (physics is dense technical prose &mdash; unlike Finance, where French trails English by 17 points, the language gap is small). Same 1,674-page corpus, same gold labels (962/962 present), same graded scoring MTEB submits. <strong>The eval independently reproduces the model author's number.</strong> The pool-restriction worry also dissolves &mdash; 51.55 vs 51.63 is nothing.</p>
+    <p>What it means: our SEP + ColVec <em>pipeline</em> (53.15) sits <strong>modestly above the standalone leaderboard models</strong> (51.50, 50.84) &mdash; but it's a pipeline (text pool + SEP + visual fusion), French only, against their 6-language means. Call it &ldquo;at the frontier with a small pipeline edge,&rdquo; not &ldquo;past SOTA.&rdquo; The best physics column on the board is ~51.5; overall ViDoRe V3 leaders average ~64; &ldquo;~60&rdquo; on physics alone is well beyond anything reported.</p>
   </div>
 </section>
 
@@ -483,7 +478,7 @@
     <div class="verdict">
       <p class="eyebrow">The call</p>
       <h2>Freeze retrieval. Move to the answer axis.</h2>
-      <p>SEP + ColVec-8B sits <strong>at leaderboard level</strong> for this domain (NDCG@5 47.8 standalone, 49.8 as a pipeline), and every retrieval lever now fixes the same 69% failure &mdash; they've stopped stacking, proven on SEP, ColQwen2, two cross-encoders, and a learned combiner. The one lever left (more visual tokens) is a maybe. Meanwhile the generator swap moved end-to-end answer accuracy <strong>+27.7 points</strong>, and that number is <em>unmeasured</em> on the current retrieval stack. The ceiling is not where we've been digging.</p>
+      <p>SEP + ColVec-8B (53.15 NDCG@10) sits <strong>at the frontier for this domain</strong> &mdash; the standalone leaderboard models are 51.5 and 50.8 &mdash; and every retrieval lever now fixes the same 69% failure, so they've stopped stacking, proven on SEP, ColQwen2, two cross-encoders, and a learned combiner. The one lever left (more visual tokens) is a maybe. Meanwhile the generator swap moved end-to-end answer accuracy <strong>+27.7 points</strong>, and that number is <em>unmeasured</em> on the current retrieval stack. The ceiling is not where we've been digging.</p>
 
       <div class="decision-list">
         <div class="decision do">

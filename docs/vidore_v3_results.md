@@ -1380,16 +1380,15 @@ is the largest single-component gain in the whole ladder and it says the ceiling
 we kept hitting (§7 "right file, wrong page") was a *capacity* limit of the 2B
 visual encoder, not a structural property of the task.
 
-### 52.91 is our best internal number — NOT comparable to the leaderboard (see §26)
+### 52.91 (plain-kdl) / 53.15 (pdf-inspector) — at the frontier, small pipeline edge
 
-SEP+ColVec = 52.91 **NDCG@10**, **free** (one-time GPU index, no API). Prior best
-free stack was SEP+ColQwen2 = 48.35 (§21); Voyage rerank = 49.23 (§20, different
-pool). ⚠️ The leaderboard's physics number (webAI-ColVec ≈ 48.5,
-nemotron-colembed 50.84) is **NDCG@5, ~6-language average, full corpus** — a
-different metric on different data. Our ColVec full-corpus visual-only at the
-leaderboard's own metric is **NDCG@5 = 47.84** (French), which lines up with the
-48.51 leaderboard entry once you correct for language. We are *at* leaderboard
-level, not past it. §26.
+SEP+ColVec **NDCG@10**, **free** (one-time GPU index, no API). Prior best free
+stack was SEP+ColQwen2 = 48.35 (§21); Voyage rerank = 49.23 (§20, different pool).
+The MTEB ViDoRe V3 leaderboard is also NDCG@10 (§26): webAI-ColVec1.1-8b physics =
+51.50, nemotron-colembed = 50.84, both 6-language means. Our ColVec-8b visual-only
+alone reproduces that (51.63, §26); the SEP+ColVec *pipeline* number sits modestly
+above the standalone models, French-only. Not "past SOTA" — at the frontier with a
+pipeline edge.
 
 ### The redundancy pattern from §20/§22 **inverts**
 
@@ -1534,60 +1533,68 @@ is an experiment, not a free win. That is the one visual re-run worth GPU:
 
 Reproduce: `python research/experiments/physics_kdl_slate.py --parse pdf-inspector --visual-dir data/work/vidore_physics_colvec --visual-name colvec --wv 0.8`
 
-## 26. Metric reconciliation — our numbers vs the ViDoRe V3 leaderboard (2026-09-03)
+## 26. Metric reconciliation — the eval reproduces the leaderboard (2026-09-03, corrected 2026-09-04)
 
-Prompted by a leaderboard screenshot: `webAI-ColVec1.1-9b` scores **0.4851** on
-Physics, `nemotron-colembed-vl-8b-v2` **0.5084** — both *below* our SEP+ColVec
-52.91 / 53.15. Investigated whether our eval is sound.
+Prompted by a leaderboard screenshot showing `webAI-ColVec1-9b` Physics = 0.4851,
+below our numbers. Ran the check; the first pass got the metric wrong. Corrected:
 
-### It is. Three axes differ; align them and the numbers match.
+### ViDoRe V3 (MTEB leaderboard) uses NDCG@10 — not @5
 
-| axis | ViDoRe V3 leaderboard | our internal ladder (§1–§25) |
-|---|---|---|
-| **metric** | **NDCG@5** | NDCG@10 |
-| **languages** | ~6-language average per domain | **French only** |
-| **corpus** | full domain corpus | full corpus *or* the KDL α=0.7 text pool (~100/q) |
-| **system** | standalone retriever | full pipeline (text pool + SEP + visual fusion) |
+The webAI-ColVec1.1-8b model card, evaluation section, verbatim: *"The table
+reports **NDCG@10** scores on the ViDoRe V3 tasks"*, with comparator values *"read
+from the live ViDoRe V3 MTEB leaderboard"*. Each domain value is *"the mean of its
+six language subsets."* (ViDoRe V1/V2 used NDCG@5; V3 moved to @10. A 2026-09-03
+note here briefly claimed @5 from a bad secondary summary — wrong, now removed.)
 
-ViDoRe V3's primary metric is **NDCG@5**, not @10 (illuin-tech/vidore-benchmark;
-the HF pipeline leaderboard, MTEB scoring). Our whole ladder has been quoted at
-@10 — internally consistent, every paired delta valid, but **not** comparable to
-a leaderboard cell.
+### Our eval matches webAI's own eval for the same model
 
-### The apples-to-apples check (cached ColVec-8b matrix, `physics_colvec_scores.npy`)
+| ColVec1.1-8b, Physics | NDCG@10 |
+|---|---:|
+| **ours** — visual-only, full 1674-page corpus, **French** | **51.63** |
+| **webAI model card** — visual-only, 6-language mean | **51.50** |
 
-| our measurement (physics, French) | NDCG@5 | NDCG@10 |
+51.63 vs 51.50, a 0.13 gap, and French ≈ the 6-language mean here (physics is
+dense technical prose — unlike Finance, where FinanceFr 54.87 ≪ FinanceEn 71.90,
+the language gap is small). Same 1674-page corpus, same qrels (962/962 gold
+present), `pytrec_eval` graded `ndcg_cut_10` (what MTEB submits). **The eval is
+sound — it independently reproduces the model author's published number.**
+
+The screenshot's `webAI-ColVec1-9b` / `-4b` (0.4851 / 0.4993) are the **previous
+ColVec1 release**, not the ColVec1.1 checkpoint we ran — the card states this
+explicitly. ColVec1.1-8b physics on the same MTEB board is 51.50.
+
+### The full picture at NDCG@10 (physics, French, pdf-inspector pool)
+
+| | NDCG@5 | NDCG@10 |
 |---|---:|---:|
 | text baseline, KDL pool | 40.51 | 43.45 |
-| **ColVec visual-only, full 1674-page corpus** | **47.84** | 51.63 |
-| ColVec visual-only, pool-restricted (~100/q) | 48.17 | 51.55 |
-| SEP + ColVec fused, pool, wv=0.8 | 49.76 | 53.15 |
-| leaderboard: webAI-ColVec1.1-9b, Physics (NDCG@5, 6-lang avg) | 48.51 | — |
-| leaderboard: nemotron-colembed-vl-8b-v2, Physics | 50.84 | — |
+| ColVec1.1-8b visual-only, full corpus | 47.84 | 51.63 |
+| ColVec1.1-8b visual-only, pool-restricted (~100/q) | 48.17 | 51.55 |
+| **SEP + ColVec fused, pipeline** | 49.76 | **53.15** |
+| leaderboard: webAI-ColVec1.1-8b, Physics (6-lang mean) | — | 51.50 |
+| leaderboard: nemotron-colembed-vl-8b-v2, Physics | — | 50.84 |
 
-**Our full-corpus ColVec visual-only at the leaderboard's own metric = NDCG@5
-47.84**, vs the leaderboard's 48.51. Gap 0.67, explained by French-only vs
-6-language average (cf. FinanceFr 0.5399 vs FinanceEn 0.6830 — French is
-consistently harder). Same 1674-page corpus, same qrels (962/962 gold present),
-`pytrec_eval` (what MTEB uses). **The eval is not made up; it reproduces the
-leaderboard.**
+### What stands
 
-### What this changes
+- **Same metric, same data, matching result.** No inflation from the metric.
+- **Our SEP+ColVec pipeline (53.15) is modestly above the standalone leaderboard
+  models** (ColVec 51.50, nemotron 50.84) — but it is a *pipeline* (KDL text pool
+  + SEP structural prior + visual fusion), and French-only vs their 6-language
+  mean. Call it "at the frontier, with a small pipeline edge," not "past SOTA."
+- **Pool restriction is a non-issue** (full-corpus 51.63 ≈ pool-restricted 51.55).
+- **"~60" on physics/French remains well beyond anything reported** — the best
+  physics column on the board is ~51.5; overall ViDoRe V3 leaders are ~64 mean.
 
-- **Pool restriction is a non-issue here.** Full-corpus 47.84 ≈ pool-restricted
-  48.17 at @5 (and 51.63 ≈ 51.55 at @10). Recall@100 of the pool is high enough
-  that top-k ranking is unaffected. The earlier worry that the pool inflates the
-  number is unfounded.
-- **We are at leaderboard level, not past it.** SEP+ColVec is a *pipeline* number
-  (text + structure + visual), NDCG@10 53.15 / **@5 49.76**. The standalone-model
-  comparison is 47.84 (ours, Fr) vs 48.51 (leaderboard, 6-lang) vs 50.84
-  (nemotron). Delete every "past world SOTA" / "first result above SOTA" claim —
-  those compared our @10 to a @5 leaderboard.
-- **The internal ladder still stands.** ColVec ≫ ColQwen2, rerankers redundant,
-  LambdaMART lands on the blend, SEP +~2 — all paired internal comparisons,
-  direction is cutoff-independent. Only the *external* framing was wrong.
-- **"~60" is even further off.** ViDoRe V3 overall SOTA is ~57–59 NDCG@5; physics
-  is the worst domain at ~48–51. ~60 on physics/French is well above anything
-  reported.
+### Team note (other datasets, same code)
 
-For all future external comparison, quote **NDCG@5** and state French-only.
+- Internal deltas (arm A vs B) are unaffected by any of this.
+- The **shared harness `src/evaluation/metrics.py`** computes *binary-relevance*
+  NDCG@10 (`ndcg_at_k`, gold/not-gold), ignoring the graded 1/2 qrels. MTEB and
+  our research scripts use **graded** `pytrec_eval` `ndcg_cut_10`. These differ;
+  which one a report quotes matters. `run_retrieval.py::graded_ndcg` is the
+  graded path.
+- If a report compares a **single-language** number to the leaderboard's
+  **6-language mean**, state that — for physics the gap is small, for other
+  domains (Finance especially) it is large.
+
+Reproduce: `python research/experiments/physics_kdl_slate.py --parse pdf-inspector --visual-dir data/work/vidore_physics_colvec --visual-name colvec --wv 0.8`
