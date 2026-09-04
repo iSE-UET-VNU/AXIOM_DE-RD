@@ -102,7 +102,9 @@ def main() -> None:
     args = ap.parse_args()
 
     qrels, pool = kdl_pool(args.parse)
-    ev = pytrec_eval.RelevanceEvaluator(qrels, {"ndcg_cut_10", "recall_10"})
+    # ndcg_cut_5 is the ViDoRe V3 leaderboard metric; _10 is this ladder's internal
+    # working number. Report both -- see ledger §26.
+    ev = pytrec_eval.RelevanceEvaluator(qrels, {"ndcg_cut_5", "ndcg_cut_10", "recall_10"})
     nem = json.loads(NEM.read_text())
 
     vdir = ROOT / args.visual_dir
@@ -121,7 +123,8 @@ def main() -> None:
         n = len(s)
         return (100 * sum(v["ndcg_cut_10"] for v in s.values()) / n,
                 100 * sum(v["recall_10"] for v in s.values()) / n,
-                {q: 100 * v["ndcg_cut_10"] for q, v in s.items()})
+                {q: 100 * v["ndcg_cut_10"] for q, v in s.items()},
+                100 * sum(v["ndcg_cut_5"] for v in s.values()) / n)
 
     def as_run(scores):
         return {q: dict(s) for q, s in scores.items()}
@@ -155,7 +158,7 @@ def main() -> None:
 
     V = VNAME  # visual arm label in the printed/saved rows
     base = as_run(pool)
-    nb, rb, pqb = rep(base)
+    nb, rb, pqb, nb5 = rep(base)
     nem_pq = rep(rerank(pool))[2]
 
     arms = [
@@ -172,17 +175,18 @@ def main() -> None:
         (f"+ Nemotron → SEP+{V}", fuse(sep(rerank(pool)), wv), "Nemotron"),
     ]
 
-    print(f"parse: {args.parse}   visual arm: {V}  (fusion weight wv={wv})\n")
-    print(f"{'arm':32s} {'NDCG@10':>8s} {'R@10':>7s} {'Δ':>7s} {'p':>9s}  vs")
-    print(f"{'baseline KDL α=0.7':32s} {nb:8.2f} {rb:7.2f}")
-    out = [{"arm": "baseline", "ndcg10": round(nb, 2), "recall10": round(rb, 2)}]
+    print(f"parse: {args.parse}   visual arm: {V}  (fusion weight wv={wv})")
+    print("NDCG@5 = ViDoRe V3 leaderboard metric; @10 = internal working number (ledger §26)\n")
+    print(f"{'arm':32s} {'NDCG@5':>7s} {'NDCG@10':>8s} {'R@10':>7s} {'Δ@10':>7s} {'p':>9s}  vs")
+    print(f"{'baseline KDL α=0.7':32s} {nb5:7.2f} {nb:8.2f} {rb:7.2f}")
+    out = [{"arm": "baseline", "ndcg5": round(nb5, 2), "ndcg10": round(nb, 2), "recall10": round(rb, 2)}]
     for name, run, ref in arms[1:]:
-        n, r, pq = rep(run)
+        n, r, pq, n5 = rep(run)
         refpq = pqb if ref == "baseline" else nem_pq
         d, p, b, w, t = permutation(refpq, pq)
         flag = "" if p < 0.05 else "  n.s."
-        print(f"{name:32s} {n:8.2f} {r:7.2f} {d:+7.2f} {p:9.4f}  {ref}{flag}")
-        out.append({"arm": name, "ndcg10": round(n, 2), "recall10": round(r, 2),
+        print(f"{name:32s} {n5:7.2f} {n:8.2f} {r:7.2f} {d:+7.2f} {p:9.4f}  {ref}{flag}")
+        out.append({"arm": name, "ndcg5": round(n5, 2), "ndcg10": round(n, 2), "recall10": round(r, 2),
                     "delta": round(d, 3), "p": round(p, 5), "vs": ref})
     tag = ("" if V == "colqwen" else f"_{V}") + ("" if args.parse == "pdf-inspector" else f"_{args.parse}")
     (RESULTS / f"physics_kdl_slate{tag}.json").write_text(json.dumps(out, indent=2))
