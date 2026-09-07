@@ -3,7 +3,7 @@
     "mode": "local_raw"
   },
   "local_input": {
-    "path": "data/raw/benchmarks/vidore_v3/vidore_v3_physics/pdfs",
+    "path": "data/raw/vidore_v3_physics/pdfs",
     "recursive": true,
     "include_hidden": false,
     "include_extensions": [
@@ -33,7 +33,7 @@
       "model": null,
       "continuous_page_queue": true,
       "scheduler": "global_two_phase",
-      "max_workers": 8,
+      "max_workers": 8, 
       "render_processes": 8,
       "bbox_max_workers": 8,
       "request_workers": 24,
