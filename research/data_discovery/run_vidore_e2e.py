@@ -56,7 +56,8 @@ from src.evaluation.benchmarks.vidore_v3_judge import (  # noqa: E402
     score,
 )
 from src.evaluation.llm import complete  # noqa: E402
-from src.retrieval.fusion import alpha_fuse  # noqa: E402
+from src.retrieval.fusion import alpha_fuse, visual_fuse  # noqa: E402
+from src.retrieval.structural import propagate  # noqa: E402
 from src.retrieval.index import LocalIndex  # noqa: E402
 from src.retrieval.protocol import ChunkRecord  # noqa: E402
 from src.retrieval.retrievers import build as build_retriever  # noqa: E402
@@ -78,7 +79,9 @@ def main(argv: list[str] | None = None) -> int:
     run_started = time.perf_counter()
     load_dotenv_file(ROOT)
     _require_env("OPENROUTER_API_KEY")
-    _require_env("VLLM_API_BASE")
+    if not args.page_text_cache:
+        # The cached-parse shortcut never reaches the KDL endpoint.
+        _require_env("VLLM_API_BASE")
 
     parser_config = _resolved_parser_config(args.parser_config, args.work_dir)
     chunking_config = _chunking_config(args)
@@ -136,7 +139,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     started = time.perf_counter()
-    if args.reuse_parser_artifacts:
+    if args.page_text_cache:
+        # Research shortcut: the accurate parse for this corpus already exists,
+        # so the selected pages are looked up instead of re-parsed. Production
+        # still runs the parser -- the ingestion timing below is 0 by design.
+        pipeline = None
+        page_texts = _cached_page_texts(args.page_text_cache, hits_by_qid, index)
+    elif args.reuse_parser_artifacts:
         pipeline = run_from_parse_artifacts(
             selected,
             parser_artifacts_dir=args.reuse_parser_artifacts,
@@ -156,16 +165,24 @@ def main(argv: list[str] | None = None) -> int:
             one_page_inputs=True,
         )
     ingestion_seconds = time.perf_counter() - started
-    print(
-        f"ingested={len(pipeline.ingestion.parsed_data)} "
-        f"quarantined={len(pipeline.ingestion.quarantined_documents)} "
-        f"chunks={len(pipeline.chunking_embedding.retrieval_records) if pipeline.chunking_embedding else 0} "
-        f"pipeline_seconds={time.perf_counter() - started:.1f}",
-        flush=True,
-    )
+    if pipeline is None:
+        print(
+            f"accurate parse read from cache: pages={len(page_texts)} "
+            f"({args.page_text_cache})",
+            flush=True,
+        )
+    else:
+        print(
+            f"ingested={len(pipeline.ingestion.parsed_data)} "
+            f"quarantined={len(pipeline.ingestion.quarantined_documents)} "
+            f"chunks={len(pipeline.chunking_embedding.retrieval_records) if pipeline.chunking_embedding else 0} "
+            f"pipeline_seconds={time.perf_counter() - started:.1f}",
+            flush=True,
+        )
 
     page_text_started = time.perf_counter()
-    page_texts = _page_texts(pipeline.enriched.enriched_data, index)
+    if pipeline is not None:
+        page_texts = _page_texts(pipeline.enriched.enriched_data, index)
     page_text_seconds = time.perf_counter() - page_text_started
     if not page_texts:
         raise RuntimeError("Accurate ingestion returned no page text")
@@ -177,7 +194,13 @@ def main(argv: list[str] | None = None) -> int:
             "discovery_pages": len(index.pages),
             "selected_unique_pages": len(page_texts),
             "ingested_pages": len(page_texts),
-            "quarantined_documents": len(pipeline.ingestion.quarantined_documents),
+            "quarantined_documents": (
+                0 if pipeline is None
+                else len(pipeline.ingestion.quarantined_documents)
+            ),
+            "page_text_cache": (
+                str(args.page_text_cache) if args.page_text_cache else None
+            ),
             "vllm_api_base": os.environ.get("VLLM_API_BASE"),
             "vllm_model": os.environ.get("VLLM_MODEL_NAME"),
             "parser_config": str(args.parser_config),
@@ -214,16 +237,24 @@ def main(argv: list[str] | None = None) -> int:
         from src.chunking_embedding.stage import run as run_chunking_embedding
 
         chunking_started = time.perf_counter()
-        pipeline.chunking_embedding = run_chunking_embedding(
-            [record.__dict__ for record in pipeline.enriched.enriched_data],
-            chunking_config,
-        )
-        print(
-            f"chunks={len(pipeline.chunking_embedding.retrieval_records)} "
-            f"chunk_embed_seconds={time.perf_counter() - chunking_started:.1f}",
-            flush=True,
-        )
-        prepared_chunks = _prepared_chunks(pipeline, page_texts, index)
+        if pipeline is None:
+            prepared_chunks = _chunks_from_page_texts(page_texts, chunking_config)
+            print(
+                f"chunks={len(prepared_chunks)} (from cached page text) "
+                f"chunk_embed_seconds={time.perf_counter() - chunking_started:.1f}",
+                flush=True,
+            )
+        else:
+            pipeline.chunking_embedding = run_chunking_embedding(
+                [record.__dict__ for record in pipeline.enriched.enriched_data],
+                chunking_config,
+            )
+            print(
+                f"chunks={len(pipeline.chunking_embedding.retrieval_records)} "
+                f"chunk_embed_seconds={time.perf_counter() - chunking_started:.1f}",
+                flush=True,
+            )
+            prepared_chunks = _prepared_chunks(pipeline, page_texts, index)
         chunk_retrieval_started = time.perf_counter()
         chunk_ranked = _retrieve_chunks(
             prepared_chunks,
@@ -234,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             depth=args.depth,
             alpha=args.alpha,
             batch_size=args.retrieval_batch_size,
+            rescore=_page_rescorer(args),
         )
         chunk_retrieval_seconds = time.perf_counter() - chunk_retrieval_started
         arm_timings["chunks"] = _run_arm(
@@ -496,6 +528,64 @@ def _page_texts(records: Iterable[Any], index: PageIndex) -> dict[str, str]:
     return out
 
 
+def _cached_page_texts(
+    cache_path: Path, hits_by_qid: dict[str, list[Any]], index: PageIndex
+) -> dict[str, str]:
+    """Accurate page text for the discovery-selected pages, read from cache.
+
+    The cache is keyed by benchmark unit id (``physics::File#page=0``); the
+    discovery index keys pages by file path and 1-based page number. Every
+    selected page must be present -- a partial cache would silently shrink the
+    served pool and make the arm incomparable.
+    """
+    from src.evaluation.benchmarks.vidore_v3 import unit_id
+    from src.evaluation.pipeline_pages import canonical_doc
+
+    cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    subset = next(iter(cached)).split("::", 1)[0] if cached else ""
+    by_page_id = {
+        page.page_id: unit_id(
+            subset, canonical_doc(Path(page.file_path).name), page.page_number - 1
+        )
+        for page in index.pages
+    }
+    selected = {hit.evidence.page_id for hits in hits_by_qid.values() for hit in hits}
+    missing = sorted(p for p in selected if by_page_id.get(p, "") not in cached)
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} selected pages absent from {cache_path}: {missing[:3]}"
+        )
+    return {
+        page_id: cached[by_page_id[page_id]]
+        for page_id in selected
+        if cached.get(by_page_id[page_id], "").strip()
+    }
+
+
+def _chunks_from_page_texts(
+    page_texts: dict[str, str], chunking_config: dict[str, Any]
+) -> list[PreparedChunk]:
+    """Chunk + embed cached page text into the same records the stage produces."""
+    from src.chunking_embedding.chunkers.builtin import fixed_overlap
+
+    params = chunking_config.get("chunker_params") or {}
+    n_words = int(params.get("n_words", 512))
+    overlap = int(params.get("overlap", 128))
+    texts, owners = [], []
+    for page_id, text in page_texts.items():
+        for span in fixed_overlap(text, n_words=n_words, overlap=overlap):
+            segment = text[span[0] : span[1]]
+            if segment.strip():
+                texts.append(segment)
+                owners.append(page_id)
+    vectors = _make_embedder(chunking_config).embed(texts)
+    return [
+        PreparedChunk(f"c{position}", owners[position], texts[position],
+                      np.asarray(vectors[position], dtype=np.float32))
+        for position in range(len(texts))
+    ]
+
+
 def _prepared_chunks(
     pipeline: Any,
     page_texts: dict[str, str],
@@ -544,6 +634,7 @@ def _retrieve_chunks(
     depth: int,
     alpha: float,
     batch_size: int,
+    rescore: Any = None,
 ) -> dict[str, list[PreparedChunk]]:
     if not chunks:
         return {question.qid: [] for question in questions}
@@ -594,9 +685,57 @@ def _retrieve_chunks(
                     (local_index.record_at(int(position)).chunk_id, float(scores[position]))
                     for position in positions
                 ]
-            fused = alpha_fuse(dense_hits, sparse_hits, alpha, top_k)
-            result[question.qid] = [by_id[chunk_id] for chunk_id, _score in fused]
+            fused = alpha_fuse(dense_hits, sparse_hits, alpha, depth)
+            if rescore is not None:
+                fused = rescore(question.qid, fused, by_id)
+            result[question.qid] = [by_id[chunk_id] for chunk_id, _score in fused[:top_k]]
     return result
+
+
+def _page_rescorer(args: argparse.Namespace):
+    """Build the page-level rescorer that reorders the accurate retrieval pool.
+
+    The accurate stage fuses chunk scores; our levers (SEP, visual fusion) score
+    whole pages. So chunk hits are folded to pages with MaxP, rescored, and the
+    chunks are re-ordered by their page's new rank (original chunk order kept
+    within a page). Returns ``None`` when no lever is requested.
+    """
+    visual = None
+    if args.visual_scores:
+        directory = args.visual_scores
+        name = args.visual_name
+        matrix = np.load(directory / f"physics_{name}_scores.npy")
+        keys = json.loads((directory / f"physics_{name}_keys.json").read_text())
+        qids = json.loads((directory / f"physics_{name}_qids.json").read_text())
+        visual = (matrix, {k: i for i, k in enumerate(keys)},
+                  {q: i for i, q in enumerate(qids)})
+    if args.rescore == "none" and visual is None:
+        return None
+
+    def rescore(qid, fused, by_id):
+        pages: dict[str, float] = {}
+        for chunk_id, chunk_score in fused:
+            page_id = by_id[chunk_id].page_id
+            if chunk_score > pages.get(page_id, -np.inf):
+                pages[page_id] = chunk_score
+        if args.rescore == "sep":
+            pages = propagate(pages)
+        if visual is not None:
+            matrix, key_index, qid_index = visual
+            if qid in qid_index:
+                row = qid_index[qid]
+                arm = {page: float(matrix[row, key_index[page]])
+                       for page in pages if page in key_index}
+                if arm:
+                    pages = visual_fuse(pages, arm, args.visual_weight)
+        order = {page: rank for rank, page in
+                 enumerate(sorted(pages, key=lambda p: -pages[p]))}
+        return sorted(
+            fused,
+            key=lambda hit: order.get(by_id[hit[0]].page_id, len(order)),
+        )
+
+    return rescore
 
 
 def _make_embedder(config: dict[str, Any]) -> Any:
@@ -970,6 +1109,28 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--embedder", default="", help="Override chunking config embedder")
     parser.add_argument("--embedder-model", default="", help="Override embedder model")
     parser.add_argument("--skip-judge", action="store_true")
+    parser.add_argument(
+        "--rescore",
+        default="none",
+        choices=["none", "sep"],
+        help="Page-level rescoring applied to the accurate retrieval pool. "
+             "'sep' = structural evidence propagation (src/retrieval/structural.py).",
+    )
+    parser.add_argument(
+        "--visual-scores",
+        type=Path,
+        help="Directory holding physics_<name>_{scores.npy,keys.json,qids.json} "
+             "for a precomputed visual page arm (e.g. webAI-ColVec1.1-8b).",
+    )
+    parser.add_argument("--visual-name", default="colvec")
+    parser.add_argument("--visual-weight", type=float, default=0.8)
+    parser.add_argument(
+        "--page-text-cache",
+        type=Path,
+        help="Research shortcut: read accurate page text from a cached "
+             "{unit_id: text} JSON instead of running the accurate parser. "
+             "Only valid when every discovery-selected page is present in it.",
+    )
     return parser
 
 

@@ -55,3 +55,22 @@ def merge_reranked(reranked: Sequence[Hit], tail: Sequence[Hit]) -> list[Hit]:
     floor = min((score for _, score in reranked), default=0.0)
     below = [(chunk_id, floor - 1.0 - rank) for rank, (chunk_id, _) in enumerate(tail)]
     return list(reranked) + below
+
+
+def visual_fuse(
+    text: dict[str, float], visual: dict[str, float], weight: float
+) -> dict[str, float]:
+    """Min-max both arms, then blend a visual page score into a text score.
+
+    The visual arm scores whole page images, so it is keyed by the same unit ids
+    as a page-level text pool. Candidates the visual arm does not cover keep
+    their text score alone; candidates only the visual arm has enter at
+    ``weight * score``.
+    """
+    from .structural import minmax
+
+    t, v = minmax(text), minmax(visual)
+    fused = {u: (1 - weight) * s + weight * v.get(u, 0.0) for u, s in t.items()}
+    for u, s in v.items():
+        fused.setdefault(u, weight * s)
+    return fused
