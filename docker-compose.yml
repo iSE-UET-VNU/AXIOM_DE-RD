@@ -16,6 +16,7 @@ services:
         aliases:
           - indexing-service
           - axiom-de-rd
+    mem_limit: 256m
 
 networks:
   axiom-k8s:
