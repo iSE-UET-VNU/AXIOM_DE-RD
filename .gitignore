@@ -9,6 +9,10 @@ venv/
 .env
 .streamlit/
 
+# Local deployment files and SSH key.
+/deploy/
+/codex-dev.pem
+
 # Keep only the main pipeline configuration under version control.
 /configs/*
 !/configs/pipeline.yaml

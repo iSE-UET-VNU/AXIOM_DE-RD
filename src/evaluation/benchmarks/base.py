@@ -152,9 +152,27 @@ def iter_parquet(path: Any, columns: Sequence[str], batch_size: int = 2048) -> I
         raise FileNotFoundError(f"No parquet files found at {path}")
 
     for parquet_path in paths:
-        reader = pq.ParquetFile(parquet_path)
-        for batch in reader.iter_batches(batch_size=batch_size, columns=list(columns)):
-            for row in batch.to_pylist():
+        emitted = False
+        try:
+            reader = pq.ParquetFile(parquet_path)
+            for batch in reader.iter_batches(batch_size=batch_size, columns=list(columns)):
+                for row in batch.to_pylist():
+                    emitted = True
+                    yield row
+        except (OSError, ValueError):
+            # Some local PyArrow builds reject otherwise readable parquet files
+            # with nested/list columns. Fall back only before emitting a row so
+            # callers never receive a partial duplicate stream.
+            if emitted:
+                raise
+            import pandas as pd
+
+            frame = pd.read_parquet(
+                parquet_path,
+                engine="fastparquet",
+                columns=list(columns),
+            )
+            for row in frame.to_dict(orient="records"):
                 yield row
 
 

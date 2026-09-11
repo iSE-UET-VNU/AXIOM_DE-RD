@@ -174,6 +174,7 @@ def main() -> None:
         chunks = runs[question.qid]
         if args.top_k_context is not None:
             chunks = chunks[:max(0, args.top_k_context)]
+        generation_started = time.perf_counter()
         generation = generate(
             question.qid,
             question.query,
@@ -183,6 +184,8 @@ def main() -> None:
             max_output_tokens=args.max_output_tokens,
             render_prompt=style.render_prompt,
         )
+        generation_seconds = time.perf_counter() - generation_started
+        judge_started = time.perf_counter()
         verdict = style.judge(
             question.query,
             question.answer,
@@ -191,9 +194,12 @@ def main() -> None:
             model=args.judge,
             generator_model=args.generator,
         )
+        judge_seconds = time.perf_counter() - judge_started
         gold = benchmark.gold_docs(question.qid)
         return {
             **asdict(generation),
+            "generation_seconds": round(generation_seconds, 3),
+            "judge_seconds": round(judge_seconds, 3),
             "correct": verdict.correct,
             "credited": verdict.credited,
             "judgment": verdict.label,
@@ -361,6 +367,14 @@ def summarize(
         "scored": len(records),
         "missing_from_run": missing,
         "seconds": round(seconds, 1),
+        # These are sums across requests; ``seconds`` is the wall-clock time
+        # and is the value to use for throughput under concurrent workers.
+        "generation_seconds_sum": round(
+            sum(float(row.get("generation_seconds", 0.0)) for row in records), 1
+        ),
+        "judge_seconds_sum": round(
+            sum(float(row.get("judge_seconds", 0.0)) for row in records), 1
+        ),
         "accuracy": mean("correct"),
         # Strict and lenient side by side: on a graded benchmark these differ,
         # and reporting one alone lets the choice pick the conclusion.

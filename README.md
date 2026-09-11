@@ -130,3 +130,11 @@ Start the interactive demo from the repository root:
 ```bash
 streamlit run streamlit_app.py
 ```
+
+## EC2 + Codex Remote
+
+The setup for running this research repository on Ubuntu EC2 and controlling
+the remote project from the ChatGPT mobile app is documented in
+[`deploy/ec2/README.md`](deploy/ec2/README.md). It includes the EC2 bootstrap
+script and an SSH config example. Secrets, generated data, and model caches
+remain outside Git.
