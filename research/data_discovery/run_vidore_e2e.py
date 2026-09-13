@@ -906,7 +906,7 @@ def _arguments() -> argparse.ArgumentParser:
         help="Reuse persisted parser result.json files instead of calling the parser",
     )
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data/benchmark/vidore_v3/results/physics_discovery_e2e")
-    parser.add_argument("--top-k-pages", type=int, default=10)
+    parser.add_argument("--top-k-pages", type=int, default=100)
     parser.add_argument("--top-k-chunks", type=int, default=10)
     parser.add_argument("--depth", type=int, default=100)
     parser.add_argument("--alpha", type=float, default=0.7)

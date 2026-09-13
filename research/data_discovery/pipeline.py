@@ -256,7 +256,7 @@ def run_on_demand(
     query: str,
     *,
     parser_config: dict[str, Any],
-    top_k_pages: int = 10,
+    top_k_pages: int = 100,
     chunking_config: dict[str, Any] | None = None,
     project_root: str | Path | None = None,
     work_dir: str | Path | None = None,

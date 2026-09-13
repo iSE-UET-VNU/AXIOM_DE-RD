@@ -190,7 +190,7 @@ class OnDemandPerQueryRunner:
         project_root: str | Path,
         work_dir: str | Path,
         cache_dir: str | Path | None = None,
-        top_k_pages: int = 10,
+        top_k_pages: int = 100,
         top_k_chunks: int = 10,
         depth: int = 100,
         alpha: float = 0.7,

@@ -50,7 +50,7 @@ allowing the hosted KDL model to receive batches.
 | --- | --- |
 | Light retrieval unit | PDF page |
 | Light retriever | BM25 over fast pdf-inspector page text |
-| Candidate pages | `--top-k-pages 10` by default; can be increased to 50 or 100 |
+| Candidate pages | `--top-k-pages 100` by default |
 | Accurate parser | KDL + pdf-inspector |
 | Parser scheduler | `global_two_phase` |
 | Parser workers | `max_workers=8`, `render_processes=8` |
@@ -77,7 +77,22 @@ python -m research.data_discovery.cli `
   --input data/raw/my-lake `
   --index-dir data/work/page-discovery `
   --query "revenue recognition" `
-  --top-k-pages 10
+  --top-k-pages 100
+```
+
+This command is dataset-independent: `--input` may point to one PDF or to a
+directory that is searched recursively. It does not require DocBench, ViDoRe,
+queries, or qrels. The first invocation creates the reusable pdf-inspector page
+records and BM25 index; later invocations reuse that index unless
+`--rebuild-index` is supplied. The same entry point is also available as a
+script from the repository root:
+
+```powershell
+python research/data_discovery/run_data_discovery.py `
+  --input D:\path\to\pdf-lake `
+  --index-dir data/work/page-discovery `
+  --query "revenue recognition" `
+  --top-k-pages 100
 ```
 
 Add accurate ingestion, and optionally chunking and embeddings:
@@ -87,7 +102,7 @@ python -m research.data_discovery.cli `
   --input data/raw/my-lake `
   --index-dir data/work/page-discovery `
   --query "revenue recognition" `
-  --top-k-pages 10 `
+  --top-k-pages 100 `
   --ingest `
   --chunk `
   --pipeline-config configs/pipeline.data-discovery.yaml
@@ -99,7 +114,7 @@ Run light BM25 retrieval for the complete Physics subset:
 python -m research.data_discovery.run_vidore_physics `
   --subset physics `
   --language french `
-  --top-k 10 `
+  --top-k 100 `
   --output data/benchmark/vidore_v3/results/physics_discovery_bm25_french.jsonl
 ```
 
@@ -109,7 +124,7 @@ Run the end-to-end chunks arm:
 python -m research.data_discovery.run_vidore_e2e `
   --subset physics `
   --language french `
-  --top-k-pages 10 `
+  --top-k-pages 100 `
   --top-k-chunks 10 `
   --arms chunks `
   --workers 24 `
@@ -123,7 +138,7 @@ Run the pages arm:
 python -m research.data_discovery.run_vidore_e2e `
   --subset physics `
   --language french `
-  --top-k-pages 10 `
+  --top-k-pages 100 `
   --arms pages `
   --workers 24 `
   --parser-config configs/pipeline.data-discovery.yaml
@@ -151,9 +166,9 @@ and at most `32` unique pages. KDL concurrency defaults in this mode are
 `max_model_sequences=128`; each can be overridden with the corresponding
 `--kdl-*` option.
 
-To test larger light-retrieval coverage, change only
-`--top-k-pages`, for example to `50` or `100`. The selected pages are deduplicated
-across queries before accurate ingestion.
+To compare light-retrieval budgets, change only `--top-k-pages`, for example
+to `50` or `100`. The selected pages are deduplicated across queries before
+accurate ingestion.
 
 If parser artifacts already exist, reuse them with:
 

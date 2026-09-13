@@ -6,7 +6,7 @@ Example:
         --input data/raw/my-lake \
         --index-dir data/work/page-discovery \
         --query "revenue recognition" \
-        --top-k-pages 12
+        --top-k-pages 100
 
 Add ``--ingest`` and ``--pipeline-config`` to run the accurate parser and the
 normal cleaning/enrichment/chunking stages on the selected pages.
@@ -86,7 +86,7 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--input", required=True, help="PDF file or recursive PDF directory")
     parser.add_argument("--index-dir", required=True, help="Discovery index directory")
     parser.add_argument("--query", required=True)
-    parser.add_argument("--top-k-pages", type=int, default=10)
+    parser.add_argument("--top-k-pages", type=int, default=100)
     parser.add_argument("--rebuild-index", action="store_true")
     parser.add_argument(
         "--ingest",

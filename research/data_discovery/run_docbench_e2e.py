@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     top_k_pages = _positive(
-        args.top_k_pages or docbench_config.get("top_k_pages") or 10,
+        args.top_k_pages or docbench_config.get("top_k_pages") or 100,
         "top-k-pages",
     )
     top_k_chunks = _positive(

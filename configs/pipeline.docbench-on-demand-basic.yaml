@@ -2,8 +2,8 @@
   "docbench": {
     "root": null,
     "retrieval_scope": "file",
-    "output_dir": "data/benchmark/docbench_on_demand_basic_lake_smoke_10",
-    "top_k_pages": 10,
+    "output_dir": "data/benchmark/docbench_on_demand_basic_lake_smoke_100",
+    "top_k_pages": 100,
     "top_k_chunks": 10,
     "chunk_retrieval_depth": 100,
     "chunk_retrieval_alpha": 0.7,
