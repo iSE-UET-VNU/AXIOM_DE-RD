@@ -29,6 +29,7 @@ python research/experiments/run_benchmark_hierarchical.py `
   --dataset-root data/raw/BENCHMARK `
   --output-dir data/work/benchmark_hierarchical/run_id `
   --device cuda `
+  --batch-size 16 `
   --file-k 3 --metric-page-k 10 --saved-page-k 20 `
   --stage all
 ```
