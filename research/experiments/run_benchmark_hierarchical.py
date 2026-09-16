@@ -561,7 +561,11 @@ class Runner:
                 "seconds": time.perf_counter() - started,
             }
             atomic_json_dump(stat_path, stat)
-            self.events.write("parse_document", status, **stat)
+            self.events.write(
+                "parse_document",
+                status,
+                **{key: value for key, value in stat.items() if key != "status"},
+            )
             all_pages.extend(pages)
             file_stats.append(stat)
         document_order = {document.doc_id: index for index, document in enumerate(documents)}
