@@ -279,15 +279,18 @@ class Runner:
 
     def mark_complete(self, stage: str, started: float, **payload: Any) -> None:
         elapsed = time.perf_counter() - started
+        result_payload = dict(payload)
+        result_seconds = result_payload.pop("seconds", None)
+        if result_seconds is not None:
+            result_payload["result_seconds"] = result_seconds
         atomic_json_dump(
             self.marker(stage),
             {
                 "stage": stage,
                 "config_hash": self.config_hash,
                 "input_signature": self.input_signature,
-                "input_signature": self.input_signature,
                 "seconds": elapsed,
-                **payload,
+                **result_payload,
             },
         )
         timing_path = self.root / "timing.json"
@@ -299,13 +302,13 @@ class Runner:
         timing["stages"][stage] = {
             "wall_seconds": elapsed,
             "completed_at": _now(),
-            **payload,
+            **result_payload,
         }
         timing["total_completed_stage_seconds"] = sum(
             float(item.get("wall_seconds", 0.0)) for item in timing["stages"].values()
         )
         atomic_json_dump(timing_path, timing)
-        self.events.write(stage, "complete", seconds=elapsed, **payload)
+        self.events.write(stage, "complete", seconds=elapsed, **result_payload)
 
     def run_stage(self, stage: str, callback: Any) -> None:
         if self.complete(stage):
