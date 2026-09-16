@@ -1,0 +1,68 @@
+{
+  "benchmark_bundle": {
+    "root": null,
+    "retrieval_scope": "lake",
+    "output_dir": "data/benchmark/benchmark_20260915_on_demand_basic_lake",
+    "top_k_pages": 20,
+    "legacy_eval_top_k_chunks": 10,
+    "generation_top_k_chunks": 3,
+    "chunk_retrieval_depth": 100,
+    "chunk_retrieval_alpha": 0.7,
+    "query_workers": 32,
+    "qa_workers": 4,
+    "kdl_microbatch_window_seconds": 5,
+    "kdl_microbatch_max_pages": 64,
+    "max_context_chars": 12000,
+    "max_unit_chars": 8000,
+    "max_output_tokens": 8000,
+    "generator": "deepseek/deepseek-v4-flash",
+    "judge": "openai/gpt-4o-mini",
+    "qa_prompt_profile": "vidore_v3"
+  },
+  "parsing": {
+    "provider": "kdl_pdf_inspector",
+    "kdl": {
+      "method": "vllm",
+      "endpoint_url": null,
+      "model": null,
+      "continuous_page_queue": true,
+      "scheduler": "global_two_phase",
+      "max_workers": 32,
+      "render_processes": 32,
+      "bbox_max_workers": 32,
+      "request_workers": 128,
+      "request_batch_size": 64,
+      "max_model_sequences": 256,
+      "dpi": 144,
+      "request_timeout_seconds": 3600,
+      "max_retries": 2,
+      "max_pages": 1024,
+      "layout_max_output_tokens": 6000,
+      "text_max_output_tokens": 4096,
+      "table_max_output_tokens": 5500,
+      "picture_max_output_tokens": 4096,
+      "formula_max_output_tokens": 1024,
+      "save_raw_outputs": true
+    }
+  },
+  "chunking_embedding": {
+    "chunker": "fixed_overlap",
+    "chunker_params": {
+      "n_words": 512,
+      "overlap": 128
+    },
+    "max_rows_per_chunk": 20,
+    "embedder": "openrouter_te3s",
+    "embedder_params": {
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "api_key_env": "OPENROUTER_API_KEY",
+      "batch_size": 64,
+      "app_title": "AXIOM DE-RD"
+    },
+    "retrieval_profile": "hybrid_default"
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}

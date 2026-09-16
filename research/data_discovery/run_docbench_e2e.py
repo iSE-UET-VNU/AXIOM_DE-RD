@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 import argparse
 import hashlib
 import json
@@ -749,20 +749,36 @@ def _run_qa(
     qa_workers: int,
     skip_judge: bool,
     retrieval_config_hash: str,
+    judge_prompt: str = DOCBENCH_JUDGE_PROMPT,
+    score_parser: Callable[[str], int | float] | None = None,
+    judge_score_schema: str = "binary_0_or_1",
+    context_chunk_limit: int | None = None,
+    generation_render_prompt: Callable[[str, Sequence[str]], str] | None = None,
+    generation_prompt_schema: str = "grounded_abstain_v1",
+    judge_max_output_tokens: int = 16,
 ) -> dict[str, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    qa_config_hash = _hash_payload(
-        {
-            "arm": "baseline_legacy",
-            "generator": generator_model,
-            "judge": judge_model,
-            "max_context_chars": max_context_chars,
-            "max_unit_chars": max_unit_chars,
-            "max_output_tokens": max_output_tokens,
-            "skip_judge": skip_judge,
-            "retrieval_config_hash": retrieval_config_hash,
-        }
-    )
+    if context_chunk_limit is not None and context_chunk_limit <= 0:
+        raise ValueError("context_chunk_limit must be positive when provided")
+    if judge_max_output_tokens <= 0:
+        raise ValueError("judge_max_output_tokens must be positive")
+    qa_config = {
+        "arm": "baseline_legacy",
+        "generator": generator_model,
+        "judge": judge_model,
+        "max_context_chars": max_context_chars,
+        "max_unit_chars": max_unit_chars,
+        "max_output_tokens": max_output_tokens,
+        "skip_judge": skip_judge,
+        "retrieval_config_hash": retrieval_config_hash,
+        "judge_prompt": judge_prompt,
+        "judge_score_schema": judge_score_schema,
+        "generation_prompt_schema": generation_prompt_schema,
+        "judge_max_output_tokens": judge_max_output_tokens,
+    }
+    if context_chunk_limit is not None:
+        qa_config["context_chunk_limit"] = context_chunk_limit
+    qa_config_hash = _hash_payload(qa_config)
     rows = _read_latest_jsonl(output_path)
     pending = [
         question
@@ -786,8 +802,10 @@ def _run_qa(
                 "score": None,
                 "error": f"retrieval failed: {retrieval.get('error')}",
                 "qa_config_hash": qa_config_hash,
+                "generation_seconds": None,
+                "judge_seconds": None,
             }
-        context = [
+        retrieved_context = [
             ContextChunk(
                 chunk_id=str(item.get("chunk_id") or ""),
                 doc_id=str(item.get("doc_id") or ""),
@@ -797,6 +815,12 @@ def _run_qa(
             for item in retrieval.get("chunks") or []
             if str(item.get("text") or "").strip()
         ]
+        context = (
+            retrieved_context[:context_chunk_limit]
+            if context_chunk_limit is not None
+            else retrieved_context
+        )
+        generation_started = time.perf_counter()
         generation = generate(
             qid,
             question["question"],
@@ -804,21 +828,29 @@ def _run_qa(
             model=generator_model,
             max_chars=max_context_chars,
             max_output_tokens=max_output_tokens,
+            render_prompt=generation_render_prompt,
         )
+        generation_seconds = time.perf_counter() - generation_started
         result: dict[str, Any] = {
             **question,
             "arm": "baseline_legacy",
             "generator": generator_model,
             "judge": judge_model,
+            "generation_prompt_schema": generation_prompt_schema,
+            "judge_score_schema": judge_score_schema,
             "sys_ans": generation.answer,
             "chunks_used": generation.chunks_used,
             "chars_used": generation.chars_used,
             "context_doc_ids": generation.context_doc_ids,
             "context_page_ids": [item.doc_id for item in context],
             "context_unit_ids": [item.chunk_id for item in context],
+            "retrieved_chunk_count": len(retrieved_context),
+            "context_chunk_limit": context_chunk_limit,
             "retrieved_page_count": len(retrieval.get("hits") or []),
             "retrieval_timing": retrieval.get("timing") or {},
             "qa_config_hash": qa_config_hash,
+            "generation_seconds": round(generation_seconds, 6),
+            "judge_seconds": None,
         }
         if generation.error:
             result.update(
@@ -841,24 +873,26 @@ def _run_qa(
             )
             return result
         prompt = (
-            DOCBENCH_JUDGE_PROMPT.replace("{{question}}", question["question"])
+            judge_prompt.replace("{{question}}", question["question"])
             .replace("{{sys_ans}}", generation.answer)
             .replace("{{ref_ans}}", question["answer"])
             .replace("{{ref_text}}", question["evidence"])
         )
+        judge_started = time.perf_counter()
         try:
             judge_raw = complete(
                 judge_model,
                 prompt,
                 temperature=0.0,
-                max_output_tokens=16,
+                max_output_tokens=judge_max_output_tokens,
             )
             result.update(
                 {
                     "status": "ok",
-                    "score": _parse_score(judge_raw),
+                    "score": (score_parser or _parse_score)(judge_raw),
                     "judge_raw": judge_raw,
                     "error": None,
+                    "judge_seconds": round(time.perf_counter() - judge_started, 6),
                 }
             )
         except Exception as error:  # noqa: BLE001 - persist the failed question
@@ -868,6 +902,7 @@ def _run_qa(
                     "score": None,
                     "judge_raw": "",
                     "error": repr(error),
+                    "judge_seconds": round(time.perf_counter() - judge_started, 6),
                 }
             )
         return result

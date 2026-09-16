@@ -256,6 +256,70 @@ reports/<scope>_*.json       aggregate DocBench report
 manifest_<scope>.json        resolved run contract and paths
 ```
 
+## Manifest-backed benchmark bundles
+
+`run_benchmark_bundle_e2e.py` runs the same `baseline_legacy` chain for a
+bundle with this layout:
+
+```text
+bundle/
+  documents.jsonl
+  queries.jsonl
+  qrels.jsonl
+  data/*.pdf
+```
+
+It always uses `lake` scope because these queries are not owned by a single
+input file. Qrels are used only for derived file metrics after retrieval. The
+bundle's `source_corpus_id` is not assumed to be a local PDF page number, so
+page metrics remain unset until a page-provenance map is supplied.
+
+The full run writes `reports/lake_experiment_summary.{json,csv,md}`. It
+contains file-level `NDCG@10` and `Recall@10` for light BM25 and
+`baseline_legacy`, file recall@3, total light-preparation time, mean latency
+by stage, and observed KDL/generation/judge inference time. QA uses a ternary
+judge: `1` fully correct, `0.5` partial, and `0` incorrect; the report records
+both correct-only and correct-or-partial accuracy.
+
+The bundle runner defaults to the ViDoRe V3 answer and judge prompts
+(`qa_prompt_profile: vidore_v3`), converting its three verdict labels to the
+same numeric `1`/`0.5`/`0` report columns. Use
+`qa_prompt_profile: grounded_bundle` only when deliberately comparing against
+the older strict-abstention prompt.
+
+For a file-level Legacy retrieval evaluation that is independent from the
+generator context, configure separate chunk limits:
+
+```json
+"legacy_eval_top_k_chunks": 20,
+"generation_top_k_chunks": 3
+```
+
+The first limit is retained in the retrieval row, deduplicated to files, and
+used for Legacy file `NDCG@10`/`Recall@10`. The second limit truncates only the
+ranked chunks sent to the generator. The older `top_k_chunks` setting remains a
+backwards-compatible fallback that applies to both limits when neither new
+setting is supplied.
+
+Run a small retrieval-only smoke test first (it still needs KDL and embedding
+credentials because those are part of `baseline_legacy`):
+
+```bash
+python -m research.data_discovery.run_benchmark_bundle_e2e \
+  --bundle-root data/raw/0. BENCHMARK-20260915T030813Z-1-001 \
+  --output-dir data/benchmark/benchmark_20260915_on_demand_basic_lake_smoke \
+  --limit 2 \
+  --skip-qa
+```
+
+Run the full 220-query baseline after the smoke test succeeds:
+
+```bash
+python -m research.data_discovery.run_benchmark_bundle_e2e \
+  --bundle-root data/raw/0. BENCHMARK-20260915T030813Z-1-001 \
+  --output-dir data/benchmark/benchmark_20260915_on_demand_basic_lake
+```
+
 ## Output and caching
 
 - Discovery pipeline artifacts are isolated below
