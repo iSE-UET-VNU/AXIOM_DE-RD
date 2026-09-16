@@ -14,7 +14,6 @@ not call KDL, a reranker, ColVec, an LLM, or a QA service.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from dataclasses import asdict
 import hashlib
@@ -1060,6 +1059,7 @@ def _download_source_page_map(subset: str, cache_root: Path) -> dict[str, dict[s
             pass
     dataset = f"vidore/vidore_v3_{subset}"
     output: dict[str, dict[str, Any]] = {}
+    partial_root = cache_root / f"{safe_name(subset)}_batches"
 
     def request_payload(offset: int) -> dict[str, Any]:
         query = urllib.parse.urlencode(
@@ -1084,21 +1084,48 @@ def _download_source_page_map(subset: str, cache_root: Path) -> dict[str, dict[s
                     return json.loads(response.read().decode("utf-8"))
             except Exception as exc:  # pragma: no cover - network retry path
                 last_error = exc
-                time.sleep(min(30.0, 3.0 * (attempt + 1)))
+                retry_after = None
+                if hasattr(exc, "headers"):
+                    try:
+                        retry_after = float(exc.headers.get("Retry-After", "0"))
+                    except (TypeError, ValueError):
+                        retry_after = None
+                time.sleep(max(retry_after or 0.0, min(60.0, 3.0 * (attempt + 1))))
         raise RuntimeError(f"Could not fetch {url}: {last_error}")
 
-    def fetch(offset: int) -> list[dict[str, Any]]:
-        return request_payload(offset).get("rows") or []
+    def slim_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+        rows = []
+        for item in payload.get("rows") or []:
+            row = item["row"]
+            rows.append(
+                {
+                    "row": {
+                        "corpus_id": row["corpus_id"],
+                        "doc_id": row["doc_id"],
+                        "page_number_in_doc": row["page_number_in_doc"],
+                    }
+                }
+            )
+        return {"num_rows_total": payload.get("num_rows_total"), "rows": rows}
 
-    first_payload = request_payload(0)
+    def fetch_cached(offset: int) -> dict[str, Any]:
+        partial = partial_root / f"offset_{offset}.json"
+        if partial.is_file():
+            return json.loads(partial.read_text(encoding="utf-8"))
+        payload = slim_payload(request_payload(offset))
+        atomic_json_dump(partial, payload)
+        return payload
+
+    first_payload = fetch_cached(0)
     first_rows = first_payload.get("rows") or []
     total = int(first_payload.get("num_rows_total") or len(first_rows))
-    batches: dict[int, list[dict[str, Any]]] = {0: first_rows}
     offsets = list(range(100, total, 100))
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(fetch, offset): offset for offset in offsets}
-        for future in as_completed(futures):
-            batches[futures[future]] = future.result()
+    batches: dict[int, list[dict[str, Any]]] = {0: first_rows}
+    for offset in offsets:
+        batches[offset] = fetch_cached(offset).get("rows") or []
+        # The endpoint rate-limits bursts. Serial requests are deliberate: a
+        # small pause is faster than retrying a fan-out after HTTP 429.
+        time.sleep(0.75)
     for offset in sorted(batches):
         for item in batches[offset]:
             row = item["row"]
