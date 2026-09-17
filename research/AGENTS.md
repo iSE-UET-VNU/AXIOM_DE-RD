@@ -394,3 +394,30 @@ https://arxiv.org/abs/2410.10594
 - Report bootstrap intervals and per-query gains/losses; do not claim a
   method is better from a same-set sweep alone.
 - Every new experiment must be a new script and a new output directory.
+
+## Latest active benchmark handoff (2026-09-17)
+
+The active implementation branch is `benchmark-hierarchical`. The new merged
+benchmark is `data/raw/BENCHMARK`: 101 PDFs, 5,334 pages and 220 queries
+(Physics 80 queries, Industrial 75, MPDocVQA 65). It is not a 220-file
+corpus. Page-level qrels contain 1,083 normalized evidence records.
+
+The completed light-only artifact is
+`data/work/benchmark_hierarchical_local/`. It uses PDF-inspector, selective
+Tesseract and BM25 with V-SPLADE disabled, selects Kf=3 files, saves top-20
+pages and evaluates top-10:
+
+| page recall@10 | nDCG@10 | page recall@20 | nDCG@20 | file recall@3 |
+|---:|---:|---:|---:|---:|
+| 36.72% | 32.59 | 40.64% | 33.68 | 53.79% |
+
+The cached run used Tesseract `eng`; the planned Colab KDL run uses `fra+eng`
+and is a separate run. Its completed preparation diagnostics were 821 OCR
+requests, 652 non-empty results, 169 empty results and 0 OCR errors.
+
+Commit `1a21c36` adds the OCR-capable generic runner. The local KDL notebook
+`C:/Users/admin/Downloads/KDL_serving_de_full.ipynb` now uses the same-Colab
+endpoint `http://127.0.0.1:8000/v1` instead of ngrok. Light retrieval runs
+without V-SPLADE; `run_benchmark_kdl_second.py` is intended to run KDL over
+the saved top-20 pages and retrieve top-10 pages/chunks. No completed KDL
+second-retrieval metric exists yet for this benchmark.

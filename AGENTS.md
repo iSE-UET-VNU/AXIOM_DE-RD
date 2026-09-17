@@ -319,3 +319,77 @@ query language, parser/text source, model/checkpoint, timing, and output path.
   one should not be used as a proxy for another.
 - When a result is tuned on the same benchmark, label it exploratory and avoid
   presenting it as a generalizable final baseline.
+
+## Latest handoff: merged benchmark light retrieval and KDL run (2026-09-17)
+
+The active branch is `benchmark-hierarchical`. The current merged benchmark is
+`data/raw/BENCHMARK` (the phrase “220-file benchmark” is incorrect):
+
+- 101 PDFs, 5,334 pages and 220 queries.
+- Source composition: ViDoRe Physics 22 PDFs / 80 queries; ViDoRe Industrial
+  16 PDFs / 75 queries; MPDocVQA 63 PDFs / 65 queries.
+- Evaluation is page-level with 1,083 normalized page-qrel records. Qrels are
+  used only for normalization/evaluation, not parsing or ranking.
+
+### Completed light baseline on the new benchmark
+
+Artifact root: `data/work/benchmark_hierarchical_local/`
+
+Run: `runs/hierarchical_kf3_top20.jsonl`
+
+Report: `reports/report.json`
+
+Protocol:
+
+```text
+PDF/image input
+  -> PDF-inspector page extraction/classification
+  -> selective Tesseract for scanned/empty/image-placeholder pages
+  -> page/file BM25 indexes
+  -> hierarchical file selection Kf=3
+  -> page ranking; save top-20 and evaluate top-10
+```
+
+V-SPLADE was explicitly disabled in this completed run:
+
+| Metric | Result |
+|---|---:|
+| Page recall@10 | 36.72% |
+| nDCG@10 | 32.59 |
+| Page recall@20 | 40.64% |
+| nDCG@20 | 33.68 |
+| File candidate/derived recall@3 | 53.79% |
+
+Preparation diagnostics: 821 pages requested OCR, 652 returned text, 169
+returned no text, and 0 OCR errors. The cached run used `ocr_language=eng`
+(see `config.json`); it must not be reported as the later planned `fra+eng`
+Colab run. Timing artifacts are in `timing.json`: qrels normalization
+206.97 s, BM25 build 12.08 s, retrieval 4.16 s; OCR wall time was 581.01 s
+with 32 workers.
+
+### Current implementation and Colab/KDL path
+
+Commit `1a21c36` is pushed to `origin/benchmark-hierarchical`. It adds
+selectable `--visual-mode disabled`, selective/all/disabled Tesseract OCR,
+OCR language/worker/timeout options, resume-compatible preparation artifacts,
+and tests.
+
+The KDL notebook is a local user artifact at
+`C:/Users/admin/Downloads/KDL_serving_de_full.ipynb`. Its intended flow is:
+
+1. Start `KDLAI/KDL-Frontier-Parser-nano` through vLLM on the same Colab GPU,
+   bound to `127.0.0.1:8000`.
+2. Use `KDL_API_BASE=http://127.0.0.1:8000/v1`; ngrok is not needed when light
+   preparation and KDL run in the same notebook.
+3. Clone/pull `benchmark-hierarchical`, install Tesseract `eng+fra`, and run
+   light retrieval with `Kf=3`, metric depth 10, saved depth 20, BM25 only,
+   selective Tesseract and `fra+eng`.
+4. Use `research/experiments/run_benchmark_kdl_second.py` for KDL second
+   retrieval over the saved top-20 pages, retrieving top-10 pages or chunks.
+   This second-retrieval run has not yet been completed on the new benchmark.
+
+The notebook source is statically validated. The runner accepts all OCR
+options, the benchmark tests pass (`8 passed`), and a real CPU smoke test
+completed every stage on one PDF and two queries. A full Colab result still
+requires starting vLLM successfully on an L4; do not claim KDL metrics until
+its `reports/report.json` exists.
