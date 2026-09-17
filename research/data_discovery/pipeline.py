@@ -319,6 +319,7 @@ def run_selected_pages(
     project_root: str | Path | None = None,
     work_dir: str | Path | None = None,
     one_page_inputs: bool = True,
+    on_document_complete: Callable[[Any], None] | None = None,
 ) -> OnDemandResult:
     """Ingest a preselected page set through the normal pipeline stages.
 
@@ -340,6 +341,7 @@ def run_selected_pages(
         project_root=project_root,
         work_dir=work_dir,
         one_page_inputs=one_page_inputs,
+        on_document_complete=on_document_complete,
     )
 
     from src import cleaning, enrichment
@@ -522,6 +524,7 @@ def _ingest_selected_pages(
     project_root: str | Path | None,
     work_dir: str | Path | None,
     one_page_inputs: bool = False,
+    on_document_complete: Callable[[Any], None] | None = None,
 ) -> ingestion_runner.IngestionOutput:
     from src import ingestion as ingestion_runner
 
@@ -562,10 +565,35 @@ def _ingest_selected_pages(
                         },
                     )
                 )
+        def accept_partial(partial: ingestion_runner.IngestionOutput) -> None:
+            # Attach the original-page metadata before exposing a checkpoint
+            # callback.  The parser callback fires while the shared provider
+            # queue is still running, so the callback can persist progress
+            # without changing the parser's concurrency/scheduling policy.
+            partial_metadata_by_id = {
+                item.object_id: item.metadata
+                for item in partial.data_objects
+            }
+            for partial_parsed in partial.parsed_data:
+                _copy_discovery_metadata(
+                    partial_parsed,
+                    partial_metadata_by_id.get(partial_parsed.object_id, {}),
+                )
+                _restore_original_page_coordinates(partial_parsed)
+            for partial_quarantined in partial.quarantined_documents:
+                _copy_discovery_metadata(
+                    partial_quarantined.parsed,
+                    partial_quarantined.source.metadata,
+                )
+                _restore_original_page_coordinates(partial_quarantined.parsed)
+            if on_document_complete is not None:
+                on_document_complete(partial)
+
         output = ingestion_runner.run_many(
             inputs,
             parser_config=parser_config,
             project_root=project_root,
+            on_document_complete=accept_partial if on_document_complete else None,
         )
         metadata_by_id = {
             item.object_id: item.metadata for item in output.data_objects
