@@ -126,6 +126,7 @@ class PdfInspectorPageParser:
         for page_index, regions in enumerate(extracted):
             region = regions[0] if regions else None
             text = region.text.strip() if region else ""
+            classification_needs_ocr = page_index in classification.pages_needing_ocr
             out.append(
                 PageEvidence(
                     page_id=getattr(self, "_page_id_factory", page_id)(
@@ -136,15 +137,25 @@ class PdfInspectorPageParser:
                     page_index=page_index,
                     page_number=page_index + 1,
                     text=text,
+                    # Some scanned PDFs return an image placeholder such as
+                    # ``[Image: Im0]`` from the region extractor while the
+                    # document classifier correctly marks the page as OCR
+                    # input.  Preserve both signals instead of trusting the
+                    # region-level flag alone.
                     needs_ocr=(
-                        bool(region.needs_ocr)
-                        if region
-                        else page_index in classification.pages_needing_ocr
+                        bool(region.needs_ocr) if region else False
+                    ) or classification_needs_ocr,
+                    ocr_reason=(
+                        region.ocr_reason
+                        if region and region.ocr_reason
+                        else ("document_classified_scanned" if classification_needs_ocr else None)
                     ),
-                    ocr_reason=(region.ocr_reason if region else None),
                     metadata={
                         "pdf_type": classification.pdf_type,
                         "pdf_confidence": classification.confidence,
+                        "classification_pages_needing_ocr": sorted(
+                            classification.pages_needing_ocr
+                        ),
                         "classification_latency_ms": classification.latency_ms,
                     },
                 )

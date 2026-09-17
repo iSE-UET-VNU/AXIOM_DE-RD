@@ -1,4 +1,4 @@
-"""Run generic raw-input BM25 + V-SPLADE hierarchical retrieval.
+"""Run generic raw-input light preparation and BM25 + V-SPLADE retrieval.
 
 The command is intentionally stageable so a Colab runtime can resume after an
 interruption.  The default cascade is the fixed Physics arm:
@@ -7,14 +7,18 @@ interruption.  The default cascade is the fixed Physics arm:
     file = .50 direct-file-BM25 + .50 max(page)
     page_final = .85 page + .15 parent-file
 
-The runner stops after the light stage and writes a slim top-20 run.  It does
-not call KDL, a reranker, ColVec, an LLM, or a QA service.
+The preparation stage uses PDF-inspector native text and selective Tesseract
+OCR for scanned/empty pages.  It writes page-level text, OCR metadata and
+timings before the visual/retrieval stages.  The runner stops after the light
+stage and writes a slim top-20 run.  It does not call KDL, a reranker, ColVec,
+an LLM, or a QA service.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 import hashlib
 import importlib.metadata
@@ -38,6 +42,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from research.data_discovery.pipeline import PdfInspectorPageParser  # noqa: E402
+from research.data_discovery.tesseract import (  # noqa: E402
+    OCRResult,
+    check_tesseract,
+    ocr_page,
+)
 from research.data_discovery.raw_hierarchical import (  # noqa: E402
     VECTOR_DIM,
     RawDocument,
@@ -168,9 +177,18 @@ def _config(args: argparse.Namespace) -> dict[str, Any]:
         "qrels": str(args.qrels.resolve()) if args.qrels else None,
         "model": args.model,
         "device": args.device,
+        "visual_mode": args.visual_mode,
         "batch_size": args.batch_size,
         "query_batch_size": args.query_batch_size,
         "render_dpi": args.render_dpi,
+        "ocr_mode": args.ocr_mode,
+        "ocr_language": args.ocr_language,
+        "ocr_dpi": args.ocr_dpi,
+        "ocr_psm": args.ocr_psm,
+        "ocr_workers": args.ocr_workers,
+        "ocr_timeout_seconds": args.ocr_timeout_seconds,
+        "tesseract": str(args.tesseract),
+        "tessdata_dir": str(args.tessdata_dir) if args.tessdata_dir else None,
         "file_k": args.file_k,
         "metric_page_k": args.metric_page_k,
         "saved_page_k": args.saved_page_k,
@@ -190,6 +208,53 @@ def _config_hash(config: Mapping[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def _is_placeholder_text(text: str) -> bool:
+    """Return true for image markers, not OCR/indexable page text."""
+
+    value = text.strip()
+    return bool(value) and value.startswith("[Image:") and value.endswith("]")
+
+
+def _needs_ocr(page: RawPage, *, mode: str) -> bool:
+    if mode == "disabled":
+        return False
+    if mode == "all":
+        return True
+    return bool(page.needs_ocr or not page.text.strip() or _is_placeholder_text(page.text))
+
+
+def _merge_ocr_page(page: RawPage, result: OCRResult) -> RawPage:
+    native_text = page.text.strip()
+    usable_native = bool(native_text) and not _is_placeholder_text(native_text)
+    if result.text.strip():
+        return RawPage(
+            **{
+                **page.as_dict(),
+                "text": result.text.strip(),
+                "text_source": "tesseract",
+                "ocr_applied": True,
+                "ocr_word_count": result.word_count,
+                "ocr_mean_confidence": result.mean_confidence,
+                "ocr_render_seconds": result.render_seconds,
+                "ocr_seconds": result.ocr_seconds,
+                "ocr_error": result.error,
+            }
+        )
+    return RawPage(
+        **{
+            **page.as_dict(),
+            "text": native_text if usable_native else "",
+            "text_source": page.text_source if usable_native else "empty",
+            "ocr_applied": True,
+            "ocr_word_count": result.word_count,
+            "ocr_mean_confidence": result.mean_confidence,
+            "ocr_render_seconds": result.render_seconds,
+            "ocr_seconds": result.ocr_seconds,
+            "ocr_error": result.error or "Tesseract returned no text",
+        }
+    )
+
+
 class Runner:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -206,8 +271,27 @@ class Runner:
         self.config = _config(args)
         self.config["input_signature"] = self.input_signature
         self.config_hash = _config_hash(self.config)
+        self.preparation_signature = _config_hash(
+            {
+                "contract": "light-preparation-v2",
+                "ocr_mode": args.ocr_mode,
+                "ocr_language": args.ocr_language,
+                "ocr_dpi": args.ocr_dpi,
+                "ocr_psm": args.ocr_psm,
+                "ocr_timeout_seconds": args.ocr_timeout_seconds,
+                "tesseract": str(args.tesseract),
+                "tessdata_dir": str(args.tessdata_dir) if args.tessdata_dir else None,
+            }
+        )
         self.config_path = self.root / "config.json"
-        atomic_json_dump(self.config_path, {**self.config, "config_hash": self.config_hash})
+        atomic_json_dump(
+            self.config_path,
+            {
+                **self.config,
+                "config_hash": self.config_hash,
+                "preparation_signature": self.preparation_signature,
+            },
+        )
         self.pages: list[RawPage] | None = None
 
     def _input_signature(self) -> str:
@@ -255,17 +339,22 @@ class Runner:
 
     def _stage_artifacts(self, stage: str) -> list[str]:
         run_name = f"hierarchical_kf{self.args.file_k}_top{self.args.saved_page_k}.jsonl"
-        return {
-            "validate": ["manifest.json", "input_inventory.jsonl"],
-            "normalize-qrels": ["qrels_page_level.jsonl", "qrels_mapping.json"],
-            "parse": ["parsing/pages.jsonl", "parsing/summary.json"],
-            "encode-vsplade": [
+        visual_artifacts = (
+            ["vsplade/disabled.json"]
+            if self.args.visual_mode == "disabled"
+            else [
                 "vsplade/page_vectors.npz",
                 "vsplade/page_metadata.json",
                 "vsplade/query_vectors.npz",
                 "vsplade/query_metadata.json",
                 "vsplade/timing.json",
-            ],
+            ]
+        )
+        return {
+            "validate": ["manifest.json", "input_inventory.jsonl"],
+            "normalize-qrels": ["qrels_page_level.jsonl", "qrels_mapping.json"],
+            "parse": ["parsing/pages.jsonl", "parsing/summary.json"],
+            "encode-vsplade": visual_artifacts,
             "build-bm25": [
                 "indexes/page_bm25.json",
                 "indexes/file_bm25.json",
@@ -469,15 +558,107 @@ class Runner:
         all_pages: list[RawPage] = []
         file_stats: list[dict[str, Any]] = []
         errors = 0
+        ocr_requested_pages = 0
+        ocr_success_pages = 0
+        ocr_no_text_pages = 0
+        ocr_error_pages = 0
+        ocr_render_seconds = 0.0
+        ocr_seconds = 0.0
+        ocr_wall_seconds = 0.0
+        tesseract_info: dict[str, Any] | None = None
+
+        def run_ocr(document: RawDocument, pages: list[RawPage]) -> tuple[list[RawPage], dict[str, Any]]:
+            nonlocal tesseract_info
+            targets = [
+                page
+                for page in pages
+                if _needs_ocr(page, mode=self.args.ocr_mode)
+            ]
+            if not targets:
+                return pages, {
+                    "requested_pages": 0,
+                    "success_pages": 0,
+                    "no_text_pages": 0,
+                    "error_pages": 0,
+                    "render_seconds_sum": 0.0,
+                    "ocr_seconds_sum": 0.0,
+                    "wall_seconds": 0.0,
+                }
+            if tesseract_info is None:
+                tesseract_info = check_tesseract(
+                    self.args.tesseract,
+                    self.args.ocr_language,
+                )
+            started = time.perf_counter()
+            by_index = {page.page_index: page for page in pages}
+            results: dict[int, OCRResult] = {}
+            with ThreadPoolExecutor(max_workers=self.args.ocr_workers) as pool:
+                futures = {
+                    pool.submit(
+                        ocr_page,
+                        document.path,
+                        page.page_index,
+                        tesseract=self.args.tesseract,
+                        language=self.args.ocr_language,
+                        dpi=self.args.ocr_dpi,
+                        psm=self.args.ocr_psm,
+                        tessdata_dir=self.args.tessdata_dir,
+                        timeout_seconds=self.args.ocr_timeout_seconds,
+                    ): page
+                    for page in targets
+                }
+                for future in as_completed(futures):
+                    page = futures[future]
+                    result = future.result()
+                    results[page.page_index] = result
+                    self.events.write(
+                        "ocr_page",
+                        "error" if result.error else "complete",
+                        doc_id=document.doc_id,
+                        page_id=page.page_id,
+                        page_index=page.page_index,
+                        text_source="tesseract" if result.text.strip() else "empty",
+                        **result.as_dict(),
+                    )
+            prepared = [
+                _merge_ocr_page(by_index[page_index], results[page_index])
+                if page_index in results
+                else by_index[page_index]
+                for page_index in sorted(by_index)
+            ]
+            result_values = list(results.values())
+            return prepared, {
+                "requested_pages": len(targets),
+                "success_pages": sum(bool(result.text.strip()) for result in result_values),
+                "no_text_pages": sum(
+                    not result.text.strip() and not result.error
+                    for result in result_values
+                ),
+                "error_pages": sum(bool(result.error) for result in result_values),
+                "render_seconds_sum": sum(result.render_seconds for result in result_values),
+                "ocr_seconds_sum": sum(result.ocr_seconds for result in result_values),
+                "wall_seconds": time.perf_counter() - started,
+            }
+
         for document in documents:
             target = checkpoint_dir / f"{safe_name(document.doc_id)}.jsonl"
             stat_path = checkpoint_dir / f"{safe_name(document.doc_id)}.json"
             if target.is_file() and stat_path.is_file() and document.path.stat().st_size > 0:
                 stat = json.loads(stat_path.read_text(encoding="utf-8"))
-                if stat.get("input_sha256") == sha256_file(document.path):
+                if (
+                    stat.get("input_sha256") == sha256_file(document.path)
+                    and stat.get("preparation_signature") == self.preparation_signature
+                ):
                     cached = [RawPage(**row) for row in read_jsonl(target)]
                     all_pages.extend(cached)
                     file_stats.append({**stat, "resumed": True})
+                    ocr_requested_pages += int(stat.get("ocr_requested_pages", 0))
+                    ocr_success_pages += int(stat.get("ocr_success_pages", 0))
+                    ocr_no_text_pages += int(stat.get("ocr_no_text_pages", 0))
+                    ocr_error_pages += int(stat.get("ocr_error_pages", 0))
+                    ocr_render_seconds += float(stat.get("ocr_render_seconds_sum", 0.0))
+                    ocr_seconds += float(stat.get("ocr_seconds_sum", 0.0))
+                    ocr_wall_seconds += float(stat.get("ocr_wall_seconds", 0.0))
                     self.events.write("parse_document", "skipped", doc_id=document.doc_id, pages=len(cached))
                     continue
             started = time.perf_counter()
@@ -495,6 +676,9 @@ class Runner:
                         page_number=1,
                         text="",
                         visual_only=True,
+                        needs_ocr=self.args.ocr_mode != "disabled",
+                        pdf_type="image",
+                        text_source="empty",
                     )
                 ]
             else:
@@ -517,11 +701,29 @@ class Runner:
                                 relative_path=document.relative_path,
                                 page_index=page_index,
                                 page_number=page_index + 1,
-                                text=item.text if item else "",
+                                text=(
+                                    ""
+                                    if item and _is_placeholder_text(item.text)
+                                    else (item.text if item else "")
+                                ),
                                 visual_only=False,
-                                needs_ocr=bool(item.needs_ocr) if item else False,
+                                needs_ocr=(
+                                    bool(item.needs_ocr)
+                                    or not (item.text.strip() if item else "")
+                                    or _is_placeholder_text(item.text if item else "")
+                                ),
                                 parse_status="ok" if item else "missing-page-record",
                                 parse_error=None if item else "pdf-inspector returned no record",
+                                pdf_type=(
+                                    str(item.metadata.get("pdf_type"))
+                                    if item and item.metadata.get("pdf_type") is not None
+                                    else None
+                                ),
+                                text_source=(
+                                    "pdf_inspector"
+                                    if item and item.text.strip() and not _is_placeholder_text(item.text)
+                                    else "empty"
+                                ),
                             )
                         )
                 except Exception as exc:
@@ -545,19 +747,39 @@ class Runner:
                             visual_only=False,
                             parse_status="error",
                             parse_error=error_text,
+                            needs_ocr=self.args.ocr_mode != "disabled",
+                            text_source="empty",
                         )
                         for page_index in range(actual_count)
                     ]
                     self.events.error("parse_document", exc, doc_id=document.doc_id)
+            pages, ocr_stats = run_ocr(document, pages)
+            ocr_requested_pages += int(ocr_stats["requested_pages"])
+            ocr_success_pages += int(ocr_stats["success_pages"])
+            ocr_no_text_pages += int(ocr_stats["no_text_pages"])
+            ocr_error_pages += int(ocr_stats["error_pages"])
+            ocr_render_seconds += float(ocr_stats["render_seconds_sum"])
+            ocr_seconds += float(ocr_stats["ocr_seconds_sum"])
+            ocr_wall_seconds += float(ocr_stats["wall_seconds"])
             write_jsonl(target, (page.as_dict() for page in pages))
             stat = {
                 "doc_id": document.doc_id,
                 "input_sha256": sha256_file(document.path),
+                "preparation_signature": self.preparation_signature,
                 "status": status,
                 "error": error_text,
                 "pages": len(pages),
                 "text_pages": sum(bool(page.text.strip()) for page in pages),
                 "empty_pages": sum(not page.text.strip() for page in pages),
+                "native_text_pages": sum(page.text_source == "pdf_inspector" for page in pages),
+                "ocr_requested_pages": int(ocr_stats["requested_pages"]),
+                "ocr_success_pages": int(ocr_stats["success_pages"]),
+                "ocr_no_text_pages": int(ocr_stats["no_text_pages"]),
+                "ocr_error_pages": int(ocr_stats["error_pages"]),
+                "ocr_render_seconds_sum": float(ocr_stats["render_seconds_sum"]),
+                "ocr_seconds_sum": float(ocr_stats["ocr_seconds_sum"]),
+                "ocr_wall_seconds": float(ocr_stats["wall_seconds"]),
+                "pdf_types": sorted({page.pdf_type for page in pages if page.pdf_type}),
                 "seconds": time.perf_counter() - started,
             }
             atomic_json_dump(stat_path, stat)
@@ -579,16 +801,69 @@ class Runner:
                 "text_pages": sum(bool(page.text.strip()) for page in all_pages),
                 "visual_only_pages": sum(page.visual_only for page in all_pages),
                 "parse_errors": errors,
+                "ocr_mode": self.args.ocr_mode,
+                "ocr_requested_pages": ocr_requested_pages,
+                "ocr_success_pages": ocr_success_pages,
+                "ocr_no_text_pages": ocr_no_text_pages,
+                "ocr_error_pages": ocr_error_pages,
+                "ocr_render_seconds_sum": ocr_render_seconds,
+                "ocr_seconds_sum": ocr_seconds,
+                "ocr_wall_seconds": ocr_wall_seconds,
+                "tesseract": tesseract_info,
                 "files": file_stats,
             },
         )
-        return {"documents": len(documents), "pages": len(all_pages), "parse_errors": errors}
+        return {
+            "documents": len(documents),
+            "pages": len(all_pages),
+            "parse_errors": errors,
+            "ocr_requested_pages": ocr_requested_pages,
+            "ocr_success_pages": ocr_success_pages,
+            "ocr_no_text_pages": ocr_no_text_pages,
+            "ocr_error_pages": ocr_error_pages,
+            "ocr_wall_seconds": ocr_wall_seconds,
+        }
 
     def encode_vsplade(self) -> dict[str, Any]:
         documents, queries = self.load_inputs()
         pages = [RawPage(**row) for row in read_jsonl(self.root / "parsing/pages.jsonl")]
         self.pages = pages
         visual_root = self.root / "vsplade"
+        if self.args.visual_mode == "disabled":
+            atomic_json_dump(
+                visual_root / "disabled.json",
+                {
+                    "enabled": False,
+                    "reason": "text-only light retrieval requested",
+                    "pages": len(pages),
+                    "queries": len(queries),
+                },
+            )
+            atomic_json_dump(
+                self.root / "rendering/page_metadata.json",
+                {
+                    "enabled": False,
+                    "pages": len(pages),
+                    "documents": len(documents),
+                    "rendered_in_memory": False,
+                },
+            )
+            atomic_json_dump(
+                visual_root / "timing.json",
+                {
+                    "enabled": False,
+                    "page_count": len(pages),
+                    "query_count": len(queries),
+                    "device": self.args.device,
+                    "model": self.args.model,
+                },
+            )
+            return {
+                "enabled": False,
+                "pages": len(pages),
+                "queries": len(queries),
+                "seconds": 0.0,
+            }
         checkpoint_root = visual_root / "page_checkpoints"
         checkpoint_root.mkdir(parents=True, exist_ok=True)
         rendering_root = self.root / "rendering"
@@ -760,15 +1035,19 @@ class Runner:
         documents, queries = self.load_inputs()
         page_index = BM25Index.load(self.root / "indexes/page_bm25.json")
         file_index = BM25Index.load(self.root / "indexes/file_bm25.json")
-        page_vectors = _load_csr(self.root / "vsplade/page_vectors.npz")
-        query_vectors = _load_csr(self.root / "vsplade/query_vectors.npz")
-        if page_vectors.shape[0] != len(pages) or query_vectors.shape[0] != len(queries):
-            raise RuntimeError("Vector/index/query count mismatch before retrieval")
+        visual_enabled = self.args.visual_mode != "disabled"
+        if visual_enabled:
+            page_vectors = _load_csr(self.root / "vsplade/page_vectors.npz")
+            query_vectors = _load_csr(self.root / "vsplade/query_vectors.npz")
+            if page_vectors.shape[0] != len(pages) or query_vectors.shape[0] != len(queries):
+                raise RuntimeError("Vector/index/query count mismatch before retrieval")
+            score_matrix = (query_vectors @ page_vectors.T).toarray()
+        else:
+            score_matrix = None
         pages_by_id = {page.page_id: page for page in pages}
         page_to_file = {page.page_id: page.doc_id for page in pages}
         file_ids = [document.doc_id for document in documents]
         page_positions = {page.page_id: index for index, page in enumerate(pages)}
-        score_matrix = (query_vectors @ page_vectors.T).toarray()
         output_rows: list[dict[str, Any]] = []
         timings: list[dict[str, Any]] = []
         started_all = time.perf_counter()
@@ -777,7 +1056,14 @@ class Runner:
             bm25_hits = page_index.search(query["query"], len(pages))
             page_bm25 = {page_index.chunk_ids[position]: float(score) for position, score in bm25_hits}
             bm25_norm = normalise_scores(page_bm25)
-            visual = {page.page_id: float(score_matrix[query_row, position]) for position, page in enumerate(pages)}
+            visual = (
+                {
+                    page.page_id: float(score_matrix[query_row, position])
+                    for position, page in enumerate(pages)
+                }
+                if score_matrix is not None
+                else {page.page_id: 0.0 for page in pages}
+            )
             visual_norm = normalise_scores(visual)
             page_base = {
                 page.page_id: 0.70 * bm25_norm.get(page.page_id, 0.0) + 0.30 * visual_norm.get(page.page_id, 0.0)
@@ -942,6 +1228,14 @@ class Runner:
                 "parser_empty_pages": int(parsing.get("empty_pages", 0)),
                 "visual_only_pages": int(parsing.get("visual_only_pages", 0)),
                 "parse_errors": int(parsing.get("parse_errors", 0)),
+                "ocr_mode": parsing.get("ocr_mode"),
+                "ocr_requested_pages": int(parsing.get("ocr_requested_pages", 0)),
+                "ocr_success_pages": int(parsing.get("ocr_success_pages", 0)),
+                "ocr_no_text_pages": int(parsing.get("ocr_no_text_pages", 0)),
+                "ocr_error_pages": int(parsing.get("ocr_error_pages", 0)),
+                "ocr_wall_seconds": float(parsing.get("ocr_wall_seconds", 0.0)),
+                "ocr_render_seconds_sum": float(parsing.get("ocr_render_seconds_sum", 0.0)),
+                "ocr_seconds_sum": float(parsing.get("ocr_seconds_sum", 0.0)),
                 "mapping_failures": int(
                     json.loads((self.root / "qrels_mapping.json").read_text(encoding="utf-8")).get("failures", 0)
                     if (self.root / "qrels_mapping.json").is_file()
@@ -973,6 +1267,12 @@ class Runner:
             f"| Mean candidate pages | {report['cost']['mean_candidate_pages']:.2f} |",
             f"| Mean retrieval seconds/query | {report['timing']['mean_query_seconds']:.6f} |",
             "",
+            "## Light preparation diagnostics",
+            "",
+            f"- OCR mode: **{report['diagnostics']['ocr_mode']}**.",
+            f"- OCR requested/success/no-text/error pages: **{report['diagnostics']['ocr_requested_pages']} / {report['diagnostics']['ocr_success_pages']} / {report['diagnostics']['ocr_no_text_pages']} / {report['diagnostics']['ocr_error_pages']}**.",
+            f"- OCR wall time: **{report['diagnostics']['ocr_wall_seconds']:.3f}s**; render CPU sum: **{report['diagnostics']['ocr_render_seconds_sum']:.3f}s**; Tesseract CPU sum: **{report['diagnostics']['ocr_seconds_sum']:.3f}s**.",
+            "",
             f"Full per-query diagnostics are in `report.json`; saved run rows are in `runs/{run_name}`.",
         ]
         atomic_write_text(self.root / "reports/report.md", "\n".join(report_md) + "\n")
@@ -993,10 +1293,6 @@ class Runner:
             "parsing/pages.jsonl",
             "parsing/summary.json",
             "rendering/page_metadata.json",
-            "vsplade/page_vectors.npz",
-            "vsplade/page_metadata.json",
-            "vsplade/query_vectors.npz",
-            "vsplade/query_metadata.json",
             "vsplade/timing.json",
             "indexes/page_bm25.json",
             "indexes/file_bm25.json",
@@ -1009,6 +1305,16 @@ class Runner:
             "logs/events.jsonl",
             "logs/errors.jsonl",
         ]
+        include.extend(
+            ["vsplade/disabled.json"]
+            if self.args.visual_mode == "disabled"
+            else [
+                "vsplade/page_vectors.npz",
+                "vsplade/page_metadata.json",
+                "vsplade/query_vectors.npz",
+                "vsplade/query_metadata.json",
+            ]
+        )
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for relative in include:
                 source = self.root / relative
@@ -1172,9 +1478,33 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--force-stage", action="append", default=[])
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--visual-mode",
+        choices=["vsplade", "disabled"],
+        default="vsplade",
+        help="Use V-SPLADE or run text-only BM25 light retrieval.",
+    )
     parser.add_argument("--batch-size", type=int, default=3)
     parser.add_argument("--query-batch-size", type=int, default=64)
     parser.add_argument("--render-dpi", type=int, default=144)
+    parser.add_argument(
+        "--ocr-mode",
+        choices=["selective", "all", "disabled"],
+        default="selective",
+        help="Run Tesseract on scanned/empty pages, all pages, or no pages.",
+    )
+    parser.add_argument("--tesseract", default="tesseract")
+    parser.add_argument("--tessdata-dir", type=Path)
+    parser.add_argument("--ocr-language", default="eng")
+    parser.add_argument("--ocr-dpi", type=int, default=144)
+    parser.add_argument("--ocr-psm", type=int, default=3)
+    parser.add_argument(
+        "--ocr-workers",
+        type=int,
+        default=16,
+        help="Parallel Tesseract workers; 16 is the local default and 32 is optional.",
+    )
+    parser.add_argument("--ocr-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--file-k", type=int, default=3)
     parser.add_argument("--metric-page-k", type=int, default=10)
     parser.add_argument("--saved-page-k", type=int, default=20)
@@ -1195,8 +1525,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.qrels = default_qrels.resolve()
     if args.file_k <= 0 or args.metric_page_k <= 0 or args.saved_page_k < args.metric_page_k:
         raise SystemExit("Require file-k > 0 and saved-page-k >= metric-page-k > 0")
-    if args.batch_size <= 0 or args.query_batch_size <= 0 or args.render_dpi <= 0:
-        raise SystemExit("Batch sizes and render DPI must be positive")
+    if (
+        args.batch_size <= 0
+        or args.query_batch_size <= 0
+        or args.render_dpi <= 0
+        or args.ocr_dpi <= 0
+        or args.ocr_workers <= 0
+        or args.ocr_timeout_seconds <= 0
+    ):
+        raise SystemExit("Batch sizes, DPI, OCR workers and timeout must be positive")
     if args.limit_documents is not None and args.limit_documents <= 0:
         raise SystemExit("limit-documents must be positive")
     if args.limit_queries is not None and args.limit_queries <= 0:

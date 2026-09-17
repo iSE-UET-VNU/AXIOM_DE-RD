@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from research.data_discovery.raw_hierarchical import (
     RawPage,
@@ -13,7 +14,10 @@ from research.data_discovery.raw_hierarchical import (
     load_documents,
     sort_scores,
 )
+from research.data_discovery.pipeline import PdfInspectorPageParser
+from research.data_discovery.tesseract import OCRResult, _parse_tsv
 from research.experiments.run_benchmark_hierarchical import _ndcg
+from research.experiments.run_benchmark_hierarchical import _merge_ocr_page
 
 
 def _pages() -> list[RawPage]:
@@ -118,3 +122,74 @@ def test_manifest_can_materialise_an_image_as_one_visual_page(tmp_path: Path) ->
     assert len(documents) == 1
     assert documents[0].is_image
     assert not documents[0].is_pdf
+
+
+def test_pdf_inspector_classification_ocr_signal_is_preserved(tmp_path: Path) -> None:
+    class FakeAPI:
+        @staticmethod
+        def classify_pdf(path: str):
+            return SimpleNamespace(
+                pdf_type="scanned",
+                confidence=0.95,
+                page_count=1,
+                pages_needing_ocr=[0],
+            )
+
+        @staticmethod
+        def extract_text_in_regions(path: str, requests):
+            return [
+                SimpleNamespace(
+                    regions=[
+                        SimpleNamespace(
+                            text="[Image: Im0]",
+                            needs_ocr=False,
+                            ocr_reason=None,
+                        )
+                    ]
+                )
+                for _page_index, _boxes in requests
+            ]
+
+    path = tmp_path / "scanned.pdf"
+    path.write_bytes(b"placeholder")
+    parser = PdfInspectorPageParser(
+        api=FakeAPI(),
+        page_dimensions=lambda _path: [(100.0, 100.0)],
+    )
+    page = parser.parse(path, source_uri="doc")[0]
+    assert page.needs_ocr is True
+    assert page.ocr_reason == "document_classified_scanned"
+    assert page.metadata["pdf_type"] == "scanned"
+
+
+def test_tsv_ocr_result_and_placeholder_replacement() -> None:
+    tsv = (
+        "level\tpage_num\tconf\ttext\n"
+        "5\t1\t92.0\tEntropy\n"
+        "5\t1\t80.0\tmaximale\n"
+    ).encode()
+    text, words, confidence = _parse_tsv(tsv)
+    assert text == "Entropy maximale"
+    assert words == 2
+    assert confidence == 86.0
+
+    page = RawPage(
+        page_id="doc#page=0",
+        doc_id="doc",
+        source="raw",
+        source_path="doc.pdf",
+        relative_path="doc.pdf",
+        page_index=0,
+        page_number=1,
+        text="[Image: Im0]",
+        visual_only=False,
+        needs_ocr=True,
+    )
+    prepared = _merge_ocr_page(
+        page,
+        OCRResult("Entropy maximale", 2, 86.0, 0.2, 0.3),
+    )
+    assert prepared.text == "Entropy maximale"
+    assert prepared.text_source == "tesseract"
+    assert prepared.ocr_applied is True
+    assert prepared.ocr_mean_confidence == 86.0

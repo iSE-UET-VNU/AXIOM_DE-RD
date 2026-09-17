@@ -124,6 +124,14 @@ class RawPage:
     needs_ocr: bool = False
     parse_status: str = "ok"
     parse_error: str | None = None
+    pdf_type: str | None = None
+    text_source: str = "pdf_inspector"
+    ocr_applied: bool = False
+    ocr_word_count: int = 0
+    ocr_mean_confidence: float | None = None
+    ocr_render_seconds: float = 0.0
+    ocr_seconds: float = 0.0
+    ocr_error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
