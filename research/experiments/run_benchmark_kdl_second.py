@@ -319,10 +319,25 @@ def _parse_with_resume(
     if args.resume and manifest_path.is_file():
         existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if existing_manifest.get("input_hash") != manifest["input_hash"]:
-            raise RuntimeError(
-                "Resume checkpoint does not match the current light run/parser configuration. "
-                "Use a new --output-dir or omit --resume to start a new run."
-            )
+            # The original manifest included absolute source paths.  Those
+            # paths legitimately change when a Drive run is copied to local
+            # storage, while canonical page IDs and zero-based page indices do
+            # not.  Permit that relocation only when the selected page set is
+            # identical; parser/config changes still produce a different page
+            # set or must use a new output directory.
+            old_pages = {
+                (str(item.get("page_id") or ""), int(item.get("page_index", -1)))
+                for item in existing_manifest.get("pages") or []
+            }
+            new_pages = {
+                (str(item.get("page_id") or ""), int(item.get("page_index", -1)))
+                for item in manifest["pages"]
+            }
+            if old_pages != new_pages:
+                raise RuntimeError(
+                    "Resume checkpoint does not match the current light run/parser page set. "
+                    "Use a new --output-dir or omit --resume to start a new run."
+                )
     elif args.resume and checkpoint_path.is_file():
         raise RuntimeError(
             f"Cannot safely resume {checkpoint_path}: page_manifest.json is missing. "
@@ -602,6 +617,7 @@ def _build_chunks(
     page_texts: dict[str, str],
     page_ids: dict[tuple[str, int], str],
     chunking_config: dict[str, Any],
+    page_for_record: dict[str, str] | None = None,
 ) -> list[PreparedChunk]:
     from src.chunking_embedding.stage import run as run_chunking_embedding
 
@@ -627,7 +643,7 @@ def _build_chunks(
     for record in output.retrieval_records:
         if record.retrieval_type != "text_chunk":
             continue
-        page_id = object_to_page.get(str(record.source_object_id), "")
+        page_id = (page_for_record or {}).get(str(record.source_object_id)) or object_to_page.get(str(record.source_object_id), "")
         text = str((record.payload or {}).get("text") or "").strip()
         vector = vectors.get(str(record.record_id))
         if page_id and text and vector is not None:
@@ -790,7 +806,12 @@ def main(argv: list[str] | None = None) -> int:
         chunk_config = dict(chunk_config_loaded.get("chunking_embedding") or {})
         if args.embedder:
             chunk_config["embedder"] = args.embedder
-        chunks = _build_chunks(pipeline, page_texts, page_ids, chunk_config)
+        page_for_record = {
+            str(record.get("source_object_id")): page_id
+            for page_id, record in enriched_by_page.items()
+            if record.get("source_object_id")
+        }
+        chunks = _build_chunks(pipeline, page_texts, page_ids, chunk_config, page_for_record)
         chunking_seconds = time.perf_counter() - chunk_started
         if chunks:
             candidates = {
