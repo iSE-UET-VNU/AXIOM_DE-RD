@@ -815,11 +815,34 @@ def main(argv: list[str] | None = None) -> int:
                 chunk_units = []
                 for rank, chunk in enumerate(chunk_ranked.get(query.qid, []), start=1):
                     chunk_units.append({"chunk_id": chunk.record_id, "page_id": chunk.page_id, "rank": rank})
+                    # Keep the retrieval run slim (IDs only), but persist the
+                    # exact ranked text separately for answer evaluation.  A
+                    # chunk id includes the ephemeral source-object id used
+                    # during ingestion, so reconstructing its text later from
+                    # a copied KDL cache is not always possible.
                     if chunk.page_id not in selected_page_ids:
                         selected_page_ids.append(chunk.page_id)
                 chunk_pages[query.qid] = selected_page_ids[: args.top_k_pages]
                 chunk_rows.append({"query_id": query.qid, "chunks": chunk_units, "pages": chunk_pages[query.qid]})
             _write_jsonl(args.output_dir / "runs" / f"legacy_chunks_top{args.top_k_chunks}.jsonl", chunk_rows)
+            _write_jsonl(
+                args.output_dir / "runs" / f"legacy_chunks_top{args.top_k_chunks}_context.jsonl",
+                (
+                    {
+                        "query_id": query.qid,
+                        "chunks": [
+                            {
+                                "chunk_id": chunk.record_id,
+                                "page_id": chunk.page_id,
+                                "rank": rank,
+                                "text": chunk.text,
+                            }
+                            for rank, chunk in enumerate(chunk_ranked.get(query.qid, []), start=1)
+                        ],
+                    }
+                    for query in queries
+                ),
+            )
             chunk_summary, query_rows = _evaluate(queries, chunk_pages, qrels, args.top_k_pages)
             _write_jsonl(args.output_dir / "reports" / "per_query_chunks.jsonl", query_rows)
             chunk_summary["chunks_returned"] = args.top_k_chunks
