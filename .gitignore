@@ -63,6 +63,9 @@ data/subset/
 # Colab GPU servers; they must stay in sync with the tracked configs.
 !Chandra_serving_de.ipynb
 !KDL_serving_de.ipynb
+# the on-demand v2 Colab notebooks: the earlier KDL_serving_ondemand_textual_colab.ipynb was lost to the *.ipynb rule
+!colab/
+!colab/*.ipynb
 
 # ---------------------------------------------------------------------------
 # research/ is tracked: it holds the evaluation harness -- corpus build,
@@ -80,3 +83,10 @@ data/benchmark/
 # Retrieval artifacts are build output, keyed by config_hash and rebuilt from the
 # chunk manifest. The BM25 index over a full corpus is large and derived.
 src/retrieval/artifacts/*/
+data/cache/
+
+# 267 MB benchmark bundle: data, not code
+0.1. BENCHMARK/
+
+# 267 MB benchmark bundle: data, not code
+0.1. BENCHMARK/
