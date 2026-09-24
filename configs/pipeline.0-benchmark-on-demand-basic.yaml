@@ -1,0 +1,68 @@
+{
+  "docbench": {
+    "root": null,
+    "retrieval_scope": "lake",
+    "output_dir": "data/benchmark/0_benchmark_on_demand_basic_fixed",
+    "top_k_pages": 20,
+    "top_k_chunks": 10,
+    "chunk_retrieval_depth": 100,
+    "chunk_retrieval_alpha": 0.7,
+    "query_workers": 32,
+    "qa_workers": 4,
+    "kdl_microbatch_window_seconds": 10,
+    "kdl_microbatch_max_pages": 64,
+    "parse_retry_attempts": 2,
+    "parse_retry_backoff_seconds": 0.0,
+    "max_context_chars": 12000,
+    "max_unit_chars": 8000,
+    "max_output_tokens": 2048,
+    "generator": "deepseek/deepseek-v4-flash",
+    "judge": "openai/gpt-4o-mini"
+  },
+  "parsing": {
+    "provider": "kdl_pdf_inspector",
+    "kdl": {
+      "method": "vllm",
+      "endpoint_url": null,
+      "model": null,
+      "continuous_page_queue": true,
+      "scheduler": "parsebench_document",
+      "max_workers": 64,
+      "render_processes": 32,
+      "bbox_max_workers": 64,
+      "request_workers": 64,
+      "request_batch_size": 128,
+      "max_model_sequences": 256,
+      "dpi": 144,
+      "request_timeout_seconds": 180,
+      "render_timeout_seconds": 120,
+      "max_retries": 2,
+      "host_failure_threshold": 20,
+      "host_abort_on_open": true,
+      "host_recovery_seconds": 30,
+      "host_recovery_attempts": 5,
+      "max_pages": 1024,
+      "layout_max_output_tokens": 6000,
+      "text_max_output_tokens": 2048,
+      "table_max_output_tokens": 5500,
+      "picture_max_output_tokens": 4096,
+      "formula_max_output_tokens": 128,
+      "save_raw_outputs": true
+    }
+  },
+  "chunking_embedding": {
+    "chunker": "fixed_overlap",
+    "chunker_params": {"n_words": 512, "overlap": 0},
+    "max_rows_per_chunk": 20,
+    "embedder": "openrouter_te3s",
+    "embedder_params": {
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "api_key_env": "OPENROUTER_API_KEY",
+      "batch_size": 64,
+      "app_title": "AXIOM DE-RD"
+    },
+    "retrieval_profile": "hybrid_default"
+  },
+  "logging": {"level": "INFO"}
+}

@@ -24,6 +24,7 @@ venv/
 !/configs/pipeline.docbench-pages.yaml
 !/configs/pipeline.vidore-v3-physics-discovery-pages-global-two-phase.yaml
 !/configs/pipeline.vidore-v3-industrial-discovery-pages-global-two-phase.yaml
+!/configs/pipeline.0-benchmark-on-demand-basic.yaml
 
 # Local benchmark checkouts and generated probe artifacts.
 /experiments/*
