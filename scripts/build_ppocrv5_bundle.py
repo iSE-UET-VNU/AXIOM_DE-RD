@@ -52,7 +52,13 @@ def build(docbench_root: Path, output: Path) -> tuple[int, int]:
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for document in documents:
             pdf_path = Path(str(document["pdf_path"])).resolve()
-            pages = parser.parse(pdf_path, source_uri=str(document["doc_id"]))
+            try:
+                pages = parser.parse(pdf_path, source_uri=str(document["doc_id"]))
+            except Exception as error:
+                raise RuntimeError(
+                    "pdf-inspector failed while building the PP-OCRv5 bundle: "
+                    f"doc_id={document['doc_id']!r}, pdf={pdf_path}"
+                ) from error
             source_pages += len(pages)
             for page in pages:
                 reasons = _selection_reasons(page)
