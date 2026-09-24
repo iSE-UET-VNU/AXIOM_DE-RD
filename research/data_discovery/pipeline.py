@@ -11,12 +11,13 @@ convention); ``page_index`` remains zero-based for PDF APIs.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
 import json
 import re
+import zipfile
 
 from src.retrieval.sparse import BM25Index, positions_to_ids
 
@@ -37,6 +38,16 @@ class PageEvidence:
     needs_ocr: bool = False
     ocr_reason: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Keep the two preparation sources separate so retrieval results remain
+    # auditable after the canonical text is rebuilt.
+    inspector_text: str | None = None
+    ocr_text: str = ""
+    text_source: str = "pdf_inspector"
+    ocr_applied: bool = False
+    ocr_word_count: int = 0
+    ocr_mean_confidence: float | None = None
+    ocr_seconds: float = 0.0
+    ocr_error: str | None = None
 
     def as_record(self) -> dict[str, Any]:
         return {
@@ -66,6 +77,10 @@ class DiscoveryHit:
             "page_index": self.evidence.page_index,
             "page_number": self.evidence.page_number,
             "text": self.evidence.text,
+            "text_source": self.evidence.text_source,
+            "ocr_applied": self.evidence.ocr_applied,
+            "ocr_word_count": self.evidence.ocr_word_count,
+            "ocr_mean_confidence": self.evidence.ocr_mean_confidence,
             "needs_ocr": self.evidence.needs_ocr,
             "ocr_reason": self.evidence.ocr_reason,
             "metadata": self.evidence.metadata,
@@ -158,12 +173,167 @@ class PageIndex:
 
     pages: list[PageEvidence] = field(default_factory=list)
     bm25: BM25Index = field(default_factory=BM25Index)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def build(cls, pages: Iterable[PageEvidence]) -> "PageIndex":
         page_list = list(pages)
         records = [page.as_record() for page in page_list]
         return cls(pages=page_list, bm25=BM25Index(analyzer_name="auto").build(records))
+
+    def apply_ppocrv5_jsonl(
+        self, path: str | Path, *, strict: bool = True
+    ) -> dict[str, Any]:
+        """Merge notebook PP-OCRv5 page text into the light page index.
+
+        The notebook emits one JSON object per page with a ``unit`` field. The
+        loader accepts canonical page IDs as well as ``doc_id`` plus a
+        zero-based ``page_index`` so artifacts made by older bundle versions
+        remain usable. No Tesseract output is read or used here.
+        """
+        source = Path(path).resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"PP-OCRv5 JSONL does not exist: {source}")
+
+        aliases: dict[str, PageEvidence] = {}
+        locations: dict[tuple[str, int], PageEvidence] = {}
+        by_doc: dict[str, list[PageEvidence]] = defaultdict(list)
+        for page in self.pages:
+            page_source = str(page.source_uri)
+            for value in (
+                page.page_id,
+                f"{page_source}#page={page.page_index}",
+                f"{page_source}#page={page.page_number}",
+            ):
+                aliases[value] = page
+            locations[(str(Path(page.file_path).resolve()), page.page_index)] = page
+            by_doc[page_source].append(page)
+
+        if source.suffix.lower() == ".zip":
+            with zipfile.ZipFile(source) as archive:
+                candidates = [
+                    name
+                    for name in archive.namelist()
+                    if name.endswith("light_ocr_ppocrv5.jsonl")
+                ]
+                if not candidates:
+                    raise FileNotFoundError(
+                        f"No light_ocr_ppocrv5.jsonl found in {source}"
+                    )
+                lines = archive.read(candidates[0]).decode("utf-8").splitlines()
+        else:
+            lines = source.read_text(encoding="utf-8").splitlines()
+
+        rows: list[dict[str, Any]] = []
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Invalid PP-OCRv5 JSON on line {line_number}: {error}"
+                ) from error
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"PP-OCRv5 line {line_number} must contain a JSON object"
+                )
+            rows.append(value)
+        if not rows:
+            raise ValueError(f"PP-OCRv5 artifact is empty: {source}")
+
+        matched: dict[str, dict[str, Any]] = {}
+        unmatched: list[str] = []
+        duplicate: list[str] = []
+        errors = 0
+        for row in rows:
+            page = _resolve_ppocr_page(row, aliases, locations, by_doc)
+            unit = str(row.get("unit") or row.get("page_id") or "")
+            if page is None:
+                unmatched.append(unit or "<missing unit>")
+                continue
+            if page.page_id in matched:
+                duplicate.append(unit or page.page_id)
+                continue
+            matched[page.page_id] = row
+            errors += bool(row.get("error"))
+
+        if strict and (unmatched or duplicate):
+            details = []
+            if unmatched:
+                details.append(f"unmatched={unmatched[:5]}")
+            if duplicate:
+                details.append(f"duplicates={duplicate[:5]}")
+            raise ValueError(
+                "PP-OCRv5 artifact does not align with the pdf-inspector page "
+                + "index (" + ", ".join(details) + ")"
+            )
+
+        updated: list[PageEvidence] = []
+        appended = 0
+        empty_outputs = 0
+        for page in self.pages:
+            row = matched.get(page.page_id)
+            if row is None:
+                updated.append(page)
+                continue
+            ocr_text = str(row.get("text") or "").strip()
+            if not ocr_text:
+                empty_outputs += 1
+            native = page.inspector_text if page.inspector_text is not None else page.text
+            canonical = "\n".join(part for part in (native.strip(), ocr_text) if part)
+            applied = bool(ocr_text)
+            if applied:
+                appended += 1
+            word_count = row.get("ocr_word_count")
+            try:
+                word_count = int(word_count) if word_count is not None else len(ocr_text.split())
+            except (TypeError, ValueError):
+                word_count = len(ocr_text.split())
+            confidence = row.get("ocr_mean_confidence")
+            try:
+                confidence = float(confidence) if confidence is not None else None
+            except (TypeError, ValueError):
+                confidence = None
+            seconds = row.get("seconds", row.get("ocr_seconds", 0.0))
+            try:
+                seconds = float(seconds or 0.0)
+            except (TypeError, ValueError):
+                seconds = 0.0
+            updated.append(
+                replace(
+                    page,
+                    text=canonical,
+                    inspector_text=native,
+                    ocr_text=ocr_text,
+                    text_source="pdf_inspector+ppocrv5" if applied else page.text_source,
+                    ocr_applied=applied,
+                    ocr_word_count=word_count,
+                    ocr_mean_confidence=confidence,
+                    ocr_seconds=seconds,
+                    ocr_error=str(row.get("error")) if row.get("error") else None,
+                )
+            )
+
+        self.pages = updated
+        self.bm25 = BM25Index(analyzer_name="auto").build(
+            [page.as_record() for page in self.pages]
+        )
+        stats = {
+            "artifact": str(source),
+            "rows": len(rows),
+            "matched_pages": len(matched),
+            "appended_pages": appended,
+            "empty_outputs": empty_outputs,
+            "error_rows": errors,
+            "unmatched_rows": len(unmatched),
+            "duplicate_rows": len(duplicate),
+            "strict": strict,
+            "merge_policy": "inspector_text + ppocrv5_text",
+        }
+        self.metadata["preparation"] = "pdf_inspector -> ppocrv5"
+        self.metadata["ppocrv5"] = stats
+        return stats
 
     def search(
         self,
@@ -205,7 +375,11 @@ class PageIndex:
         self.bm25.save(root / "bm25.json")
         (root / "metadata.json").write_text(
             json.dumps(
-                {"contract_version": "page-discovery-v1", "page_count": len(self.pages)},
+                {
+                    "contract_version": "page-discovery-v2",
+                    "page_count": len(self.pages),
+                    **self.metadata,
+                },
                 indent=2,
             ),
             encoding="utf-8",
@@ -219,7 +393,13 @@ class PageIndex:
             for line in (root / "pages.jsonl").read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        return cls(pages=pages, bm25=BM25Index.load(root / "bm25.json"))
+        metadata_path = root / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.is_file() else {}
+        return cls(
+            pages=pages,
+            bm25=BM25Index.load(root / "bm25.json"),
+            metadata=metadata,
+        )
 
 
 def build_page_index(
@@ -671,6 +851,14 @@ def _page_to_dict(page: PageEvidence) -> dict[str, Any]:
         "text": page.text,
         "needs_ocr": page.needs_ocr,
         "ocr_reason": page.ocr_reason,
+        "inspector_text": page.inspector_text,
+        "ocr_text": page.ocr_text,
+        "text_source": page.text_source,
+        "ocr_applied": page.ocr_applied,
+        "ocr_word_count": page.ocr_word_count,
+        "ocr_mean_confidence": page.ocr_mean_confidence,
+        "ocr_seconds": page.ocr_seconds,
+        "ocr_error": page.ocr_error,
         "metadata": page.metadata,
     }
 
@@ -685,8 +873,58 @@ def _page_from_dict(value: dict[str, Any]) -> PageEvidence:
         text=str(value.get("text") or ""),
         needs_ocr=bool(value.get("needs_ocr", False)),
         ocr_reason=value.get("ocr_reason"),
+        inspector_text=value.get("inspector_text"),
+        ocr_text=str(value.get("ocr_text") or ""),
+        text_source=str(value.get("text_source") or "pdf_inspector"),
+        ocr_applied=bool(value.get("ocr_applied", False)),
+        ocr_word_count=int(value.get("ocr_word_count") or 0),
+        ocr_mean_confidence=value.get("ocr_mean_confidence"),
+        ocr_seconds=float(value.get("ocr_seconds") or 0.0),
+        ocr_error=value.get("ocr_error"),
         metadata=dict(value.get("metadata") or {}),
     )
+
+
+def _resolve_ppocr_page(
+    row: dict[str, Any],
+    aliases: dict[str, PageEvidence],
+    locations: dict[tuple[str, int], PageEvidence],
+    by_doc: dict[str, list[PageEvidence]],
+) -> PageEvidence | None:
+    for key in ("unit", "page_id", "id"):
+        value = row.get(key)
+        if value is not None and str(value) in aliases:
+            return aliases[str(value)]
+
+    doc_id = row.get("doc_id") or row.get("source_uri")
+    page_index = row.get("page_index")
+    if doc_id is not None and page_index is not None:
+        try:
+            candidates = by_doc.get(str(doc_id), [])
+            for page in candidates:
+                if page.page_index == int(page_index):
+                    return page
+        except (TypeError, ValueError):
+            pass
+
+    file_path = row.get("file_path") or row.get("source_path")
+    if file_path is not None and page_index is not None:
+        try:
+            page = locations.get((str(Path(str(file_path)).resolve()), int(page_index)))
+            if page is not None:
+                return page
+        except (TypeError, ValueError):
+            pass
+
+    unit = str(row.get("unit") or row.get("page_id") or "")
+    match = re.match(r"^(.*)#page=(\d+)$", unit)
+    if match:
+        doc, number = match.group(1), int(match.group(2))
+        candidates = by_doc.get(doc, [])
+        for page in candidates:
+            if number in {page.page_index, page.page_number}:
+                return page
+    return None
 
 
 __all__ = [

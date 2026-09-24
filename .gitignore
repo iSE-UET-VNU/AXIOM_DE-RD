@@ -67,6 +67,7 @@ data/processed/*
 # Local corpora and notebooks. Not needed to run the pipeline.
 data/subset/
 *.ipynb
+!PP-OCRv5_on_demand_basic_L4.ipynb
 
 # ---------------------------------------------------------------------------
 # research/ is tracked: it holds the evaluation harness -- corpus build,

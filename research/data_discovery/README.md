@@ -225,6 +225,57 @@ fields map directly to the requested table:
 `Chunk&Embed&Index`, `Retrieval`, `Overall`), and
 `infer_time_seconds_per_query`.
 
+### PP-OCRv5 light-preparation experiment (no Tesseract)
+
+Use the same runner and the same `baseline_legacy` downstream stages, but pass
+the JSONL exported by `03_light_ocr_weak_pages.ipynb`:
+
+First build the notebook input bundle from pdf-inspector only. This step does
+not run Tesseract or use a Tesseract confidence threshold:
+
+```bash
+.venv/bin/python scripts/build_ppocrv5_bundle.py \
+  --docbench-root "data/raw/0.1. BENCHMARK/0.1. BENCHMARK" \
+  --output data/benchmark/ppocrv5/light_ocr_bundle.zip
+```
+
+Upload that ZIP to Colab, run the PP-OCRv5 cells in
+`03_light_ocr_weak_pages.ipynb`, and download the resulting
+`light_ocr_results.zip`. The runner accepts either that ZIP directly or the
+extracted `light_ocr_ppocrv5.jsonl` file.
+
+For this Tesseract-free bundle, the notebook's legacy comparison cell that
+expects `tesseract_text`/`kdl_text` is diagnostic-only; the required artifact is
+`light_ocr_ppocrv5.jsonl`.
+
+```text
+light preparation: pdf-inspector native text + PP-OCRv5 text on selected weak pages
+light retrieval:   BM25 over the merged canonical page text (top-20 pages)
+accurate parse:    KDL + pdf-inspector for selected pages only
+baseline_legacy:   fixed_overlap 512/128 -> text-embedding-3-small -> hybrid
+```
+
+The runner never invokes Tesseract. It matches each PP-OCRv5 row to a page,
+keeps `inspector_text` and `ocr_text` separately, and indexes
+`inspector_text + ppocrv5_text`. Use a new output directory so the old native
+run's parser/chunk caches cannot be reused accidentally:
+
+```bash
+.venv/bin/python -m research.data_discovery.run_docbench_e2e \
+  --config configs/pipeline.0-benchmark-on-demand-basic.yaml \
+  --docbench-root "data/raw/0.1. BENCHMARK/0.1. BENCHMARK" \
+  --retrieval-scope lake \
+  --top-k-pages 20 \
+  --max-context-chunks 3 \
+  --ppocr-jsonl path/to/light_ocr_ppocrv5.jsonl \
+  --output-dir data/benchmark/on_demand_basic_ppocrv5
+```
+
+The report keeps the old retrieval and QA metrics, while adding preparation
+metadata and the PP-OCR artifact fingerprint. Compare `light_page_recall_*`,
+`light_page_ndcg_*`, `accurate_page_recall_*`, `correct_only`, and
+`correct_plus_partial` against `on_demand_basic_1`.
+
 The original DocBench checkout is expected to have this shape. The runner
 accepts either `DocBench` or `DocBench/data` as `--docbench-root`:
 

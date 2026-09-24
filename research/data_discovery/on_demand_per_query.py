@@ -1288,6 +1288,7 @@ class OnDemandPerQueryRunner:
         payload = {
             "version": PIPELINE_VERSION,
             "pages": [page.page_id for page in self.index.pages],
+            "page_preparation": self.index.metadata,
             "parser_config": self.parser_config,
             "chunking_config": self.chunking_config,
             "top_k_pages": self.top_k_pages,

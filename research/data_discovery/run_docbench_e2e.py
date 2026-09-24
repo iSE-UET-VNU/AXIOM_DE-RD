@@ -10,6 +10,8 @@ The pipeline is intentionally page selective:
 ``--retrieval-scope file`` restricts each question to the DocBench document it
 belongs to. ``--retrieval-scope lake`` searches the complete DocBench PDF lake
 without a per-question document filter.
+When ``--ppocr-jsonl`` is supplied, PP-OCRv5 text is merged into the light
+page index before BM25; this path does not invoke Tesseract.
 The KDL endpoint can be remote (for example a vLLM server exposed from
 Colab); PDF rendering, page indexing, chunking, embeddings, generation and
 judging run on the local machine.
@@ -368,13 +370,20 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("DocBench question ids must be unique")
 
     index_documents = documents if scope == "lake" else selected_documents
+    ppocr_jsonl = _resolve_path(
+        args.ppocr_jsonl or docbench_config.get("ppocr_jsonl")
+    )
+    if ppocr_jsonl is not None and not ppocr_jsonl.is_file():
+        raise FileNotFoundError(f"PP-OCRv5 JSONL does not exist: {ppocr_jsonl}")
     index_started = time.perf_counter()
     page_index, corpus_fingerprint = _load_or_build_page_index(
         index_documents,
         output_dir=output_dir,
         scope=scope,
         force_rebuild=args.force_rebuild_index,
+        ppocr_jsonl=ppocr_jsonl,
     )
+    preparation_metadata = dict(page_index.metadata)
     index_seconds = time.perf_counter() - index_started
     if not page_index.pages:
         raise RuntimeError("The pdf-inspector page index is empty")
@@ -398,8 +407,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     retrieval_config = {
-        "pipeline": "on-demand-basic",
-        "light_preparation": "pdf_inspector",
+        "pipeline": (
+            "on-demand-basic-ppocrv5" if ppocr_jsonl else "on-demand-basic"
+        ),
+        "light_preparation": (
+            "pdf_inspector -> ppocrv5 (no tesseract)"
+            if ppocr_jsonl
+            else "pdf_inspector"
+        ),
         "light_retrieval": "bm25",
         "downstream": (
             "KDL + pdf-inspector -> fixed_overlap "
@@ -419,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         "parse_retry_attempts": parse_retry_attempts,
         "parse_retry_backoff_seconds": parse_retry_backoff_seconds,
         "corpus_fingerprint": corpus_fingerprint,
+        "preparation": preparation_metadata,
         "parser_config_hash": _hash_payload(parser_config),
         "chunking_config_hash": _hash_payload(chunking_config),
     }
@@ -471,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         unique_bm25_pages_to_parse = _unique_bm25_pages_to_parse(retrieval_rows)
         timing_summary = runner.timing_summary(light_preparation_seconds=index_seconds)
         timing_summary["unique_bm25_pages_to_parse"] = unique_bm25_pages_to_parse
+        timing_summary["light_preparation"] = retrieval_config["light_preparation"]
+        timing_summary["preparation_metadata"] = preparation_metadata
         timing_summary["run_started_at_utc"] = run_started_at
         timing_summary["run_finished_at_utc"] = utc_now_iso()
         if not args.skip_qa:
@@ -532,7 +550,9 @@ def main(argv: list[str] | None = None) -> int:
         manifest = {
             "contract_version": "docbench-on-demand-basic-v1",
             "report_version": report_version,
-            "pipeline": "pdf_inspector -> bm25 -> baseline_legacy",
+            "pipeline": retrieval_config["pipeline"],
+            "light_preparation": retrieval_config["light_preparation"],
+            "light_retrieval": retrieval_config["light_retrieval"],
             "retrieval_scope": scope,
             "query_page_scope": retrieval_config["query_page_scope"],
             "docbench_root": str(docbench_root.resolve()),
@@ -633,6 +653,15 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--max-output-tokens", type=int)
     parser.add_argument("--generator")
     parser.add_argument("--judge")
+    parser.add_argument(
+        "--ppocr-jsonl",
+        type=Path,
+        help=(
+            "PP-OCRv5 notebook JSONL or result ZIP. Its page text is appended "
+            "to the native pdf-inspector text before BM25; this path never "
+            "invokes Tesseract."
+        ),
+    )
     parser.add_argument("--force-rebuild-index", action="store_true")
     parser.add_argument("--force-reparse", action="store_true")
     parser.add_argument("--skip-endpoint-check", action="store_true")
@@ -1009,17 +1038,21 @@ def _load_or_build_page_index(
     output_dir: Path,
     scope: str,
     force_rebuild: bool,
+    ppocr_jsonl: Path | None = None,
 ) -> tuple[PageIndex, str]:
     paths = [Path(item["pdf_path"]).resolve() for item in documents]
     fingerprint = _corpus_fingerprint(paths)
-    index_dir = output_dir / "indexes" / f"page_bm25_{scope}_{fingerprint}"
+    ppocr_fingerprint = _artifact_fingerprint(ppocr_jsonl) if ppocr_jsonl else ""
+    index_suffix = f"_{ppocr_fingerprint}" if ppocr_fingerprint else ""
+    index_dir = output_dir / "indexes" / f"page_bm25_{scope}_{fingerprint}{index_suffix}"
     if (
         not force_rebuild
         and (index_dir / "pages.jsonl").is_file()
         and (index_dir / "bm25.json").is_file()
     ):
         LOGGER.info("Loading cached pdf-inspector/BM25 index: %s", index_dir)
-        return PageIndex.load(index_dir), fingerprint
+        index = PageIndex.load(index_dir)
+        return index, fingerprint
 
     source_uri_by_path = {
         str(Path(item["pdf_path"]).resolve()): str(item["doc_id"]) for item in documents
@@ -1038,6 +1071,11 @@ def _load_or_build_page_index(
         parser=PdfInspectorPageParser(),
         source_uri=source_uri,
     )
+    if ppocr_jsonl is not None:
+        LOGGER.info("Merging PP-OCRv5 page text into the light index: %s", ppocr_jsonl)
+        index.apply_ppocrv5_jsonl(ppocr_jsonl, strict=True)
+    else:
+        index.metadata["preparation"] = "pdf_inspector"
     index.save(index_dir)
     return index, fingerprint
 
@@ -1048,6 +1086,17 @@ def _corpus_fingerprint(paths: list[Path]) -> str:
         stat = path.stat()
         parts.append(f"{path}|{stat.st_size}|{stat.st_mtime_ns}")
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _artifact_fingerprint(path: Path | None) -> str:
+    """Hash the PP-OCR artifact so a changed notebook export cannot reuse BM25."""
+    if path is None:
+        return "native"
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return f"ppocrv5-{digest.hexdigest()[:16]}"
 
 
 def _prepare_chunking_config(
@@ -1173,7 +1222,7 @@ def _run_retrieval(
             if result is None:
                 row = {
                     **question,
-                    "pipeline": "pdf_inspector -> bm25 -> baseline_legacy",
+                    "pipeline": retrieval_config["pipeline"],
                     "retrieval_config": retrieval_config,
                     "retrieval_config_hash": retrieval_config_hash,
                     "status": "aborted" if detected_host_failure else "error",
@@ -1221,7 +1270,7 @@ def _encode_retrieval_result(
 ) -> dict[str, Any]:
     return {
         **question,
-        "pipeline": "pdf_inspector -> bm25 -> baseline_legacy",
+        "pipeline": retrieval_config["pipeline"],
         "retrieval_config": retrieval_config,
         "retrieval_config_hash": retrieval_config_hash,
         "status": "ok",
@@ -1541,6 +1590,13 @@ def _benchmark_retrieval_metrics(
     }
 
 
+def _light_pipeline_label(page_index: PageIndex) -> str:
+    preparation = str(page_index.metadata.get("preparation") or "pdf_inspector")
+    if preparation == "pdf_inspector -> ppocrv5":
+        return "pdf_inspector -> ppocrv5 -> bm25 -> baseline_legacy"
+    return "pdf_inspector -> bm25 -> baseline_legacy"
+
+
 def _unique_bm25_pages_to_parse(retrieval_rows: dict[str, dict[str, Any]]) -> int:
     """Count distinct BM25 pages selected before parsing across all queries."""
     return len(
@@ -1626,7 +1682,11 @@ def _build_report(
 
     return {
         "arm": "baseline_legacy",
-        "pipeline": f"pdf_inspector -> bm25 -> KDL+pdf_inspector -> fixed_chunk_512_overlap_{chunk_overlap} -> text-embedding-3-small -> hybrid(alpha=0.7) -> generator -> DocBench judge",
+        "pipeline": (
+            f"{_light_pipeline_label(page_index)} -> KDL+pdf_inspector -> "
+            f"fixed_chunk_512_overlap_{chunk_overlap} -> "
+            "text-embedding-3-small -> hybrid(alpha=0.7) -> generator -> DocBench judge"
+        ),
         "retrieval_scope": scope,
         "query_page_scope": (
             "per_question_document" if scope == "file" else "global_lake"
