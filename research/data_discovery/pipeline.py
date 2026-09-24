@@ -245,7 +245,6 @@ class PageIndex:
         matched: dict[str, dict[str, Any]] = {}
         unmatched: list[str] = []
         duplicate: list[str] = []
-        errors = 0
         for row in rows:
             page = _resolve_ppocr_page(row, aliases, locations, by_doc)
             unit = str(row.get("unit") or row.get("page_id") or "")
@@ -254,16 +253,14 @@ class PageIndex:
                 continue
             if page.page_id in matched:
                 duplicate.append(unit or page.page_id)
-                continue
+                # Resume checkpoints are append-only; the latest row is the
+                # most recent OCR attempt for this page.
             matched[page.page_id] = row
-            errors += bool(row.get("error"))
 
-        if strict and (unmatched or duplicate):
+        if strict and unmatched:
             details = []
             if unmatched:
                 details.append(f"unmatched={unmatched[:5]}")
-            if duplicate:
-                details.append(f"duplicates={duplicate[:5]}")
             raise ValueError(
                 "PP-OCRv5 artifact does not align with the pdf-inspector page "
                 + "index (" + ", ".join(details) + ")"
@@ -325,10 +322,11 @@ class PageIndex:
             "matched_pages": len(matched),
             "appended_pages": appended,
             "empty_outputs": empty_outputs,
-            "error_rows": errors,
+            "error_rows": sum(bool(row.get("error")) for row in matched.values()),
             "unmatched_rows": len(unmatched),
             "duplicate_rows": len(duplicate),
             "strict": strict,
+            "duplicate_policy": "latest_row_wins",
             "merge_policy": "inspector_text + ppocrv5_text",
         }
         self.metadata["preparation"] = "pdf_inspector -> ppocrv5"
