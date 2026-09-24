@@ -7,8 +7,9 @@ The pipeline is intentionally page selective:
     text-embedding-3-small -> hybrid BM25+dense baseline_legacy ->
     generator -> DocBench judge
 
-``--retrieval-scope file`` searches only the selected/evaluated DocBench
-documents. ``--retrieval-scope lake`` searches the complete DocBench PDF lake.
+``--retrieval-scope file`` restricts each question to the DocBench document it
+belongs to. ``--retrieval-scope lake`` searches the complete DocBench PDF lake
+without a per-question document filter.
 The KDL endpoint can be remote (for example a vLLM server exposed from
 Colab); PDF rendering, page indexing, chunking, embeddings, generation and
 judging run on the local machine.
@@ -18,13 +19,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Callable
 import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -49,6 +52,7 @@ from src.evaluation.generate import (  # noqa: E402
     Generation,
     generate,
 )
+from src.evaluation.benchmarks.vidore_v3_judge import ANSWER_PROMPT as VIDORe_ANSWER_PROMPT  # noqa: E402
 from src.evaluation.llm import complete  # noqa: E402
 from src.utils.config import load_config, resolve_parser_config  # noqa: E402
 from src.utils.env import load_dotenv_file  # noqa: E402
@@ -85,7 +89,8 @@ Evaluation Process:
 2. Apply the relevant criteria from the Evaluation Criteria.
 3. Compare the user's answer against the reference answer accordingly.
 4. Consult the reference text for clarification when needed.
-5. Score the answer with a binary label 0 or 1, where 0 denotes wrong and 1 denotes correct.
+5. Score the answer with 0, 0.5, or 1: 0 denotes wrong, 0.5 denotes partially correct,
+   and 1 denotes fully correct.
 NOTE that if the user answer is 0 or an empty string, it should get a 0 score.
 
 Question: {{question}}
@@ -94,7 +99,57 @@ Reference Answer: {{ref_ans}}
 Reference Text: {{ref_text}}
 
 Evaluation Form (score ONLY):
-- Correctness:"""
+- Correctness (0, 0.5, or 1):"""
+
+
+def _make_query_page_scope(
+    page_index: PageIndex,
+    questions: list[dict[str, Any]],
+    scope: str,
+) -> Callable[[str, str], set[str] | None]:
+    """Build the page filter for a DocBench retrieval run.
+
+    In ``file`` mode, each question can retrieve only pages from its own
+    ``doc_id``.  In ``lake`` mode, returning ``None`` preserves global-corpus
+    retrieval.  Page ``source_uri`` values are set to DocBench ``doc_id`` by
+    ``_load_or_build_page_index``.
+    """
+    normalized_scope = str(scope).lower()
+    if normalized_scope not in {"file", "lake"}:
+        raise ValueError("retrieval scope must be 'file' or 'lake'")
+
+    if normalized_scope == "lake":
+        return lambda _qid, _query: None
+
+    question_doc_ids = {
+        str(question["qid"]): str(question["doc_id"])
+        for question in questions
+    }
+    page_ids_by_doc: dict[str, set[str]] = defaultdict(set)
+    for page in page_index.pages:
+        page_ids_by_doc[str(page.source_uri)].add(str(page.page_id))
+
+    missing_docs = sorted(
+        {
+            doc_id
+            for doc_id in question_doc_ids.values()
+            if doc_id not in page_ids_by_doc
+        }
+    )
+    if missing_docs:
+        raise RuntimeError(
+            "DocBench question documents are missing from the page index: "
+            + ", ".join(missing_docs[:10])
+        )
+
+    def page_scope_for_query(qid: str, _query: str) -> set[str] | None:
+        try:
+            doc_id = question_doc_ids[str(qid)]
+        except KeyError as error:
+            raise KeyError(f"No DocBench document mapping for qid={qid!r}") from error
+        return page_ids_by_doc[doc_id]
+
+    return page_scope_for_query
 
 
 def _is_unanswerable_answer(answer: Any) -> bool:
@@ -129,6 +184,7 @@ def _generate_with_unanswerable_retry(
     *,
     model: str,
     max_chars: int,
+    max_chunks: int | None = None,
     max_output_tokens: int,
     previous_row: dict[str, Any] | None = None,
 ) -> tuple[Generation, int, str | None]:
@@ -147,7 +203,12 @@ def _generate_with_unanswerable_retry(
         context,
         model=model,
         max_chars=max_chars,
+        max_chunks=max_chunks,
         max_output_tokens=max_output_tokens,
+        render_prompt=lambda query, texts: VIDORe_ANSWER_PROMPT.format(
+            documents="\n\n".join(f"[{i + 1}] {text}" for i, text in enumerate(texts)),
+            query=query,
+        ),
     )
     if _is_unanswerable_answer(generation.answer) and retry_count < 1:
         retry_generation = generate(
@@ -156,7 +217,12 @@ def _generate_with_unanswerable_retry(
             context,
             model=model,
             max_chars=max_chars,
+            max_chunks=max_chunks,
             max_output_tokens=max_output_tokens,
+            render_prompt=lambda query, texts: VIDORe_ANSWER_PROMPT.format(
+                documents="\n\n".join(f"[{i + 1}] {text}" for i, text in enumerate(texts)),
+                query=query,
+            ),
         )
         return retry_generation, retry_count + 1, generation.answer
     return generation, retry_count, None
@@ -238,9 +304,25 @@ def main(argv: list[str] | None = None) -> int:
         or 32,
         "kdl-microbatch-max-pages",
     )
+    parse_retry_attempts = _non_negative(
+        args.parse_retry_attempts
+        if args.parse_retry_attempts is not None
+        else docbench_config.get("parse_retry_attempts", 2),
+        "parse-retry-attempts",
+    )
+    parse_retry_backoff_seconds = _non_negative_float(
+        args.parse_retry_backoff_seconds
+        if args.parse_retry_backoff_seconds is not None
+        else docbench_config.get("parse_retry_backoff_seconds", 0.0),
+        "parse-retry-backoff-seconds",
+    )
     max_context_chars = _positive(
         args.max_context_chars or docbench_config.get("max_context_chars") or 12000,
         "max-context-chars",
+    )
+    max_context_chunks = _positive(
+        args.max_context_chunks or docbench_config.get("max_context_chunks") or top_k_chunks,
+        "max-context-chunks",
     )
     max_unit_chars = _positive(
         args.max_unit_chars or docbench_config.get("max_unit_chars") or 8000,
@@ -320,16 +402,22 @@ def main(argv: list[str] | None = None) -> int:
         "light_preparation": "pdf_inspector",
         "light_retrieval": "bm25",
         "downstream": (
-            "KDL + pdf-inspector -> fixed_overlap 512/128 -> "
+            "KDL + pdf-inspector -> fixed_overlap "
+            f"512/{int((chunking_config.get('chunker_params') or {}).get('overlap', 0))} -> "
             "text-embedding-3-small -> hybrid baseline_legacy"
         ),
         "retrieval_scope": scope,
+        "query_page_scope": (
+            "per_question_document" if scope == "file" else "global_lake"
+        ),
         "indexed_documents": len(index_documents),
         "evaluated_documents": len(selected_documents),
         "top_k_pages": top_k_pages,
         "top_k_chunks": top_k_chunks,
         "depth": depth,
         "alpha": alpha,
+        "parse_retry_attempts": parse_retry_attempts,
+        "parse_retry_backoff_seconds": parse_retry_backoff_seconds,
         "corpus_fingerprint": corpus_fingerprint,
         "parser_config_hash": _hash_payload(parser_config),
         "chunking_config_hash": _hash_payload(chunking_config),
@@ -362,7 +450,10 @@ def main(argv: list[str] | None = None) -> int:
         query_workers=query_workers,
         microbatch_window_seconds=microbatch_window,
         microbatch_max_pages=microbatch_max_pages,
+        parse_retry_attempts=parse_retry_attempts,
+        parse_retry_backoff_seconds=parse_retry_backoff_seconds,
         force_reparse=args.force_reparse,
+        page_scope_for_query=_make_query_page_scope(page_index, questions, scope),
         event_logger=event_logger,
     )
     try:
@@ -377,7 +468,9 @@ def main(argv: list[str] | None = None) -> int:
             timings_path,
             query_workers,
         )
+        unique_bm25_pages_to_parse = _unique_bm25_pages_to_parse(retrieval_rows)
         timing_summary = runner.timing_summary(light_preparation_seconds=index_seconds)
+        timing_summary["unique_bm25_pages_to_parse"] = unique_bm25_pages_to_parse
         timing_summary["run_started_at_utc"] = run_started_at
         timing_summary["run_finished_at_utc"] = utc_now_iso()
         if not args.skip_qa:
@@ -388,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
                 generator_model=generator_model,
                 judge_model=judge_model,
                 max_context_chars=max_context_chars,
+                max_context_chunks=max_context_chunks,
                 max_unit_chars=max_unit_chars,
                 max_output_tokens=max_output_tokens,
                 qa_workers=qa_workers,
@@ -405,31 +499,42 @@ def main(argv: list[str] | None = None) -> int:
                 runner=runner,
                 top_k_pages=top_k_pages,
                 top_k_chunks=top_k_chunks,
+                max_context_chunks=max_context_chunks,
+                chunk_overlap=int((chunking_config.get("chunker_params") or {}).get("overlap", 0)),
                 depth=depth,
                 alpha=alpha,
                 generator_model=generator_model,
                 judge_model=judge_model,
+                unique_bm25_pages_to_parse=unique_bm25_pages_to_parse,
             )
         else:
             report = {
                 "arm": "baseline_legacy",
                 "retrieval_scope": scope,
+                "query_page_scope": retrieval_config["query_page_scope"],
                 "questions_expected": len(questions),
                 "questions_retrieved": sum(
                     row.get("status") == "ok" for row in retrieval_rows.values()
                 ),
+                "unique_bm25_pages_to_parse": unique_bm25_pages_to_parse,
                 "accuracy": None,
             }
 
         reports_dir = output_dir / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
-        report_path = reports_dir / f"{scope}_baseline_legacy.json"
+        report_version = _next_report_version(reports_dir, scope)
+        report["report_version"] = report_version
+        timing_summary["report_version"] = report_version
+        report_path = reports_dir / f"{scope}_baseline_legacy_ver{report_version}.json"
+        timing_path = reports_dir / f"{scope}_timing_summary_ver{report_version}.json"
         _write_json(report_path, report)
-        _write_json(reports_dir / f"{scope}_timing_summary.json", timing_summary)
+        _write_json(timing_path, timing_summary)
         manifest = {
             "contract_version": "docbench-on-demand-basic-v1",
+            "report_version": report_version,
             "pipeline": "pdf_inspector -> bm25 -> baseline_legacy",
             "retrieval_scope": scope,
+            "query_page_scope": retrieval_config["query_page_scope"],
             "docbench_root": str(docbench_root.resolve()),
             "config": str(config_path),
             "documents_available": len(documents),
@@ -444,11 +549,17 @@ def main(argv: list[str] | None = None) -> int:
             "retrieval_output": str(retrieval_path),
             "timings_output": str(timings_path),
             "report_output": str(report_path),
+            "timing_summary_output": str(timing_path),
             "timing_summary": timing_summary,
             "report": report,
         }
-        _write_json(output_dir / f"manifest_{scope}.json", manifest)
-        _update_summary(output_dir / "summary.json", scope, report, timing_summary)
+        _write_json(output_dir / f"manifest_{scope}_ver{report_version}.json", manifest)
+        _update_summary(
+            output_dir / f"summary_ver{report_version}.json",
+            scope,
+            report,
+            timing_summary,
+        )
         event_logger.emit("run_completed", scope=scope, questions=len(questions))
         print(
             json.dumps(
@@ -482,6 +593,19 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--qa-workers", type=int)
     parser.add_argument("--kdl-microbatch-window-seconds", type=float)
     parser.add_argument("--kdl-microbatch-max-pages", type=int)
+    parser.add_argument(
+        "--parse-retry-attempts",
+        type=int,
+        help=(
+            "Retries after the initial KDL batch for pages that are missing "
+            "or quarantined (default: 2)."
+        ),
+    )
+    parser.add_argument(
+        "--parse-retry-backoff-seconds",
+        type=float,
+        help="Delay before each unresolved-page retry batch (default: 0).",
+    )
     parser.add_argument("--kdl-max-workers", type=int)
     parser.add_argument("--kdl-render-processes", type=int)
     parser.add_argument("--kdl-bbox-max-workers", type=int)
@@ -491,9 +615,20 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument(
         "--kdl-host-failure-threshold",
         type=int,
-        help="Stop after this many consecutive KDL host failures (default: 3).",
+        help="Open the KDL circuit after this many consecutive failures (default: 3).",
+    )
+    parser.add_argument(
+        "--kdl-host-recovery-seconds",
+        type=float,
+        help="Cooldown before a KDL recovery probe (default: 30).",
+    )
+    parser.add_argument(
+        "--kdl-host-recovery-attempts",
+        type=int,
+        help="Maximum KDL recovery probes before aborting (default: 5).",
     )
     parser.add_argument("--max-context-chars", type=int)
+    parser.add_argument("--max-context-chunks", type=int)
     parser.add_argument("--max-unit-chars", type=int)
     parser.add_argument("--max-output-tokens", type=int)
     parser.add_argument("--generator")
@@ -518,6 +653,20 @@ def _positive(value: Any, name: str) -> int:
     number = int(value)
     if number <= 0:
         raise ValueError(f"{name} must be positive")
+    return number
+
+
+def _non_negative(value: Any, name: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return number
+
+
+def _non_negative_float(value: Any, name: str) -> float:
+    number = float(value)
+    if number < 0.0:
+        raise ValueError(f"{name} must be non-negative")
     return number
 
 
@@ -555,6 +704,11 @@ def _check_vllm_endpoint() -> None:
 def _load_docbench(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not root.is_dir():
         raise FileNotFoundError(f"DocBench root is not a directory: {root}")
+    # The exported ``0. BENCHMARK`` bundle is a flat manifest rather than the
+    # historical numeric-folder DocBench layout.  Keep the same downstream
+    # pipeline and normalize it to the runner's document/question contract.
+    if (root / "documents.jsonl").is_file() and (root / "queries.jsonl").is_file():
+        return _load_benchmark_bundle(root)
     data_root = root / "data" if (root / "data").is_dir() else root
     documents: list[dict[str, Any]] = []
     questions: list[dict[str, Any]] = []
@@ -621,6 +775,192 @@ def _load_docbench(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 }
             )
     return documents, questions
+
+
+def _load_benchmark_bundle(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load the flat ``0. BENCHMARK`` export.
+
+    Paths in ``documents.jsonl`` are rooted at the bundle directory.  Qrels are
+    retained on each question so the report can calculate file recall and
+    graded NDCG without changing the legacy DocBench format.
+    """
+    def read_jsonl(path: Path) -> list[dict[str, Any]]:
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    documents: list[dict[str, Any]] = []
+    by_doc_id: dict[str, dict[str, Any]] = {}
+    for item in read_jsonl(root / "documents.jsonl"):
+        doc_id = str(item.get("doc_id") or "").strip()
+        raw_path = str(item.get("path") or "").strip()
+        if not doc_id or not raw_path:
+            continue
+        pdf_path = (root / raw_path).resolve()
+        if not pdf_path.is_file():
+            raise FileNotFoundError(f"Benchmark document path does not exist: {pdf_path}")
+        if doc_id in by_doc_id:
+            raise ValueError(f"Duplicate benchmark document id: {doc_id}")
+        document = {
+            "folder": str(item.get("source") or "benchmark"),
+            "file_index": None,
+            "domain": str(item.get("source") or "Unknown"),
+            "doc_id": doc_id,
+            "source": str(item.get("source") or ""),
+            "pdf_path": str(pdf_path),
+            "qa_path": str((root / "queries.jsonl").resolve()),
+        }
+        documents.append(document)
+        by_doc_id[doc_id] = document
+
+    qrels_by_qid: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    qrels_path = root / "qrels.jsonl"
+    if qrels_path.is_file():
+        for item in read_jsonl(qrels_path):
+            qrels_by_qid[str(item.get("query_id") or "")].append(item)
+
+    questions: list[dict[str, Any]] = []
+    seen_qids: set[str] = set()
+    for item in read_jsonl(root / "queries.jsonl"):
+        qid = str(item.get("query_id") or "").strip()
+        query = str(item.get("query") or "").strip()
+        if not qid or not query:
+            continue
+        if qid in seen_qids:
+            raise ValueError(f"Duplicate benchmark question id: {qid}")
+        seen_qids.add(qid)
+        gold = qrels_by_qid.get(qid, [])
+        gold_doc_ids = [str(row.get("doc_id") or "") for row in gold if row.get("doc_id")]
+        missing = sorted(set(gold_doc_ids) - set(by_doc_id))
+        if missing:
+            raise ValueError(f"Benchmark qrels reference unknown documents: {missing[:5]}")
+        answers = item.get("answers") or []
+        answer = answers[0] if isinstance(answers, list) and answers else item.get("answer", "")
+        gold_page_qrels = _benchmark_page_qrels(
+            qid,
+            gold,
+            by_doc_id=by_doc_id,
+            page_maps={},
+        )
+        # Preserve evidence paths for auditability; the actual reference text is
+        # the answer in this export, just as in the legacy QA files.
+        evidence = "\n".join(
+            str(ev.get("source_page_path") or ev.get("source_corpus_id") or "")
+            for row in gold for ev in (row.get("evidence") or []) if isinstance(ev, dict)
+        )
+        questions.append({
+            "qid": qid,
+            "question": query,
+            "answer": str(answer),
+            "evidence": evidence,
+            "type": "unknown",
+            "type_group": "Una.",
+            "folder": str(item.get("source") or "benchmark"),
+            "file_index": None,
+            "domain": str(item.get("source") or "Unknown"),
+            "doc_id": gold_doc_ids[0] if gold_doc_ids else "",
+            "source": str(item.get("source") or ""),
+            "gold_qrels": gold,
+            "gold_page_qrels": gold_page_qrels,
+        })
+    if not documents:
+        raise RuntimeError(f"No documents found in benchmark bundle: {root}")
+    return sorted(documents, key=lambda item: str(item["doc_id"])), questions
+
+
+def _benchmark_page_qrels(
+    qid: str,
+    qrels: list[dict[str, Any]],
+    *,
+    by_doc_id: dict[str, dict[str, Any]],
+    page_maps: dict[str, dict[int, tuple[str, int]]],
+) -> list[dict[str, Any]]:
+    """Normalize bundle evidence to the page ids emitted by the runner.
+
+    ViDoRe evidence identifies pages by the source corpus id, while MPDocVQA
+    carries the PDF page number directly.  Both become ``doc_id#page=N`` here,
+    so page retrieval metrics use the same identifiers as the page index.
+    """
+    page_grades: dict[str, float] = {}
+    source = str(qid).split("::", 1)[0]
+    source_map = page_maps.get(source)
+    for qrel in qrels:
+        doc_id = str(qrel.get("doc_id") or "")
+        document = by_doc_id.get(doc_id)
+        if not document:
+            continue
+        source_doc_id = str((document.get("metadata") or {}).get("source_doc_id") or "")
+        for evidence in qrel.get("evidence") or []:
+            page_number: int | None = None
+            if evidence.get("pdf_page_number") is not None:
+                page_number = int(evidence["pdf_page_number"])
+            elif evidence.get("source_corpus_id") is not None:
+                if source_map is None:
+                    source_map = _load_vidore_page_map(source)
+                    page_maps[source] = source_map
+                mapped = source_map.get(int(evidence["source_corpus_id"]))
+                if mapped is None:
+                    raise ValueError(
+                        f"{qid}: source_corpus_id={evidence['source_corpus_id']} "
+                        f"is not present in the {source} corpus map"
+                    )
+                mapped_doc_id, zero_based_page = mapped
+                if source_doc_id and mapped_doc_id != source_doc_id:
+                    raise ValueError(
+                        f"{qid}: qrel document {source_doc_id!r} does not match "
+                        f"corpus page document {mapped_doc_id!r}"
+                    )
+                page_number = zero_based_page + 1
+            if page_number is None or page_number <= 0:
+                continue
+            page_id = f"{doc_id}#page={page_number}"
+            relevance = float(evidence.get("score") or qrel.get("relevance") or 0.0)
+            page_grades[page_id] = max(page_grades.get(page_id, 0.0), relevance)
+    return [
+        {"page_id": page_id, "relevance": relevance}
+        for page_id, relevance in sorted(page_grades.items())
+    ]
+
+
+@lru_cache(maxsize=None)
+def _load_vidore_page_map(source: str) -> dict[int, tuple[str, int]]:
+    """Load ``corpus_id -> (source document, zero-based page)`` for ViDoRe."""
+    subset = source.removeprefix("vidore_")
+    corpus_dir = ROOT / "data" / "raw" / f"vidore_v3_{subset}" / "corpus"
+    mapping_path = corpus_dir / "corpus_mapping.parquet"
+    paths = (
+        [mapping_path]
+        if mapping_path.is_file()
+        else sorted(corpus_dir.glob("*.parquet"))
+    )
+    if not paths:
+        raise FileNotFoundError(
+            f"Missing ViDoRe {source} corpus mapping under {corpus_dir}. "
+            "Download the corpus metadata so page-level qrels can be resolved."
+        )
+    try:
+        import pyarrow.parquet as parquet
+    except ImportError as error:
+        raise RuntimeError(
+            "pyarrow is required to resolve ViDoRe source_corpus_id page qrels"
+        ) from error
+
+    mapping: dict[int, tuple[str, int]] = {}
+    for path in paths:
+        table = parquet.read_table(
+            path, columns=["corpus_id", "doc_id", "page_number_in_doc"]
+        )
+        for row in table.to_pylist():
+            corpus_id = int(row["corpus_id"])
+            if corpus_id in mapping:
+                raise ValueError(f"Duplicate ViDoRe corpus_id={corpus_id} in {corpus_dir}")
+            mapping[corpus_id] = (
+                str(row["doc_id"]),
+                int(row["page_number_in_doc"]),
+            )
+    return mapping
 
 
 def _read_qa_file(path: Path) -> list[Any]:
@@ -724,9 +1064,10 @@ def _validate_baseline_chunking(config: dict[str, Any]) -> None:
     if str(config.get("chunker") or "") != "fixed_overlap":
         raise ValueError("baseline_legacy requires chunker=fixed_overlap")
     params = config.get("chunker_params") or {}
-    if int(params.get("n_words", 0)) != 512 or int(params.get("overlap", 0)) != 128:
+    if int(params.get("n_words", 0)) != 512 or int(params.get("overlap", 0)) not in {0, 128}:
         raise ValueError(
-            "baseline_legacy requires fixed_overlap 512 words / 128 overlap"
+            "baseline_legacy supports fixed_overlap 512 words with overlap 128 "
+            "(standard) or 0 (no-overlap experiment)"
         )
     model = str((config.get("embedder_params") or {}).get("model") or "")
     if model != "openai/text-embedding-3-small":
@@ -748,6 +1089,8 @@ def _apply_kdl_overrides(
         "request_batch_size": args.kdl_request_batch_size,
         "max_model_sequences": args.kdl_max_model_sequences,
         "host_failure_threshold": getattr(args, "kdl_host_failure_threshold", None),
+        "host_recovery_seconds": getattr(args, "kdl_host_recovery_seconds", None),
+        "host_recovery_attempts": getattr(args, "kdl_host_recovery_attempts", None),
     }
     for key, value in names.items():
         if value is not None:
@@ -781,6 +1124,7 @@ def _run_retrieval(
         if not (
             str(question["qid"]) in retrieval_rows
             and retrieval_rows[str(question["qid"])].get("status") == "ok"
+            and retrieval_rows[str(question["qid"])].get("parse_complete", True)
             and retrieval_rows[str(question["qid"])].get("retrieval_config_hash")
             == retrieval_config_hash
         )
@@ -882,6 +1226,10 @@ def _encode_retrieval_result(
         "retrieval_config_hash": retrieval_config_hash,
         "status": "ok",
         "error": None,
+        "parse_complete": not result.failed_page_ids,
+        "parse_failed_page_ids": list(result.failed_page_ids),
+        "parsed_page_ids": list(result.parsed_page_ids),
+        "cached_page_ids": list(result.cached_page_ids),
         "hits": [hit.as_dict() for hit in result.hits],
         "selected_pages": result.selected_pages,
         "chunks": [
@@ -906,6 +1254,7 @@ def _run_qa(
     generator_model: str,
     judge_model: str,
     max_context_chars: int,
+    max_context_chunks: int,
     max_unit_chars: int,
     max_output_tokens: int,
     qa_workers: int,
@@ -919,6 +1268,7 @@ def _run_qa(
             "generator": generator_model,
             "judge": judge_model,
             "max_context_chars": max_context_chars,
+            "max_context_chunks": max_context_chunks,
             "max_unit_chars": max_unit_chars,
             "max_output_tokens": max_output_tokens,
             "skip_judge": skip_judge,
@@ -961,12 +1311,14 @@ def _run_qa(
             for item in retrieval.get("chunks") or []
             if str(item.get("text") or "").strip()
         ]
+        inference_started = time.perf_counter()
         generation, retry_count, initial_answer = _generate_with_unanswerable_retry(
             qid,
             question["question"],
             context,
             model=generator_model,
             max_chars=max_context_chars,
+            max_chunks=max_context_chunks,
             max_output_tokens=max_output_tokens,
             previous_row=previous_row,
         )
@@ -983,6 +1335,7 @@ def _run_qa(
             "context_unit_ids": [item.chunk_id for item in context],
             "retrieved_page_count": len(retrieval.get("hits") or []),
             "retrieval_timing": retrieval.get("timing") or {},
+            "infer_time_seconds": round(time.perf_counter() - inference_started, 6),
             "qa_config_hash": qa_config_hash,
             "unanswerable_retry_count": retry_count,
         }
@@ -1060,15 +1413,157 @@ def _run_qa(
     return rows
 
 
-def _parse_score(text: str) -> int:
+def _parse_score(text: str) -> float:
     prefix = str(text or "")[:200]
-    match = re.search(r"correctness\s*:\s*([01])\b", prefix, flags=re.IGNORECASE)
+    match = re.search(
+        r"correctness\s*:\s*(0(?:\.5)?|1(?:\.0)?)\b",
+        prefix,
+        flags=re.IGNORECASE,
+    )
     if match:
-        return int(match.group(1))
-    match = re.search(r"\b([01])\b", prefix)
+        return float(match.group(1))
+    match = re.search(r"\b(0(?:\.5)?|1(?:\.0)?)\b", prefix)
     if match:
-        return int(match.group(1))
-    raise ValueError(f"judge response has no 0/1 score: {prefix!r}")
+        return float(match.group(1))
+    raise ValueError(f"judge response has no 0/0.5/1 score: {prefix!r}")
+
+
+def _benchmark_retrieval_metrics(
+    questions: list[dict[str, Any]],
+    retrieval_rows: dict[str, dict[str, Any]],
+    *,
+    page_index: PageIndex,
+) -> dict[str, Any]:
+    """Score file recall separately and all other retrieval metrics by page.
+
+    The raw Light ranking contains pages and the Accurate ranking contains
+    chunks whose ``doc_id`` is their source page.  Only ``file_recall`` maps
+    either ranking to source files; recall/NDCG use page qrels directly.
+    """
+    page_to_file = {str(page.page_id): str(page.source_uri) for page in page_index.pages}
+    metric_values: dict[str, dict[str, list[float]]] = {
+        "light_page": defaultdict(list),
+        "accurate_page": defaultdict(list),
+        "light_file": defaultdict(list),
+    }
+
+    def score(stage: str, ranked: list[str], grades: dict[str, float]) -> None:
+        for k in (10, 20):
+            # Truncate before deduplication. Repeated chunks from one page and
+            # repeated pages from one file therefore still consume rank.
+            unique: list[str] = []
+            for item in ranked[:k]:
+                if item and item not in unique:
+                    unique.append(item)
+            found = sum(1 for doc_id in grades if doc_id in unique)
+            gains = [grades.get(doc_id, 0.0) for doc_id in unique]
+            ideal_gains = sorted(grades.values(), reverse=True)[:k]
+            dcg = sum(
+                (2.0**gain - 1.0) / (1.0 if rank == 1 else math.log2(rank))
+                for rank, gain in enumerate(gains, start=1)
+            )
+            ideal = sum(
+                (2.0**gain - 1.0) / (1.0 if rank == 1 else math.log2(rank))
+                for rank, gain in enumerate(ideal_gains, start=1)
+            )
+            metric_values[stage][f"recall_at_{k}"].append(found / len(grades))
+            metric_values[stage][f"ndcg_at_{k}"].append(dcg / ideal if ideal else 0.0)
+
+    for question in questions:
+        qrels = question.get("gold_qrels") or []
+        if not qrels:
+            continue
+        grades: dict[str, float] = {}
+        for qrel in qrels:
+            doc_id = str(qrel.get("doc_id") or "")
+            if doc_id:
+                grades[doc_id] = max(grades.get(doc_id, 0.0), float(qrel.get("relevance") or 0.0))
+        if not grades:
+            continue
+        row = retrieval_rows.get(str(question["qid"]), {})
+        light_pages = [str(hit.get("page_id") or "") for hit in row.get("hits") or []]
+        light_files = [str(hit.get("source_uri") or "") for hit in row.get("hits") or []]
+        accurate_pages = [str(chunk.get("doc_id") or "") for chunk in row.get("chunks") or []]
+        accurate_files = [page_to_file.get(page_id, "") for page_id in accurate_pages]
+
+        page_grades = {
+            str(item.get("page_id") or ""): float(item.get("relevance") or 0.0)
+            for item in question.get("gold_page_qrels") or []
+            if item.get("page_id")
+        }
+        if page_grades:
+            score("light_page", light_pages, page_grades)
+            if accurate_pages:
+                score("accurate_page", accurate_pages, page_grades)
+        score("light_file", light_files, grades)
+
+    light_page_values = metric_values["light_page"]
+    accurate_page_values = metric_values["accurate_page"]
+    light_file_values = metric_values["light_file"]
+    questions_n = len(light_page_values["recall_at_10"])
+    accurate_n = len(accurate_page_values["recall_at_10"])
+    file_questions_n = len(light_file_values["recall_at_20"])
+    return {
+        # Explicit names document the unit of each metric.
+        "light_file_recall_at_20": _mean(light_file_values["recall_at_20"]),
+        "light_page_ndcg_at_10": _mean(light_page_values["ndcg_at_10"]),
+        "light_page_ndcg_at_20": _mean(light_page_values["ndcg_at_20"]),
+        "light_page_recall_at_10": _mean(light_page_values["recall_at_10"]),
+        "light_page_recall_at_20": _mean(light_page_values["recall_at_20"]),
+        "accurate_page_ndcg_at_10": _mean(accurate_page_values["ndcg_at_10"]),
+        "accurate_page_ndcg_at_20": _mean(accurate_page_values["ndcg_at_20"]),
+        "accurate_page_recall_at_10": _mean(accurate_page_values["recall_at_10"]),
+        "accurate_page_recall_at_20": _mean(accurate_page_values["recall_at_20"]),
+        "page_qrel_questions": float(questions_n) if questions_n else None,
+        "accurate_page_qrel_questions": float(accurate_n) if accurate_n else None,
+        "file_qrel_questions": float(file_questions_n) if file_questions_n else None,
+        # Backward-compatible names: all unqualified retrieval metrics are page-level.
+        "file_recall": _mean(light_file_values["recall_at_20"]),
+        "ndcg_at_10": _mean(light_page_values["ndcg_at_10"]),
+        "ndcg_at_20": _mean(light_page_values["ndcg_at_20"]),
+        "recall_at_10": _mean(light_page_values["recall_at_10"]),
+        "recall_at_20": _mean(light_page_values["recall_at_20"]),
+        "light_ndcg_at_10": _mean(light_page_values["ndcg_at_10"]),
+        "light_ndcg_at_20": _mean(light_page_values["ndcg_at_20"]),
+        "light_recall_at_10": _mean(light_page_values["recall_at_10"]),
+        "light_recall_at_20": _mean(light_page_values["recall_at_20"]),
+        "accurate_ndcg_at_10": _mean(accurate_page_values["ndcg_at_10"]),
+        "accurate_ndcg_at_20": _mean(accurate_page_values["ndcg_at_20"]),
+        "accurate_recall_at_10": _mean(accurate_page_values["recall_at_10"]),
+        "accurate_recall_at_20": _mean(accurate_page_values["recall_at_20"]),
+        "metric_units": {
+            "file_recall": "file",
+            "light_recall": "page",
+            "light_ndcg": "page",
+            "accurate_recall": "page",
+            "accurate_ndcg": "page",
+        },
+    }
+
+
+def _unique_bm25_pages_to_parse(retrieval_rows: dict[str, dict[str, Any]]) -> int:
+    """Count distinct BM25 pages selected before parsing across all queries."""
+    return len(
+        {
+            str(hit.get("page_id"))
+            for row in retrieval_rows.values()
+            for hit in row.get("hits") or []
+            if hit.get("page_id")
+        }
+    )
+
+
+def _next_report_version(reports_dir: Path, scope: str) -> int:
+    """Return an unused version shared by a report and its timing summary."""
+    pattern = re.compile(
+        rf"^{re.escape(scope)}_(?:baseline_legacy|timing_summary)_ver(\d+)\.json$"
+    )
+    versions = [
+        int(match.group(1))
+        for path in reports_dir.glob(f"{scope}_*_ver*.json")
+        if (match := pattern.match(path.name))
+    ]
+    return max(versions, default=0) + 1
 
 
 def _build_report(
@@ -1083,10 +1578,13 @@ def _build_report(
     runner: OnDemandPerQueryRunner,
     top_k_pages: int,
     top_k_chunks: int,
+    max_context_chunks: int,
+    chunk_overlap: int,
     depth: int,
     alpha: float,
     generator_model: str,
     judge_model: str,
+    unique_bm25_pages_to_parse: int,
 ) -> dict[str, Any]:
     ordered = [
         qa_rows[str(question["qid"])]
@@ -1098,7 +1596,7 @@ def _build_report(
         for row in ordered
         if row.get("status") == "ok" and row.get("score") is not None
     ]
-    scores = [int(row["score"]) for row in completed]
+    scores = [float(row["score"]) for row in completed]
     errors = [row for row in ordered if row.get("status") != "ok"]
     page_hits = []
     context_pages = []
@@ -1111,16 +1609,28 @@ def _build_report(
         qa_row = qa_rows.get(str(question["qid"]), {})
         context_pages.append(len(qa_row.get("context_page_ids") or []))
 
-    by_domain: dict[str, list[int]] = defaultdict(list)
-    by_type: dict[str, list[int]] = defaultdict(list)
+    retrieval_metrics = _benchmark_retrieval_metrics(
+        questions, retrieval_rows, page_index=page_index
+    )
+    infer_times = [
+        float(row.get("infer_time_seconds") or 0.0)
+        for row in completed
+        if row.get("infer_time_seconds") is not None
+    ]
+
+    by_domain: dict[str, list[float]] = defaultdict(list)
+    by_type: dict[str, list[float]] = defaultdict(list)
     for row in completed:
-        by_domain[str(row.get("domain") or "Unknown")].append(int(row["score"]))
-        by_type[str(row.get("type_group") or "Una.")].append(int(row["score"]))
+        by_domain[str(row.get("domain") or "Unknown")].append(float(row["score"]))
+        by_type[str(row.get("type_group") or "Una.")].append(float(row["score"]))
 
     return {
         "arm": "baseline_legacy",
-        "pipeline": "pdf_inspector -> bm25 -> KDL+pdf_inspector -> fixed_chunk_512 -> text-embedding-3-small -> hybrid(alpha=0.7) -> generator -> DocBench judge",
+        "pipeline": f"pdf_inspector -> bm25 -> KDL+pdf_inspector -> fixed_chunk_512_overlap_{chunk_overlap} -> text-embedding-3-small -> hybrid(alpha=0.7) -> generator -> DocBench judge",
         "retrieval_scope": scope,
+        "query_page_scope": (
+            "per_question_document" if scope == "file" else "global_lake"
+        ),
         "generator": generator_model,
         "judge": judge_model,
         "documents": len(selected_documents),
@@ -1131,12 +1641,20 @@ def _build_report(
         "errors": len(errors),
         "missing": max(len(questions) - len(completed), 0),
         "accuracy": _mean(scores),
+        "correct_only": _mean([int(score >= 1.0) for score in scores]),
+        "correct_plus_partial": _mean([int(score > 0.0) for score in scores]),
         "score_1": scores.count(1),
+        "score_partial": scores.count(0.5),
         "score_0": scores.count(0),
         "bm25_gold_document_hit_rate": _mean([int(value) for value in page_hits]),
+        "unique_bm25_pages_to_parse": unique_bm25_pages_to_parse,
+        **retrieval_metrics,
+        "retrieval_qrel_questions": retrieval_metrics["page_qrel_questions"],
+        "infer_time_seconds_per_query": _mean(infer_times),
         "mean_context_pages": _mean(context_pages),
         "top_k_pages": top_k_pages,
         "top_k_chunks": top_k_chunks,
+        "max_context_chunks": max_context_chunks,
         "chunk_retrieval_depth": depth,
         "chunk_retrieval_alpha": alpha,
         "accuracy_by_domain": {

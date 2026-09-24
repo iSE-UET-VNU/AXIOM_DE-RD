@@ -66,7 +66,9 @@ class Generation:
 
 
 def pack_context(
-    chunks: Sequence[ContextChunk], max_chars: int = MAX_CONTEXT_CHARS
+    chunks: Sequence[ContextChunk],
+    max_chars: int = MAX_CONTEXT_CHARS,
+    max_chunks: int | None = None,
 ) -> list[ContextChunk]:
     """Fill the budget in rank order, whole chunks only.
 
@@ -78,6 +80,8 @@ def pack_context(
     packed: list[ContextChunk] = []
     used = 0
     for chunk in chunks:
+        if max_chunks is not None and len(packed) >= max_chunks:
+            break
         size = len(chunk.text)
         if used + size > max_chars:
             continue
@@ -101,10 +105,11 @@ def generate(
     *,
     model: str,
     max_chars: int = MAX_CONTEXT_CHARS,
+    max_chunks: int | None = None,
     max_output_tokens: int = MAX_OUTPUT_TOKENS,
     render_prompt: Callable[[str, Sequence[str]], str] | None = None,
 ) -> Generation:
-    packed = pack_context(chunks, max_chars)
+    packed = pack_context(chunks, max_chars, max_chunks)
     doc_ids: list[str] = []
     for chunk in packed:
         if chunk.doc_id not in doc_ids:

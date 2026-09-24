@@ -45,6 +45,8 @@ from research.data_discovery.run_docbench_e2e import (  # noqa: E402
     _check_vllm_endpoint,
     _load_docbench,
     _load_or_build_page_index,
+    _make_query_page_scope,
+    _non_negative_float,
     _parse_score,
     _resolve_path,
     _generate_with_unanswerable_retry,
@@ -117,6 +119,28 @@ def main(argv: list[str] | None = None) -> int:
         args.top_k_pages or docbench_config.get("top_k_pages") or 10,
         "top-k-pages",
     )
+    parse_batch_size = _positive(
+        args.parse_batch_size
+        if args.parse_batch_size is not None
+        else docbench_config.get("parse_batch_size") or 32,
+        "parse-batch-size",
+    )
+    parse_retry_attempts = _non_negative(
+        args.parse_retry_attempts
+        if args.parse_retry_attempts is not None
+        else (
+            docbench_config.get("parse_retry_attempts")
+            if docbench_config.get("parse_retry_attempts") is not None
+            else 2
+        ),
+        "parse-retry-attempts",
+    )
+    parse_retry_backoff_seconds = _non_negative_float(
+        args.parse_retry_backoff_seconds
+        if args.parse_retry_backoff_seconds is not None
+        else docbench_config.get("parse_retry_backoff_seconds", 0.0),
+        "parse-retry-backoff-seconds",
+    )
     workers = _positive(
         args.workers
         or docbench_config.get("qa_workers")
@@ -129,6 +153,12 @@ def main(argv: list[str] | None = None) -> int:
         or docbench_config.get("max_context_chars")
         or 12000,
         "max-context-chars",
+    )
+    max_context_chunks = _positive(
+        args.max_context_chunks
+        or docbench_config.get("max_context_chunks")
+        or top_k_pages,
+        "max-context-chunks",
     )
     max_page_chars = _positive(
         args.max_page_chars
@@ -189,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     index_seconds = time.perf_counter() - index_started
     if not page_index.pages:
         raise RuntimeError("The pdf-inspector page index is empty")
+    page_scope_for_query = _make_query_page_scope(page_index, questions, scope)
 
     parser_config = resolve_parser_config(
         ROOT,
@@ -207,7 +238,11 @@ def main(argv: list[str] | None = None) -> int:
     discovery_started = time.perf_counter()
     hits_by_qid = {
         str(question["qid"]): page_index.search(
-            question["question"], top_k=top_k_pages
+            question["question"],
+            top_k=top_k_pages,
+            allowed_page_ids=page_scope_for_query(
+                str(question["qid"]), question["question"]
+            ),
         )
         for question in questions
     }
@@ -219,6 +254,9 @@ def main(argv: list[str] | None = None) -> int:
             "contract_version": "docbench-pages-v1",
             "pipeline": PIPELINE_NAME,
             "retrieval_scope": scope,
+            "query_page_scope": (
+                "per_question_document" if scope == "file" else "global_lake"
+            ),
             "status": "ok",
             "hits": [hit.as_dict() for hit in hits_by_qid[str(question["qid"])]],
             "selected_pages": _selected_page_records(
@@ -264,6 +302,9 @@ def main(argv: list[str] | None = None) -> int:
             parser_config_hash=_hash_payload(parser_config),
             page_index=page_index,
             event_logger=event_logger,
+            parse_batch_size=parse_batch_size,
+            parse_retry_attempts=parse_retry_attempts,
+            parse_retry_backoff_seconds=parse_retry_backoff_seconds,
         )
     parse_seconds = time.perf_counter() - parse_started
     if not page_texts:
@@ -285,6 +326,9 @@ def main(argv: list[str] | None = None) -> int:
         "max_page_chars": max_page_chars,
         "max_output_tokens": max_output_tokens,
         "skip_judge": bool(args.skip_judge),
+        "query_page_scope": (
+            "per_question_document" if scope == "file" else "global_lake"
+        ),
         "corpus_fingerprint": corpus_fingerprint,
         "parser_config_hash": _hash_payload(parser_config),
     }
@@ -303,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         generator_model=generator_model,
         judge_model=judge_model,
         max_context_chars=max_context_chars,
+        max_context_chunks=max_context_chunks,
         max_page_chars=max_page_chars,
         max_output_tokens=max_output_tokens,
         workers=workers,
@@ -336,6 +381,9 @@ def main(argv: list[str] | None = None) -> int:
         "total_seconds": round(time.perf_counter() - run_started, 3),
         "questions": len(questions),
         "workers": workers,
+        "parse_batch_size": parse_batch_size,
+        "parse_retry_attempts": parse_retry_attempts,
+        "parse_retry_backoff_seconds": parse_retry_backoff_seconds,
         "kdl_host_health": kdl_health_summary,
     }
     report_path = output_dir / "reports" / f"{scope}_pages.json"
@@ -349,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
         "post_parse_embedding": False,
         "post_parse_retrieval": False,
         "retrieval_scope": scope,
+        "query_page_scope": qa_config["query_page_scope"],
         "docbench_root": str(docbench_root.resolve()),
         "config": str(config_path),
         "documents_available": len(documents),
@@ -360,6 +409,9 @@ def main(argv: list[str] | None = None) -> int:
         "quarantined_pages": quarantined_pages,
         "corpus_fingerprint": corpus_fingerprint,
         "top_k_pages": top_k_pages,
+        "parse_batch_size": parse_batch_size,
+        "parse_retry_attempts": parse_retry_attempts,
+        "parse_retry_backoff_seconds": parse_retry_backoff_seconds,
         "parser_config": parser_config,
         "parser_artifacts_reused": bool(args.reuse_parser_artifacts),
         "parser_artifacts_dir": (
@@ -394,6 +446,29 @@ def _arguments() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--retrieval-scope", choices=("file", "lake"))
     parser.add_argument("--top-k-pages", type=int)
+    parser.add_argument(
+        "--parse-batch-size",
+        type=int,
+        help=(
+            "Number of selected pages submitted to one shared KDL parse call. "
+            "Each page remains a separate logical input."
+        ),
+    )
+    parser.add_argument(
+        "--parse-retry-attempts",
+        "--parse-retries",
+        dest="parse_retry_attempts",
+        type=int,
+        help=(
+            "Number of additional batch attempts for pages that are missing "
+            "or quarantined (default: 2)."
+        ),
+    )
+    parser.add_argument(
+        "--parse-retry-backoff-seconds",
+        type=float,
+        help="Delay before each unresolved-page retry pass (default: 0).",
+    )
     parser.add_argument("--max-documents", type=int)
     parser.add_argument("--limit", type=int)
     parser.add_argument(
@@ -404,6 +479,7 @@ def _arguments() -> argparse.ArgumentParser:
         help="Concurrent generator/judge question workers.",
     )
     parser.add_argument("--max-context-chars", type=int)
+    parser.add_argument("--max-context-chunks", type=int)
     parser.add_argument(
         "--max-page-chars",
         "--max-unit-chars",
@@ -474,13 +550,25 @@ def _parse_selected_pages_checkpointed(
     parser_config_hash: str,
     page_index: PageIndex,
     event_logger: JsonEventLogger,
+    parse_batch_size: int,
+    parse_retry_attempts: int = 2,
+    parse_retry_backoff_seconds: float = 0.0,
 ) -> tuple[dict[str, str], int, dict[str, Any]]:
-    """Parse one page at a time and checkpoint after every successful page.
+    """Parse selected pages in bounded batches and checkpoint after each batch.
 
-    A KDL host failure can happen in the middle of a large page union.  Page
-    granularity ensures that completed pages are durable before the next KDL
-    request starts, so a rerun only submits missing pages.
+    Every page remains a separate ingestion input, allowing KDL's global
+    scheduler to batch requests across pages. Pages with a missing or
+    quarantined result are collected and retried in later bounded batches
+    during the same invocation. Successful batches are durable before the next
+    batch starts, so an interrupted run can resume from the checkpoint.
     """
+
+    if parse_batch_size <= 0:
+        raise ValueError("parse-batch-size must be positive")
+    if parse_retry_attempts < 0:
+        raise ValueError("parse-retry-attempts must be non-negative")
+    if parse_retry_backoff_seconds < 0:
+        raise ValueError("parse-retry-backoff-seconds must be non-negative")
 
     page_lookup = {
         (str(Path(page.file_path).resolve()), int(page.page_index)): page.page_id
@@ -517,14 +605,31 @@ def _parse_selected_pages_checkpointed(
         except (OSError, ValueError):
             LOGGER.warning("Ignoring unreadable page parse checkpoint: %s", cache_path)
 
-    records = dict(cache.get("records") or {})
-    failed = dict(cache.get("failed") or {})
+    # A page in ``failed`` is deliberately still pending.  Failed entries are
+    # diagnostic state, not a terminal skip marker; this is what lets a resume
+    # (or a later retry pass below) submit the page again.
+    ordered_page_ids = {item[2] for item in ordered_pages}
+    records = {
+        str(page_id): record
+        for page_id, record in dict(cache.get("records") or {}).items()
+        if str(page_id) in ordered_page_ids
+    }
+    failed = {
+        str(page_id): failure
+        for page_id, failure in dict(cache.get("failed") or {}).items()
+        if str(page_id) in ordered_page_ids and str(page_id) not in records
+    }
+    page_by_id = {item[2]: item for item in ordered_pages}
     pending = [item for item in ordered_pages if item[2] not in records]
     LOGGER.info(
-        "Parse checkpoint: pending=%d/%d cached=%d",
+        "Parse checkpoint: pending=%d/%d cached=%d failed=%d batch_size=%d "
+        "retry_attempts=%d",
         len(pending),
         len(ordered_pages),
         len(records),
+        len(failed),
+        parse_batch_size,
+        parse_retry_attempts,
     )
     runtime_parser_config = dict(parser_config)
     runtime_kdl = dict(runtime_parser_config.get("kdl") or {})
@@ -540,6 +645,10 @@ def _parse_selected_pages_checkpointed(
             str(runtime_kdl.get("host_abort_on_open", True)).lower()
             not in {"0", "false", "no", "off"}
         ),
+        recovery_cooldown_seconds=float(
+            runtime_kdl.get("host_recovery_seconds", 30.0)
+        ),
+        recovery_max_attempts=int(runtime_kdl.get("host_recovery_attempts", 5)),
         event_logger=(
             JsonEventLogger(runtime_kdl.get("event_log_path"), run_name="kdl")
             if runtime_kdl.get("event_log_path")
@@ -547,93 +656,369 @@ def _parse_selected_pages_checkpointed(
         ),
     )
     runtime_parser_config["kdl"] = runtime_kdl
-    for number, (path, page_index_value, page_id) in enumerate(pending, start=1):
-        started = time.perf_counter()
-        event_logger.emit(
-            "page_parse_started",
-            page_id=page_id,
-            page_index=page_index_value,
-            pending_number=number,
-            pending_total=len(pending),
+
+    # ``parse_retry_attempts`` counts retries after the initial pass.  Each
+    # pass re-batches only the pages that did not produce a usable enriched
+    # record, rather than resubmitting successful pages.
+    page_attempt = 0
+    while pending:
+        page_attempt += 1
+        retry_number = page_attempt - 1
+        pending_total = len(pending)
+        batch_count = (pending_total + parse_batch_size - 1) // parse_batch_size
+        LOGGER.info(
+            "Parse attempt %d/%d: pending=%d batch_size=%d",
+            page_attempt,
+            parse_retry_attempts + 1,
+            pending_total,
+            parse_batch_size,
         )
-        try:
-            result = run_selected_pages(
-                {path: [page_index_value]},
-                parser_config=runtime_parser_config,
-                project_root=project_root,
-                work_dir=(
-                    work_dir
-                    / f"page_{hashlib.sha1(page_id.encode()).hexdigest()[:16]}"
-                ),
-                one_page_inputs=True,
-                chunking_config=None,
+        if retry_number > 0:
+            event_logger.emit(
+                "page_parse_retry_started",
+                retry_number=retry_number,
+                pending_total=pending_total,
+                batch_size=parse_batch_size,
             )
-            if result.enriched.enriched_data:
-                record = result.enriched.enriched_data[0].__dict__
-                records[page_id] = record
-                failed.pop(page_id, None)
-                cache["records"] = records
-                cache["failed"] = failed
-                _write_json(cache_path, cache)
-                elapsed = time.perf_counter() - started
+            if parse_retry_backoff_seconds > 0:
+                time.sleep(parse_retry_backoff_seconds)
+        retry_pending: list[tuple[str, int, str]] = []
+        retry_ids_seen: set[str] = set()
+        for batch_index, batch_start in enumerate(
+            range(0, pending_total, parse_batch_size), start=1
+        ):
+            batch = pending[batch_start : batch_start + parse_batch_size]
+            batch_started = time.perf_counter()
+            batch_selected: dict[str, list[int]] = defaultdict(list)
+            for number, (path, page_index_value, page_id) in enumerate(
+                batch, start=batch_start + 1
+            ):
+                batch_selected[path].append(page_index_value)
                 event_logger.emit(
-                    "page_parse_completed",
+                    "page_parse_started",
                     page_id=page_id,
-                    elapsed_seconds=round(elapsed, 6),
+                    page_index=page_index_value,
+                    pending_number=number,
+                    pending_total=pending_total,
+                    batch_number=batch_index,
+                    batch_index=batch_index,
+                    retry_number=retry_number,
+                    batch_size=len(batch),
                 )
-                LOGGER.info(
-                    "Parse page %d/%d: page_id=%s status=ok elapsed=%.2fs",
-                    number,
-                    len(pending),
-                    page_id,
-                    elapsed,
+            batch_page_ids = {item[2] for item in batch}
+            event_logger.emit(
+                "page_parse_batch_started",
+                batch_number=batch_index,
+                batch_index=batch_index,
+                batch_size=len(batch),
+                pending_total=pending_total,
+                retry_number=retry_number,
+            )
+
+            # Keep work directories unique across retry passes.  This avoids
+            # accidentally reusing temporary parser outputs from a failed pass.
+            batch_work_dir = (
+                work_dir
+                / f"attempt_{page_attempt:03d}"
+                / f"batch_{batch_index:06d}"
+            )
+            retry_ids: set[str] = set()
+            returned_ids: set[str] = set()
+            batch_error: Exception | None = None
+            try:
+                result = run_selected_pages(
+                    batch_selected,
+                    parser_config=runtime_parser_config,
+                    project_root=project_root,
+                    work_dir=batch_work_dir,
+                    one_page_inputs=True,
+                    chunking_config=None,
                 )
-            else:
-                failed[page_id] = {
-                    "error": "KDL returned no enriched record",
+                for parsed in result.enriched.enriched_data:
+                    parsed_page_id = _parsed_page_id(parsed, page_lookup)
+                    if not parsed_page_id:
+                        LOGGER.warning(
+                            "Parse attempt %d batch %d returned a record "
+                            "without page metadata",
+                            page_attempt,
+                            batch_index,
+                        )
+                        continue
+                    if parsed_page_id not in batch_page_ids:
+                        LOGGER.warning(
+                            "Parse attempt %d batch %d returned unexpected page_id=%s",
+                            page_attempt,
+                            batch_index,
+                            parsed_page_id,
+                        )
+                        continue
+                    returned_ids.add(parsed_page_id)
+                    records[parsed_page_id] = parsed.__dict__
+                    failed.pop(parsed_page_id, None)
+                    page_elapsed = _parsed_latency_seconds(parsed)
+                    event_logger.emit(
+                        "page_parse_completed",
+                        page_id=parsed_page_id,
+                        elapsed_seconds=(
+                            round(page_elapsed, 6)
+                            if page_elapsed is not None
+                            else None
+                        ),
+                        batch_number=batch_index,
+                        retry_number=retry_number,
+                    )
+                for quarantined in result.ingestion.quarantined_documents:
+                    parsed_page_id = _parsed_page_id(quarantined.parsed, page_lookup)
+                    if not parsed_page_id or parsed_page_id not in batch_page_ids:
+                        if parsed_page_id:
+                            LOGGER.warning(
+                                "Parse attempt %d batch %d returned unexpected "
+                                "quarantined page_id=%s",
+                                page_attempt,
+                                batch_index,
+                                parsed_page_id,
+                            )
+                        continue
+                    returned_ids.add(parsed_page_id)
+                    retry_ids.add(parsed_page_id)
+                    # A quarantined result is not usable context.  Remove a
+                    # stale record if an earlier attempt happened to persist
+                    # one for the same page before it was quarantined.
+                    records.pop(parsed_page_id, None)
+                    failed[parsed_page_id] = {
+                        "error": (
+                            json.dumps(quarantined.reasons, ensure_ascii=False)
+                            if quarantined.reasons
+                            else "KDL returned a quarantined document"
+                        ),
+                        "timestamp_utc": utc_now_iso(),
+                        "attempt": page_attempt,
+                    }
+                    event_logger.emit(
+                        "page_parse_failed",
+                        page_id=parsed_page_id,
+                        error_type="quarantined",
+                        error="KDL returned a quarantined document",
+                        batch_number=batch_index,
+                        retry_number=retry_number,
+                    )
+                # A parser response can be successful overall while silently
+                # omitting one or more input pages. Treat every omission as a
+                # retryable page, not as a successful batch.
+                for missing_page_id in sorted(batch_page_ids - returned_ids):
+                    retry_ids.add(missing_page_id)
+                    failed[missing_page_id] = {
+                        "error": "KDL returned no enriched record",
+                        "timestamp_utc": utc_now_iso(),
+                        "attempt": page_attempt,
+                    }
+                    event_logger.emit(
+                        "page_parse_failed",
+                        page_id=missing_page_id,
+                        error_type="missing_result",
+                        error="KDL returned no enriched record",
+                        batch_number=batch_index,
+                        retry_number=retry_number,
+                    )
+            except KDLHostUnavailableError as error:
+                batch_error = error
+                retry_ids.update(batch_page_ids)
+                for failed_page_id in batch_page_ids:
+                    failed[failed_page_id] = {
+                        "error": f"{type(error).__name__}: {error}",
+                        "timestamp_utc": utc_now_iso(),
+                        "attempt": page_attempt,
+                    }
+                    event_logger.emit(
+                        "page_parse_failed",
+                        page_id=failed_page_id,
+                        error_type=type(error).__name__,
+                        error=str(error),
+                        batch_number=batch_index,
+                        retry_number=retry_number,
+                    )
+                cache["last_error"] = {
                     "timestamp_utc": utc_now_iso(),
+                    "page_ids": sorted(batch_page_ids),
+                    "error_type": type(error).__name__,
+                    "error": str(error),
                 }
-                cache["failed"] = failed
-                _write_json(cache_path, cache)
-                LOGGER.warning("Parse page %s returned no enriched record", page_id)
-        except KDLHostUnavailableError as error:
+                LOGGER.warning(
+                    "Parse attempt %d batch %d hit KDL host failure: %s",
+                    page_attempt,
+                    batch_index,
+                    error,
+                )
+            except Exception as error:  # noqa: BLE001 - retain page-level progress
+                batch_error = error
+                retry_ids.update(batch_page_ids)
+                for failed_page_id in batch_page_ids:
+                    failed[failed_page_id] = {
+                        "error": f"{type(error).__name__}: {error}",
+                        "timestamp_utc": utc_now_iso(),
+                        "attempt": page_attempt,
+                    }
+                    event_logger.emit(
+                        "page_parse_failed",
+                        page_id=failed_page_id,
+                        error_type=type(error).__name__,
+                        error=str(error),
+                        batch_number=batch_index,
+                        retry_number=retry_number,
+                    )
+                LOGGER.exception(
+                    "Parse attempt %d batch %d failed",
+                    page_attempt,
+                    batch_index,
+                )
+
+            # Checkpoint after every batch, including a failed batch.  A
+            # process interruption therefore loses at most the in-flight batch.
             cache["records"] = records
             cache["failed"] = failed
-            cache["last_error"] = {
-                "timestamp_utc": utc_now_iso(),
-                "page_id": page_id,
-                "error_type": type(error).__name__,
-                "error": str(error),
-            }
+            cache["parse_retry_attempts"] = parse_retry_attempts
+            cache["last_attempt"] = page_attempt
             _write_json(cache_path, cache)
+            batch_elapsed = time.perf_counter() - batch_started
             event_logger.emit(
-                "run_aborted",
-                page_id=page_id,
-                error_type=type(error).__name__,
-                error=str(error),
+                "page_parse_batch_completed",
+                batch_number=batch_index,
+                batch_index=batch_index,
+                batch_size=len(batch),
+                succeeded=len(batch_page_ids - retry_ids),
+                failed=len(retry_ids),
+                retrying=bool(retry_ids),
+                elapsed_seconds=round(batch_elapsed, 6),
+                retry_number=retry_number,
             )
-            LOGGER.error(
-                "Stopping page pipeline at page_id=%s; checkpoint preserved for resume",
-                page_id,
+            LOGGER.info(
+                "Parse attempt %d batch %d/%d: pages=%d succeeded=%d "
+                "failed=%d elapsed=%.2fs",
+                page_attempt,
+                batch_index,
+                batch_count,
+                len(batch),
+                len(batch_page_ids - retry_ids),
+                len(retry_ids),
+                batch_elapsed,
             )
-            raise
-        except Exception as error:  # noqa: BLE001 - retain page-level progress
-            failed[page_id] = {
-                "error": f"{type(error).__name__}: {error}",
-                "timestamp_utc": utc_now_iso(),
-            }
-            cache["failed"] = failed
-            _write_json(cache_path, cache)
+
+            for page_id in sorted(retry_ids):
+                if (
+                    page_id in retry_ids_seen
+                    or page_id not in page_by_id
+                    or page_id in records
+                ):
+                    continue
+                retry_ids_seen.add(page_id)
+                retry_pending.append(page_by_id[page_id])
+
+            # A host circuit is intentionally fail-fast after the configured
+            # page retry budget. Before that point, wait for the health probe's
+            # advertised cooldown and retry the same batch in the next pass.
+            if batch_error is not None and isinstance(
+                batch_error, KDLHostUnavailableError
+            ):
+                if page_attempt > parse_retry_attempts:
+                    event_logger.emit(
+                        "run_aborted",
+                        page_ids=sorted(batch_page_ids),
+                        error_type=type(batch_error).__name__,
+                        error=str(batch_error),
+                        retry_number=retry_number,
+                    )
+                    LOGGER.error(
+                        "Stopping page pipeline after %d attempts at batch=%d; "
+                        "checkpoint preserved for resume",
+                        page_attempt,
+                        batch_index,
+                    )
+                    raise batch_error
+                delay = max(
+                    0.0,
+                    float(
+                        batch_error.retry_after_seconds
+                        or runtime_kdl.get("host_recovery_seconds", 0.0)
+                        or 0.0
+                    ),
+                )
+                if delay > 0:
+                    LOGGER.info(
+                        "Waiting %.2fs before retrying KDL host batch",
+                        delay,
+                    )
+                    time.sleep(delay)
+                # Remaining batches in this pass cannot make progress while
+                # the shared circuit is open. Requeue them as-is and retry
+                # everything together after the cooldown.
+                for remaining_batch in pending[
+                    batch_start + len(batch) :
+                ]:
+                    if (
+                        remaining_batch[2] not in retry_ids_seen
+                        and remaining_batch[2] not in records
+                    ):
+                        retry_ids_seen.add(remaining_batch[2])
+                        retry_pending.append(remaining_batch)
+                break
+
+        if not retry_pending:
+            pending = []
+            break
+        if page_attempt > parse_retry_attempts:
+            LOGGER.warning(
+                "Page parse retries exhausted: unresolved=%d/%d",
+                len(retry_pending),
+                len(ordered_pages),
+            )
             event_logger.emit(
-                "page_parse_failed",
-                page_id=page_id,
-                error_type=type(error).__name__,
-                error=str(error),
+                "page_parse_retries_exhausted",
+                retry_number=retry_number,
+                unresolved=len(retry_pending),
+                total=len(ordered_pages),
             )
-            LOGGER.exception("Parse page failed page_id=%s", page_id)
+            pending = retry_pending
+            break
+        pending = retry_pending
+        LOGGER.info(
+            "Retrying %d unresolved pages in %d batch(es)",
+            len(pending),
+            (len(pending) + parse_batch_size - 1) // parse_batch_size,
+        )
 
     page_texts = _page_texts_from_dicts(records.values(), page_index)
-    return page_texts, len(failed), runtime_kdl["_host_health"].snapshot()
+    unresolved_failed = sum(
+        1 for page_id in ordered_page_ids if page_id in failed and page_id not in records
+    )
+    return page_texts, unresolved_failed, runtime_kdl["_host_health"].snapshot()
+
+
+def _parsed_page_id(parsed: Any, page_lookup: dict[tuple[str, int], str]) -> str | None:
+    """Resolve a parsed one-page input back to its original page id."""
+
+    metadata = dict(getattr(parsed, "metadata", {}) or {})
+    nested = metadata.get("source_metadata")
+    source_metadata = dict(nested) if isinstance(nested, dict) else metadata
+    path = source_metadata.get("discovery_original_path")
+    indices = source_metadata.get("discovery_page_indices")
+    if not path or not isinstance(indices, list) or len(indices) != 1:
+        return None
+    try:
+        key = (str(Path(path).resolve()), int(indices[0]))
+    except (TypeError, ValueError):
+        return None
+    return page_lookup.get(key)
+
+
+def _parsed_latency_seconds(parsed: Any) -> float | None:
+    metadata = dict(getattr(parsed, "metadata", {}) or {})
+    nested = metadata.get("source_metadata")
+    source_metadata = dict(nested) if isinstance(nested, dict) else {}
+    value = source_metadata.get("latency_seconds")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _selected_page_records(hits: list[Any]) -> list[dict[str, Any]]:
@@ -714,6 +1099,7 @@ def _run_qa(
     generator_model: str,
     judge_model: str,
     max_context_chars: int,
+    max_context_chunks: int,
     max_page_chars: int,
     max_output_tokens: int,
     workers: int,
@@ -748,6 +1134,7 @@ def _run_qa(
             context,
             model=generator_model,
             max_chars=max_context_chars,
+            max_chunks=max_context_chunks,
             max_output_tokens=max_output_tokens,
             previous_row=previous_row,
         )
@@ -914,6 +1301,9 @@ def _build_report(
         "arm": "pages",
         "pipeline": PIPELINE_NAME,
         "retrieval_scope": scope,
+        "query_page_scope": (
+            "per_question_document" if scope == "file" else "global_lake"
+        ),
         "generator": generator_model,
         "judge": judge_model,
         "documents": len(selected_documents),
@@ -1008,6 +1398,13 @@ def _positive(value: Any, name: str) -> int:
     number = int(value)
     if number <= 0:
         raise ValueError(f"{name} must be positive")
+    return number
+
+
+def _non_negative(value: Any, name: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise ValueError(f"{name} must be non-negative")
     return number
 
 

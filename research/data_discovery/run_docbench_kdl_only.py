@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import argparse
 import json
 import logging
@@ -37,6 +37,7 @@ from research.data_discovery.run_docbench_e2e import (  # noqa: E402
     _check_vllm_endpoint,
     _load_docbench,
     _load_or_build_page_index,
+    _make_query_page_scope,
     _require_env,
     _resolve_path,
 )
@@ -115,13 +116,19 @@ def main(argv: list[str] | None = None) -> int:
     index_seconds = time.perf_counter() - index_started
     if not page_index.pages:
         raise RuntimeError("The pdf-inspector page index is empty")
+    page_scope_for_query = _make_query_page_scope(page_index, questions, scope)
 
     top_k_pages = int(
         args.top_k_pages or docbench_config.get("top_k_pages") or 10
     )
     if top_k_pages <= 0:
         raise ValueError("--top-k-pages must be positive")
-    selected = _union_pages(page_index, questions, top_k_pages)
+    selected = _union_pages(
+        page_index,
+        questions,
+        top_k_pages,
+        page_scope_for_query=page_scope_for_query,
+    )
     selected = _limit_pages(selected, args.max_pages)
     selected_page_count = sum(len(indices) for indices in selected.values())
     if selected_page_count <= 0:
@@ -183,6 +190,9 @@ def main(argv: list[str] | None = None) -> int:
         "config": str(config_path),
         "docbench_root": str(docbench_root.resolve()),
         "retrieval_scope": scope,
+        "query_page_scope": (
+            "per_question_document" if scope == "file" else "global_lake"
+        ),
         "questions": len(questions),
         "documents_selected": len(selected_documents),
         "documents_indexed": len(index_documents),
@@ -241,10 +251,22 @@ def _union_pages(
     page_index: Any,
     questions: list[dict[str, Any]],
     top_k_pages: int,
+    *,
+    page_scope_for_query: Callable[[str, str], set[str] | None] | None = None,
 ) -> dict[str, list[int]]:
     selected: defaultdict[str, set[int]] = defaultdict(set)
     for question in questions:
-        for hit in page_index.search(question["question"], top_k=top_k_pages):
+        qid = str(question["qid"])
+        allowed_page_ids = (
+            page_scope_for_query(qid, question["question"])
+            if page_scope_for_query is not None
+            else None
+        )
+        for hit in page_index.search(
+            question["question"],
+            top_k=top_k_pages,
+            allowed_page_ids=allowed_page_ids,
+        ):
             selected[hit.evidence.file_path].add(int(hit.evidence.page_index))
     return {
         path: sorted(indices)

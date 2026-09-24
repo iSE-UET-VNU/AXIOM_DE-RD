@@ -158,11 +158,8 @@ class _PdfInspectorTextRouter:
 
         extract_started = perf_counter()
         try:
-            regions = await asyncio.to_thread(
-                self._extractor.extract,
-                context.source_path,
-                page_index,
-                boxes,
+            regions = self._extractor.extract(
+                context.source_path, page_index, boxes
             )
         except Exception as exc:
             stats.region_extraction_latency_ms += (
@@ -265,20 +262,17 @@ class _PdfInspectorTextRouter:
         extract_started = perf_counter()
         try:
             if hasattr(self._extractor, "extract_pages"):
-                page_results = await asyncio.to_thread(
-                    self._extractor.extract_pages,
+                page_results = self._extractor.extract_pages(
                     context.source_path,
                     [(page - 1, boxes) for page, _, boxes in pending],
                 )
             else:
-                page_results = await asyncio.to_thread(
-                    lambda: [
+                page_results = [
                         self._extractor.extract(
                             context.source_path, page - 1, boxes
                         )
                         for page, _, boxes in pending
                     ]
-                )
         except Exception as exc:
             stats.region_extraction_latency_ms += (
                 perf_counter() - extract_started

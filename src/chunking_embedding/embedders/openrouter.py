@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any, Callable
 import hashlib
 import json
+import logging
 import os
 import time
+import uuid
 
 import requests
 
@@ -20,6 +22,7 @@ from ..registry import embedder
 from . import MAX_REQUEST_TOKENS, sanitize_text, token_batches
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+LOGGER = logging.getLogger(__name__)
 
 
 class OpenRouterLLM:
@@ -145,25 +148,47 @@ class OpenRouterEmbedder:
         self._sleep: Callable[[float], None] = time.sleep
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        started = time.perf_counter()
         sanitized = [sanitize_text(t) for t in texts]
         vectors: list[list[float] | None] = [None] * len(sanitized)
         todo: list[int] = []
+        cache_hits = 0
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         for i, text in enumerate(sanitized):
             cached = self._cache_read(text)
             if cached is not None:
                 vectors[i] = cached
                 self.stats["cache_hits"] += 1
+                cache_hits += 1
             else:
                 todo.append(i)
         batches, tokens = token_batches(todo, sanitized, self.batch_size, self.max_request_tokens)
         self.stats["tokens"] += tokens
+        LOGGER.info(
+            "Embedding call prepared: model=%s input_count=%d cache_hits=%d "
+            "remote_count=%d batch_count=%d",
+            self.model,
+            len(sanitized),
+            cache_hits,
+            len(todo),
+            len(batches),
+        )
         for batch_idx in batches:
             batch = [sanitized[i] for i in batch_idx]
             for i, vector in zip(batch_idx, self._embed_batch(batch)):
                 vectors[i] = vector
                 self._cache_write(sanitized[i], vector)
-        return [v for v in vectors if v is not None]
+        result = [v for v in vectors if v is not None]
+        LOGGER.info(
+            "Embedding call completed: model=%s input_count=%d vectors=%d "
+            "cache_hits=%d elapsed_ms=%.1f",
+            self.model,
+            len(sanitized),
+            len(result),
+            cache_hits,
+            (time.perf_counter() - started) * 1000.0,
+        )
+        return result
 
     def _embed_batch(self, batch: list[str]) -> list[list[float]]:
         api_key = os.getenv(self.api_key_env)
@@ -174,10 +199,34 @@ class OpenRouterEmbedder:
             headers["X-Title"] = self.app_title
 
         last_error = "no response"
-        for attempt in range(self.max_retries):
-            if attempt:
+        request_id = uuid.uuid4().hex[:12]
+        request_started = time.perf_counter()
+        for attempt_index in range(self.max_retries):
+            attempt = attempt_index + 1
+            if attempt_index:
+                backoff = min(2.0 * 2 ** (attempt_index - 1), 30.0)
                 self.stats["retries"] += 1
-                self._sleep(min(2.0 * 2 ** (attempt - 1), 30.0))
+                LOGGER.info(
+                    "Embedding retry waiting: request_id=%s attempt=%d/%d "
+                    "backoff_seconds=%.1f",
+                    request_id,
+                    attempt,
+                    self.max_retries,
+                    backoff,
+                )
+                self._sleep(backoff)
+            attempt_started = time.perf_counter()
+            LOGGER.info(
+                "Embedding HTTP request started: request_id=%s attempt=%d/%d "
+                "model=%s input_count=%d timeout_seconds=%.1f url=%s",
+                request_id,
+                attempt,
+                self.max_retries,
+                self.model,
+                len(batch),
+                self.timeout,
+                f"{self.base_url}/embeddings",
+            )
             # Retried like the chat client above: an uncaught ReadTimeout here
             # aborts the whole run and every later arm loses its embeddings.
             try:
@@ -189,8 +238,29 @@ class OpenRouterEmbedder:
                 )
             except requests.RequestException as error:
                 last_error = f"{type(error).__name__}: {error}"
+                LOGGER.warning(
+                    "Embedding HTTP request failed: request_id=%s attempt=%d/%d "
+                    "error_type=%s error=%s elapsed_ms=%.1f retrying=%s",
+                    request_id,
+                    attempt,
+                    self.max_retries,
+                    type(error).__name__,
+                    str(error),
+                    (time.perf_counter() - attempt_started) * 1000.0,
+                    attempt < self.max_retries,
+                )
                 continue
             self.stats["api_calls"] += 1
+            elapsed_ms = (time.perf_counter() - attempt_started) * 1000.0
+            LOGGER.info(
+                "Embedding HTTP response received: request_id=%s attempt=%d/%d "
+                "status=%d elapsed_ms=%.1f",
+                request_id,
+                attempt,
+                self.max_retries,
+                response.status_code,
+                elapsed_ms,
+            )
             try:
                 payload = response.json()
             except ValueError:
@@ -204,9 +274,46 @@ class OpenRouterEmbedder:
                 embeddings = [[float(x) for x in item["embedding"]] for item in items]
                 if len(embeddings) != len(batch):
                     last_error = f"expected {len(batch)} embeddings, got {len(embeddings)}"
+                    LOGGER.warning(
+                        "Embedding response invalid: request_id=%s attempt=%d/%d "
+                        "reason=%s retrying=%s",
+                        request_id,
+                        attempt,
+                        self.max_retries,
+                        last_error,
+                        attempt < self.max_retries,
+                    )
                     continue
+                LOGGER.info(
+                    "Embedding request succeeded: request_id=%s attempt=%d/%d "
+                    "vectors=%d total_elapsed_ms=%.1f",
+                    request_id,
+                    attempt,
+                    self.max_retries,
+                    len(embeddings),
+                    (time.perf_counter() - request_started) * 1000.0,
+                )
                 return embeddings
             last_error = f"HTTP {response.status_code}: {_server_error_message(payload, response.text)}"
+            LOGGER.warning(
+                "Embedding HTTP response unsuccessful: request_id=%s attempt=%d/%d "
+                "status=%d error=%s retrying=%s",
+                request_id,
+                attempt,
+                self.max_retries,
+                response.status_code,
+                last_error,
+                attempt < self.max_retries,
+            )
+        LOGGER.error(
+            "Embedding request exhausted retries: request_id=%s attempts=%d "
+            "input_count=%d total_elapsed_ms=%.1f last_error=%s",
+            request_id,
+            self.max_retries,
+            len(batch),
+            (time.perf_counter() - request_started) * 1000.0,
+            last_error,
+        )
         raise RuntimeError(f"{self.name} embedding failed after {self.max_retries} attempts — {last_error}")
 
     def _cache_path(self, text: str) -> Path:

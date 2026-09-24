@@ -43,8 +43,11 @@ from research.data_discovery.run_docbench_e2e import (  # noqa: E402
     _hash_payload,
     _load_docbench,
     _load_or_build_page_index,
+    _make_query_page_scope,
     _parse_score,
     _positive,
+    _non_negative,
+    _non_negative_float,
     _prepare_chunking_config,
     _read_latest_jsonl,
     _require_env,
@@ -148,6 +151,18 @@ def main(argv: list[str] | None = None) -> int:
         or 32,
         "kdl-microbatch-max-pages",
     )
+    parse_retry_attempts = _non_negative(
+        args.parse_retry_attempts
+        if args.parse_retry_attempts is not None
+        else docbench_config.get("parse_retry_attempts", 2),
+        "parse-retry-attempts",
+    )
+    parse_retry_backoff_seconds = _non_negative_float(
+        args.parse_retry_backoff_seconds
+        if args.parse_retry_backoff_seconds is not None
+        else docbench_config.get("parse_retry_backoff_seconds", 0.0),
+        "parse-retry-backoff-seconds",
+    )
     max_context_chars = _positive(
         args.max_context_chars or docbench_config.get("max_context_chars") or 12000,
         "max-context-chars",
@@ -239,6 +254,9 @@ def main(argv: list[str] | None = None) -> int:
             "text-embedding-3-small -> hybrid baseline_legacy"
         ),
         "retrieval_scope": scope,
+        "query_page_scope": (
+            "per_question_document" if scope == "file" else "global_lake"
+        ),
         "indexed_documents": len(index_documents),
         "evaluated_documents": len(selected_documents),
         "top_k_pages": top_k_pages,
@@ -248,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         "question_workers": question_workers,
         "microbatch_window_seconds": microbatch_window,
         "microbatch_max_pages": microbatch_max_pages,
+        "parse_retry_attempts": parse_retry_attempts,
+        "parse_retry_backoff_seconds": parse_retry_backoff_seconds,
         "corpus_fingerprint": corpus_fingerprint,
         "parser_config_hash": _hash_payload(parser_config),
         "chunking_config_hash": _hash_payload(chunking_config),
@@ -302,7 +322,10 @@ def main(argv: list[str] | None = None) -> int:
         query_workers=question_workers,
         microbatch_window_seconds=microbatch_window,
         microbatch_max_pages=microbatch_max_pages,
+        parse_retry_attempts=parse_retry_attempts,
+        parse_retry_backoff_seconds=parse_retry_backoff_seconds,
         force_reparse=args.force_reparse,
+        page_scope_for_query=_make_query_page_scope(page_index, questions, scope),
         event_logger=event_logger,
     )
     checkpoint_lock = Lock()
@@ -333,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         retrieval_reusable = bool(
             retrieval_row
             and retrieval_row.get("status") == "ok"
+            and retrieval_row.get("parse_complete", True)
             and retrieval_row.get("retrieval_config_hash") == retrieval_config_hash
         )
 
@@ -456,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
             retrieval_done = (
                 qid in retrieval_rows
                 and retrieval_rows[qid].get("status") == "ok"
+                and retrieval_rows[qid].get("parse_complete", True)
             )
             qa_done = (
                 qid in qa_rows
@@ -720,6 +745,19 @@ def _arguments() -> argparse.ArgumentParser:
     )
     parser.add_argument("--kdl-microbatch-window-seconds", type=float)
     parser.add_argument("--kdl-microbatch-max-pages", type=int)
+    parser.add_argument(
+        "--parse-retry-attempts",
+        type=int,
+        help=(
+            "Retries after the initial KDL batch for pages that are missing "
+            "or quarantined (default: 2)."
+        ),
+    )
+    parser.add_argument(
+        "--parse-retry-backoff-seconds",
+        type=float,
+        help="Delay before each unresolved-page retry batch (default: 0).",
+    )
     parser.add_argument("--kdl-max-workers", type=int)
     parser.add_argument("--kdl-render-processes", type=int)
     parser.add_argument("--kdl-bbox-max-workers", type=int)

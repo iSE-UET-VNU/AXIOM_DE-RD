@@ -6,10 +6,18 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 from PIL import ImageDraw
 
+from research.data_discovery.run_docbench_e2e import (
+    _generate_with_unanswerable_retry,
+    _next_report_version,
+    _should_retry_unanswerable,
+    _unique_bm25_pages_to_parse,
+)
+from src.evaluation.generate import ContextChunk, Generation
 from src.ingestion.parsing.kdl import KDLConfig, KDLProvider, _KDLDocument
 from src.ingestion.parsing.backends import DocumentParser
 from src.ingestion.parsing.service import ParsingService
@@ -103,6 +111,9 @@ class KDLProviderTests(unittest.TestCase):
         self.assertEqual(config.max_model_sequences, 32)
         self.assertEqual(config.scheduler, "parsebench_document")
         self.assertEqual(config.request_timeout_seconds, 3600)
+        self.assertEqual(config.render_timeout_seconds, 120)
+        self.assertEqual(config.host_recovery_seconds, 30)
+        self.assertEqual(config.host_recovery_attempts, 5)
         self.assertEqual(config.max_retries, 2)
         self.assertEqual(config.layout_max_output_tokens, 6000)
         self.assertEqual(config.table_max_output_tokens, 5500)
@@ -597,6 +608,90 @@ class KDLProviderTests(unittest.TestCase):
 
         self.assertIsInstance(outcomes[0], Exception)
         self.assertNotIsInstance(outcomes[1], Exception)
+
+
+class DocbenchUnanswerableRetryTests(unittest.TestCase):
+    def test_counts_distinct_bm25_pages_selected_for_parse(self) -> None:
+        rows = {
+            "q1": {"hits": [{"page_id": "page-a"}, {"page_id": "page-b"}]},
+            "q2": {"hits": [{"page_id": "page-b"}, {"page_id": "page-c"}]},
+            "q3": {"hits": [{"source_uri": "missing-page-id"}]},
+        }
+
+        self.assertEqual(_unique_bm25_pages_to_parse(rows), 3)
+
+    def test_next_report_version_preserves_existing_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports_dir = Path(temp_dir)
+            (reports_dir / "lake_baseline_legacy.json").write_text("{}")
+            (reports_dir / "lake_baseline_legacy_ver1.json").write_text("{}")
+            (reports_dir / "lake_timing_summary_ver3.json").write_text("{}")
+
+            self.assertEqual(_next_report_version(reports_dir, "lake"), 4)
+
+    def test_regenerates_one_abstention_and_records_the_first_answer(self) -> None:
+        answers = iter(["KHONG_DU_THONG_TIN", "The answer is 42."])
+
+        def fake_generate(*_args, **_kwargs) -> Generation:
+            return Generation(
+                qid="q1",
+                answer=next(answers),
+                abstained=False,
+                chunks_used=1,
+                chars_used=10,
+                context_doc_ids=["page-1"],
+                error=None,
+            )
+
+        with patch(
+            "research.data_discovery.run_docbench_e2e.generate",
+            side_effect=fake_generate,
+        ):
+            generation, retries, initial_answer = _generate_with_unanswerable_retry(
+                "q1",
+                "What is the answer?",
+                [ContextChunk("chunk-1", "page-1", "evidence", 1.0)],
+                model="generator",
+                max_chars=100,
+                max_output_tokens=32,
+            )
+
+        self.assertEqual(generation.answer, "The answer is 42.")
+        self.assertEqual(retries, 1)
+        self.assertEqual(initial_answer, "KHONG_DU_THONG_TIN")
+
+    def test_checkpointed_second_abstention_is_not_regenerated_again(self) -> None:
+        row = {
+            "sys_ans": "KHONG_DU_THONG_TIN",
+            "unanswerable_retry_count": 1,
+        }
+        self.assertFalse(_should_retry_unanswerable(row))
+        generation = Generation(
+            qid="q1",
+            answer="KHONG_DU_THONG_TIN",
+            abstained=True,
+            chunks_used=0,
+            chars_used=0,
+            context_doc_ids=[],
+            error=None,
+        )
+        with patch(
+            "research.data_discovery.run_docbench_e2e.generate",
+            return_value=generation,
+        ) as mocked:
+            _generation, retries, initial_answer = _generate_with_unanswerable_retry(
+                "q1",
+                "Question",
+                [],
+                model="generator",
+                max_chars=100,
+                max_output_tokens=32,
+                previous_row=row,
+            )
+
+        mocked.assert_called_once()
+        self.assertEqual(retries, 1)
+        self.assertIsNone(initial_answer)
 
 
 if __name__ == "__main__":

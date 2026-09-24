@@ -64,6 +64,7 @@ class OnDemandQueryResult:
     timing: dict[str, Any]
     parsed_page_ids: tuple[str, ...] = ()
     cached_page_ids: tuple[str, ...] = ()
+    failed_page_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -92,6 +93,7 @@ class _KDLBatcher:
         self._event_logger = event_logger
         self._queue: Queue[_ParseRequest | None] = Queue()
         self._closed = Event()
+        self._fatal_error: Exception | None = None
         self._batch_number = 0
         self._thread = Thread(
             target=self._worker_loop,
@@ -101,6 +103,8 @@ class _KDLBatcher:
         self._thread.start()
 
     def submit(self, selected: dict[str, list[int]]) -> dict[str, Any]:
+        if self._fatal_error is not None:
+            raise self._fatal_error
         if self._closed.is_set():
             raise RuntimeError("KDL micro-batcher is closed")
         future: Future = Future()
@@ -112,6 +116,17 @@ class _KDLBatcher:
             )
         )
         return future.result()
+
+    def _fail_queued(self, error: Exception) -> None:
+        """Wake requests that have not entered the failed batch yet."""
+
+        while True:
+            try:
+                pending = self._queue.get_nowait()
+            except Empty:
+                return
+            if pending is not None:
+                pending.future.set_exception(error)
 
     def close(self) -> None:
         if self._closed.is_set():
@@ -174,15 +189,39 @@ class _KDLBatcher:
                         batch_id=batch_id,
                         requested_pages=len(self._page_ids(merged)),
                         parsed_pages=len(parsed_ids),
+                        failed_pages=len(
+                            set(batch_result.get("failed_ids") or set())
+                        ),
+                        retry_count=int(batch_result.get("retry_count", 0) or 0),
                         elapsed_seconds=round(finished - batch_started, 6),
                     )
                 for item in requests:
                     request_ids = self._page_ids(item.selected)
                     result = dict(batch_result)
                     result["parsed_ids"] = parsed_ids & request_ids
+                    failed_ids = set(batch_result.get("failed_ids") or set())
+                    result["failed_ids"] = failed_ids & request_ids
+                    quarantined_ids = set(
+                        batch_result.get("quarantined_ids") or set()
+                    )
+                    missing_ids = set(batch_result.get("missing_ids") or set())
+                    result["quarantined_pages"] = len(
+                        quarantined_ids & request_ids
+                    )
+                    result["missing_pages"] = len(missing_ids & request_ids)
+                    reasons = batch_result.get("failure_reasons")
+                    if isinstance(reasons, dict):
+                        result["failure_reasons"] = {
+                            page_id: reasons[page_id]
+                            for page_id in request_ids
+                            if page_id in reasons
+                        }
                     result["batch_wait_seconds"] = max(
                         0.0, batch_started - item.submitted_at
                     )
+                    result["batch_queue_wait_seconds"] = result[
+                        "batch_wait_seconds"
+                    ]
                     result["batch_total_seconds"] = max(
                         0.0, finished - item.submitted_at
                     )
@@ -200,6 +239,14 @@ class _KDLBatcher:
                     )
                 for item in requests:
                     item.future.set_exception(error)
+                if isinstance(error, KDLHostUnavailableError):
+                    # The parser has exhausted its recovery budget. Fail
+                    # queued callers immediately instead of leaving them
+                    # blocked behind a dead micro-batch worker.
+                    self._fatal_error = error
+                    self._closed.set()
+                    self._fail_queued(error)
+                    return
 
 
 class OnDemandPerQueryRunner:
@@ -227,6 +274,8 @@ class OnDemandPerQueryRunner:
         query_workers: int = 4,
         microbatch_window_seconds: float = 0.30,
         microbatch_max_pages: int = 32,
+        parse_retry_attempts: int | None = None,
+        parse_retry_backoff_seconds: float | None = None,
         force_reparse: bool = False,
         validate_baseline: bool = True,
         page_scope_for_query: Callable[[str, str], set[str] | None] | None = None,
@@ -251,6 +300,31 @@ class OnDemandPerQueryRunner:
         self.depth = int(depth)
         self.alpha = float(alpha)
         self.query_workers = max(1, int(query_workers))
+        kdl_config = dict(self.parser_config.get("kdl") or {})
+        if parse_retry_attempts is None:
+            parse_retry_attempts = kdl_config.get(
+                "parse_retry_attempts",
+                self.parser_config.get("parse_retry_attempts", 2),
+            )
+        if parse_retry_backoff_seconds is None:
+            parse_retry_backoff_seconds = kdl_config.get(
+                "parse_retry_backoff_seconds",
+                self.parser_config.get("parse_retry_backoff_seconds", 0.0),
+            )
+        try:
+            self.parse_retry_attempts = int(parse_retry_attempts)
+        except (TypeError, ValueError) as error:
+            raise ValueError("parse-retry-attempts must be an integer") from error
+        if self.parse_retry_attempts < 0:
+            raise ValueError("parse-retry-attempts must be non-negative")
+        try:
+            self.parse_retry_backoff_seconds = float(parse_retry_backoff_seconds)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "parse-retry-backoff-seconds must be numeric"
+            ) from error
+        if self.parse_retry_backoff_seconds < 0.0:
+            raise ValueError("parse-retry-backoff-seconds must be non-negative")
         self.force_reparse = bool(force_reparse)
         self.page_scope_for_query = page_scope_for_query
         self.event_logger = event_logger
@@ -261,6 +335,10 @@ class OnDemandPerQueryRunner:
         self._page_id_by_location = {
             (str(Path(page.file_path).resolve()), int(page.page_index)): page.page_id
             for page in index.pages
+        }
+        self._location_by_page_id = {
+            page_id: location
+            for location, page_id in self._page_id_by_location.items()
         }
         self._selected_pages: dict[str, set[int]] = {}
         self._selected_page_ids: set[str] = set()
@@ -323,6 +401,10 @@ class OnDemandPerQueryRunner:
                 str(kdl.get("host_abort_on_open", True)).lower()
                 not in {"0", "false", "no", "off"}
             ),
+            recovery_cooldown_seconds=float(
+                kdl.get("host_recovery_seconds", 30.0)
+            ),
+            recovery_max_attempts=int(kdl.get("host_recovery_attempts", 5)),
             event_logger=(
                 JsonEventLogger(kdl.get("event_log_path"), run_name="kdl")
                 if kdl.get("event_log_path")
@@ -367,7 +449,10 @@ class OnDemandPerQueryRunner:
         if self.event_logger is not None:
             self.event_logger.emit("query_started", query_id=query_id)
         with self._timing_lock:
-            if self._stage_started_at is None:
+            if (
+                self._stage_started_at is None
+                or query_started < self._stage_started_at
+            ):
                 self._stage_started_at = query_started
 
         light_started = time.perf_counter()
@@ -385,28 +470,39 @@ class OnDemandPerQueryRunner:
 
         parsed_ids, cached_ids, batch_result = self._ensure_parsed(hits)
         hit_page_ids = {hit.page_id for hit in hits}
+        failed_ids = (
+            set(batch_result.get("failed_ids") or set()) & hit_page_ids
+        )
         with self._state_lock:
             page_ids_for_query = {
                 page_id
                 for page_id in hit_page_ids
                 if page_id in self._records_by_page
             }
-        chunk_stage_seconds, new_page_count, index_seconds = (
+        (
+            chunk_stage_seconds,
+            new_page_count,
+            index_seconds,
+            chunk_lock_wait_seconds,
+        ) = (
             self._ensure_chunks_and_index(page_ids_for_query)
         )
         ranked, retrieval_seconds = self._retrieve_chunks(query, hits)
 
         batch_id = batch_result.get("batch_id")
         batch_total_seconds = float(batch_result.get("batch_total_seconds", 0.0))
+        batch_wait_seconds = float(batch_result.get("batch_wait_seconds", 0.0))
         batch_service_seconds = float(batch_result.get("batch_kdl_seconds", 0.0))
-        overall_seconds = (
+        phase_service_seconds = (
             light_bm25_seconds
-            + batch_total_seconds
+            + batch_service_seconds
             + chunk_stage_seconds
             + retrieval_seconds
         )
-        wall_clock_seconds = time.perf_counter() - query_started
+        query_finished = time.perf_counter()
+        wall_clock_seconds = query_finished - query_started
         timing = {
+            "timing_schema_version": 2,
             "pipeline": PIPELINE_VERSION,
             "light_preparation": "pdf_inspector page index (prepared once)",
             "light_retrieval": "BM25 page retrieval per query",
@@ -418,17 +514,31 @@ class OnDemandPerQueryRunner:
             "started_at_utc": started_at,
             "finished_at_utc": utc_now_iso(),
             "light_retrieval_seconds": round(light_bm25_seconds, 6),
-            "parsing_seconds": round(batch_total_seconds, 6),
+            # ``parsing_seconds`` is service time only.  Queueing is exposed
+            # separately so phase timings remain comparable under concurrency.
+            "parsing_seconds": round(batch_service_seconds, 6),
             "kdl_batch_id": batch_id,
             "kdl_batch_pages": int(batch_result.get("batch_pages", 0)),
-            "kdl_batch_wait_seconds": round(
-                float(batch_result.get("batch_wait_seconds", 0.0)), 6
-            ),
+            "kdl_batch_wait_seconds": round(batch_wait_seconds, 6),
+            "kdl_queue_wait_seconds": round(batch_wait_seconds, 6),
+            "kdl_batch_total_seconds": round(batch_total_seconds, 6),
             "kdl_batch_service_seconds": round(batch_service_seconds, 6),
+            "kdl_parse_attempts": int(batch_result.get("parse_attempts", 0)),
+            "kdl_parse_retry_count": int(batch_result.get("retry_count", 0)),
+            "kdl_failed_pages": len(failed_ids),
+            "kdl_quarantined_pages": int(
+                batch_result.get("quarantined_pages", 0)
+            ),
+            "kdl_missing_pages": int(batch_result.get("missing_pages", 0)),
+            "parse_complete": not failed_ids,
+            "parse_failed_page_ids": sorted(failed_ids),
             "chunk_embed_index_seconds": round(chunk_stage_seconds, 6),
+            "chunk_lock_wait_seconds": round(chunk_lock_wait_seconds, 6),
             "index_seconds": round(index_seconds, 6),
             "retrieval_seconds": round(retrieval_seconds, 6),
-            "overall_seconds": round(overall_seconds, 6),
+            "phase_service_seconds": round(phase_service_seconds, 6),
+            "query_e2e_seconds": round(wall_clock_seconds, 6),
+            "overall_seconds": round(wall_clock_seconds, 6),
             "wall_clock_seconds": round(wall_clock_seconds, 6),
             "elapsed_seconds": round(wall_clock_seconds, 6),
             "kdl_host_health": (
@@ -451,7 +561,10 @@ class OnDemandPerQueryRunner:
                 self._accounted_kdl_batches.add(batch_id)
             self._phase_work["chunk_embed_index"] += chunk_stage_seconds
             self._phase_work["retrieval"] += retrieval_seconds
-            self._stage_ended_at = time.perf_counter()
+            if self._stage_ended_at is None:
+                self._stage_ended_at = query_finished
+            else:
+                self._stage_ended_at = max(self._stage_ended_at, query_finished)
 
         if self.event_logger is not None:
             self.event_logger.emit(
@@ -460,6 +573,7 @@ class OnDemandPerQueryRunner:
                 elapsed_seconds=round(wall_clock_seconds, 6),
                 parsed_pages=len(parsed_ids),
                 cache_hit_pages=len(cached_ids),
+                failed_pages=len(failed_ids),
             )
 
         selected_pages: defaultdict[str, set[int]] = defaultdict(set)
@@ -479,6 +593,7 @@ class OnDemandPerQueryRunner:
             timing=timing,
             parsed_page_ids=tuple(sorted(parsed_ids)),
             cached_page_ids=tuple(sorted(cached_ids)),
+            failed_page_ids=tuple(sorted(failed_ids)),
         )
 
     def run_queries(
@@ -506,7 +621,12 @@ class OnDemandPerQueryRunner:
         return {query_id: results[query_id] for query_id, _query in items}
 
     def timing_summary(self, *, light_preparation_seconds: float = 0.0) -> dict[str, Any]:
-        """Return per-query means and all-data work/wall-clock summaries."""
+        """Return service, queue, latency, and wall-clock summaries.
+
+        Phase service values intentionally exclude shared queueing and lock
+        contention.  End-to-end query latency still includes those waits and
+        is reported separately from phase service work.
+        """
         timings = list(self.query_timings.values())
         query_count = max(1, len(timings))
         preparation = float(light_preparation_seconds)
@@ -519,6 +639,28 @@ class OnDemandPerQueryRunner:
                     value = item.get(fallback, 0.0)
                 values.append(float(value or 0.0))
             return sum(values) / len(values) if values else 0.0
+
+        def percentile(
+            key: str,
+            percentile_rank: float,
+            fallback: str | None = None,
+        ) -> float:
+            values = []
+            for item in timings:
+                value = item.get(key)
+                if value is None and fallback:
+                    value = item.get(fallback, 0.0)
+                values.append(float(value or 0.0))
+            if not values:
+                return 0.0
+            values.sort()
+            if len(values) == 1:
+                return values[0]
+            position = (len(values) - 1) * percentile_rank
+            lower = int(position)
+            upper = min(lower + 1, len(values) - 1)
+            fraction = position - lower
+            return values[lower] + (values[upper] - values[lower]) * fraction
 
         with self._timing_lock:
             phase = dict(self._phase_work)
@@ -541,20 +683,63 @@ class OnDemandPerQueryRunner:
             "Light Retrieval": preparation / query_count + mean(
                 "light_retrieval_seconds"
             ),
-            "Parsing": mean("parsing_seconds"),
+            "Parsing": mean("kdl_batch_service_seconds", "parsing_seconds"),
             "Chunk&Embed&Index": mean("chunk_embed_index_seconds"),
             "Retrieval": mean("retrieval_seconds"),
             "Overall": preparation / query_count + mean(
                 "wall_clock_seconds", "overall_seconds"
             ),
         }
+        queue_wait = {
+            "KDL": mean("kdl_queue_wait_seconds", "kdl_batch_wait_seconds"),
+            "Chunk lock": mean("chunk_lock_wait_seconds"),
+        }
+        service_work_per_query = {
+            key: value / query_count for key, value in phase_work.items()
+        }
+        service_work_per_query["Overall"] = sum(service_work_per_query.values())
+        latency_percentiles = {
+            "Overall": {
+                "p50": percentile("query_e2e_seconds", 0.50, "wall_clock_seconds"),
+                "p95": percentile("query_e2e_seconds", 0.95, "wall_clock_seconds"),
+                "p99": percentile("query_e2e_seconds", 0.99, "wall_clock_seconds"),
+            },
+            "KDL queue wait": {
+                "p50": percentile(
+                    "kdl_queue_wait_seconds", 0.50, "kdl_batch_wait_seconds"
+                ),
+                "p95": percentile(
+                    "kdl_queue_wait_seconds", 0.95, "kdl_batch_wait_seconds"
+                ),
+                "p99": percentile(
+                    "kdl_queue_wait_seconds", 0.99, "kdl_batch_wait_seconds"
+                ),
+            },
+            "Chunk lock wait": {
+                "p50": percentile("chunk_lock_wait_seconds", 0.50),
+                "p95": percentile("chunk_lock_wait_seconds", 0.95),
+                "p99": percentile("chunk_lock_wait_seconds", 0.99),
+            },
+        }
         total = {**phase_work, "Overall": overall_wall}
         return {
+            "timing_schema_version": 2,
             "pipeline": PIPELINE_VERSION,
             "query_count": len(timings),
             "query_workers": self.query_workers,
             "microbatch_window_seconds": self.microbatch_window_seconds,
             "microbatch_max_pages": self.microbatch_max_pages,
+            "parse_retry_attempts": getattr(self, "parse_retry_attempts", 2),
+            "parse_retry_backoff_seconds": getattr(
+                self, "parse_retry_backoff_seconds", 0.0
+            ),
+            "parse_retry_count_all_queries": sum(
+                int(item.get("kdl_parse_retry_count", 0) or 0)
+                for item in timings
+            ),
+            "failed_pages_all_queries": sum(
+                int(item.get("kdl_failed_pages", 0) or 0) for item in timings
+            ),
             "total_runtime_seconds_all_data": {
                 key: round(value, 3) for key, value in total.items()
             },
@@ -564,8 +749,24 @@ class OnDemandPerQueryRunner:
             "online_latency_seconds_per_query": {
                 key: round(value, 4) for key, value in latency.items()
             },
+            "queue_wait_seconds_per_query": {
+                key: round(value, 4) for key, value in queue_wait.items()
+            },
+            "amortized_service_work_seconds_per_query": {
+                key: round(value, 4)
+                for key, value in service_work_per_query.items()
+            },
+            "query_latency_percentiles_seconds": {
+                group: {
+                    key: round(value, 4) for key, value in values.items()
+                }
+                for group, values in latency_percentiles.items()
+            },
             "light_preparation_seconds_all_data": round(preparation, 3),
             "online_stage_wall_seconds": round(overall_wall, 3),
+            "online_throughput_queries_per_second": round(
+                len(timings) / max(overall_wall, 1e-12), 6
+            ),
             "parsed_page_cache": len(self._records_by_page),
             "prepared_chunk_cache": len(self._chunks_by_id),
             "kdl_host_health": (
@@ -575,8 +776,12 @@ class OnDemandPerQueryRunner:
             ),
             "notes": (
                 "Overall is wall-clock runtime including light preparation. "
-                "Phase columns are aggregate work and may overlap under concurrent "
-                "queries; each shared KDL micro-batch is counted once."
+                "Phase columns are service work and may overlap under concurrent "
+                "queries; each shared KDL micro-batch is counted once. "
+                "Per-query Overall includes KDL queue and chunk-lock waits; "
+                "queue_wait_seconds_per_query and query_latency_percentiles_seconds "
+                "make those waits explicit. Missing/quarantined pages are retried "
+                "as a batch before a partial query result is returned."
             ),
         }
 
@@ -608,8 +813,17 @@ class OnDemandPerQueryRunner:
                 "batch_id": None,
                 "batch_pages": 0,
                 "batch_wait_seconds": 0.0,
+                "batch_queue_wait_seconds": 0.0,
                 "batch_kdl_seconds": 0.0,
                 "batch_total_seconds": 0.0,
+                "parsed_ids": set(),
+                "failed_ids": set(),
+                "quarantined_ids": set(),
+                "missing_ids": set(),
+                "parse_attempts": 0,
+                "retry_count": 0,
+                "quarantined_pages": 0,
+                "missing_pages": 0,
             }
 
         batch_result = self._batcher.submit(
@@ -623,12 +837,32 @@ class OnDemandPerQueryRunner:
                 for page_id in requested - parsed
                 if page_id in self._records_by_page
             )
+        # ``failed_ids`` is intentionally kept separate from cache hits. A
+        # page may be returned by the parser in a later shared batch while a
+        # query is waiting, so only report failures that this request asked
+        # for and that are still absent from the durable cache.
+        failed = set(batch_result.get("failed_ids") or set()) & requested
+        with self._state_lock:
+            failed.difference_update(self._records_by_page)
+        batch_result["failed_ids"] = failed
         return parsed, cached, batch_result
 
     def _parse_kdl_batch(
         self, selected: dict[str, list[int]], batch_id: str
     ) -> dict[str, Any]:
+        """Parse a merged request and retry only unresolved pages as batches.
+
+        ``run_selected_pages`` can return a mixture of enriched and
+        quarantined inputs. Older code treated the latter as permanently
+        missing and immediately let the query continue with partial context.
+        We retain that partial-result behaviour after exhaustion, but first
+        resubmit only the unresolved page subset up to
+        ``parse_retry_attempts`` times. A host-level circuit error remains
+        fatal and is never swallowed here.
+        """
+
         started = time.perf_counter()
+        requested_page_count = len(self._requested_page_ids(selected))
         with self._state_lock:
             parseable = {
                 path: [
@@ -642,60 +876,249 @@ class OnDemandPerQueryRunner:
                 ]
                 for path, indices in selected.items()
             }
-            parseable = {path: indices for path, indices in parseable.items() if indices}
-        if not parseable:
+            parseable = {
+                path: indices for path, indices in parseable.items() if indices
+            }
+        requested_ids = self._requested_page_ids(parseable)
+        if not parseable or not requested_ids:
             return {
                 "parsed_ids": set(),
+                "failed_ids": set(),
                 "batch_id": batch_id,
-                "batch_pages": len(self._requested_page_ids(selected)),
+                "batch_pages": requested_page_count,
                 "batch_wait_seconds": 0.0,
+                "batch_queue_wait_seconds": 0.0,
                 "batch_kdl_seconds": 0.0,
                 "batch_total_seconds": 0.0,
+                "parse_attempts": 0,
+                "retry_count": 0,
+                "quarantined_pages": 0,
+                "missing_pages": 0,
             }
 
-        parser_work_dir = self.work_dir / "on-demand-kdl" / batch_id
-        result = run_selected_pages(
-            parseable,
-            parser_config=self.parser_config,
-            project_root=self.project_root,
-            work_dir=parser_work_dir,
-            one_page_inputs=True,
-        )
+        # Resolve page ids back to the original path/index selection for a
+        # retry. The input remains one logical page per document.
+        source_path_by_resolved = {
+            str(Path(path).resolve()): path for path in parseable
+        }
+
+        def selection_for(ids: set[str]) -> dict[str, list[int]]:
+            grouped: defaultdict[str, list[int]] = defaultdict(list)
+            for page_id in ids:
+                location = self._location_by_page_id.get(page_id)
+                if location is None:
+                    continue
+                source_path = source_path_by_resolved.get(location[0], location[0])
+                grouped[source_path].append(int(location[1]))
+            return {
+                path: sorted(set(indices))
+                for path, indices in sorted(grouped.items())
+                if indices
+            }
+
         parsed_ids: set[str] = set()
-        with self._state_lock:
+        quarantined_ids: set[str] = set()
+        failure_reasons: dict[str, str] = {}
+        remaining_ids = set(requested_ids)
+        total_service_seconds = 0.0
+        attempts = 0
+        last_error: Exception | None = None
+
+        # ``parse_retry_attempts`` counts retries after the initial request.
+        for attempt in range(self.parse_retry_attempts + 1):
+            if not remaining_ids:
+                break
+            attempts += 1
+            # The next attempt replaces the previous failure classification;
+            # a page that was quarantined before but is now omitted should be
+            # reported as missing (and vice versa).
+            quarantined_ids.difference_update(remaining_ids)
+            attempt_selected = selection_for(remaining_ids)
+            if not attempt_selected:
+                break
+            if attempt > 0:
+                if self.event_logger is not None:
+                    self.event_logger.emit(
+                        "kdl_batch_retry_started",
+                        batch_id=batch_id,
+                        attempt=attempt + 1,
+                        retry_number=attempt,
+                        requested_pages=len(remaining_ids),
+                    )
+                if self.parse_retry_backoff_seconds > 0.0:
+                    time.sleep(self.parse_retry_backoff_seconds)
+
+            attempt_started = time.perf_counter()
+            attempt_id = f"{batch_id}-attempt-{attempt + 1:02d}"
+            try:
+                result = run_selected_pages(
+                    attempt_selected,
+                    parser_config=self.parser_config,
+                    project_root=self.project_root,
+                    work_dir=self.work_dir / "on-demand-kdl" / attempt_id,
+                    one_page_inputs=True,
+                )
+            except KDLHostUnavailableError:
+                # The shared circuit breaker has already decided that retrying
+                # is unsafe. Let _KDLBatcher propagate the fatal condition.
+                raise
+            except Exception as error:  # noqa: BLE001 - retry batch failures
+                last_error = error
+                elapsed = time.perf_counter() - attempt_started
+                total_service_seconds += elapsed
+                for page_id in remaining_ids:
+                    failure_reasons[page_id] = f"{type(error).__name__}: {error}"
+                if self.event_logger is not None:
+                    self.event_logger.emit(
+                        "kdl_batch_retry_failed",
+                        batch_id=batch_id,
+                        attempt=attempt + 1,
+                        requested_pages=len(remaining_ids),
+                        elapsed_seconds=round(elapsed, 6),
+                        error_type=type(error).__name__,
+                        error=str(error),
+                    )
+                # Retry the exact unresolved set as one batch.
+                continue
+
+            elapsed = time.perf_counter() - attempt_started
+            total_service_seconds += elapsed
+            attempt_parsed: set[str] = set()
+            attempt_quarantined: set[str] = set()
+
             for record in result.enriched.enriched_data:
                 record_data = _record_dict(record)
-                page_id = self._record_page_id(record_data)
-                if not page_id:
+                try:
+                    page_id = self._record_page_id(record_data)
+                except (TypeError, ValueError, KeyError):
+                    page_id = None
+                    if self.event_logger is not None:
+                        self.event_logger.emit(
+                            "kdl_batch_record_ignored",
+                            batch_id=batch_id,
+                            attempt=attempt + 1,
+                            reason="invalid_page_metadata",
+                        )
+                if not page_id or page_id not in remaining_ids:
                     continue
-                self._records_by_page[page_id] = record_data
-                parsed_ids.add(page_id)
-                text = _record_page_text(record_data)
-                if text:
-                    self._page_texts[page_id] = text
-            self._save_parser_cache()
+                with self._state_lock:
+                    self._records_by_page[page_id] = record_data
+                    text = _record_page_text(record_data)
+                    if text:
+                        self._page_texts[page_id] = text
+                attempt_parsed.add(page_id)
+
+            for quarantined in result.ingestion.quarantined_documents:
+                quarantine_data = _record_dict(quarantined.parsed)
+                try:
+                    page_id = self._record_page_id(quarantine_data)
+                except (TypeError, ValueError, KeyError):
+                    page_id = None
+                if page_id is None:
+                    source = getattr(quarantined, "source", None)
+                    source_metadata = getattr(source, "metadata", {}) or {}
+                    try:
+                        page_id = self._record_page_id(
+                            {"metadata": dict(source_metadata)}
+                        )
+                    except (TypeError, ValueError, KeyError):
+                        page_id = None
+                if not page_id or page_id not in remaining_ids:
+                    continue
+                attempt_quarantined.add(page_id)
+                reasons = getattr(quarantined, "reasons", None) or []
+                failure_reasons[page_id] = (
+                    json.dumps(reasons, ensure_ascii=False)
+                    if reasons
+                    else "KDL returned a quarantined document"
+                )
+
+            parsed_ids.update(attempt_parsed)
+            quarantined_ids.update(attempt_quarantined)
+            remaining_ids.difference_update(attempt_parsed)
+            # Quarantined/missing pages stay unresolved and are retried in the
+            # next iteration. ``failure_reasons`` records the latest reason.
+            for page_id in remaining_ids - attempt_quarantined:
+                failure_reasons.setdefault(
+                    page_id, "KDL returned no enriched record"
+                )
+
+            with self._state_lock:
+                self._save_parser_cache()
+
+            if self.event_logger is not None:
+                self.event_logger.emit(
+                    "kdl_batch_attempt_completed",
+                    batch_id=batch_id,
+                    attempt=attempt + 1,
+                    requested_pages=len(self._requested_page_ids(attempt_selected)),
+                    parsed_pages=len(attempt_parsed),
+                    quarantined_pages=len(attempt_quarantined),
+                    unresolved_pages=len(remaining_ids),
+                    elapsed_seconds=round(elapsed, 6),
+                )
+            if not remaining_ids:
+                break
+            if attempt < self.parse_retry_attempts and self.event_logger is not None:
+                self.event_logger.emit(
+                    "kdl_batch_retry_queued",
+                    batch_id=batch_id,
+                    attempt=attempt + 1,
+                    retry_number=attempt + 1,
+                    unresolved_pages=len(remaining_ids),
+                )
+
+        failed_ids = set(remaining_ids)
+        if last_error is not None:
+            for page_id in failed_ids:
+                failure_reasons.setdefault(
+                    page_id, f"{type(last_error).__name__}: {last_error}"
+                )
         elapsed = time.perf_counter() - started
+        retry_count = max(0, attempts - 1)
+        if self.event_logger is not None:
+            self.event_logger.emit(
+                "kdl_batch_retry_completed",
+                batch_id=batch_id,
+                attempts=attempts,
+                retry_count=retry_count,
+                requested_pages=len(requested_ids),
+                parsed_pages=len(parsed_ids),
+                failed_pages=len(failed_ids),
+                quarantined_pages=len(quarantined_ids),
+                elapsed_seconds=round(elapsed, 6),
+            )
         print(
-            f"KDL micro-batch {batch_id}: requested="
-            f"{len(self._requested_page_ids(selected))}; parsed={len(parsed_ids)}; "
-            f"quarantined={len(result.ingestion.quarantined_documents)}; "
-            f"time={elapsed:.3f}s",
+            f"KDL micro-batch {batch_id}: requested={requested_page_count}; "
+            f"parsed={len(parsed_ids)}; failed={len(failed_ids)}; "
+            f"retries={retry_count}; time={elapsed:.3f}s",
             flush=True,
         )
         return {
             "parsed_ids": parsed_ids,
+            "failed_ids": failed_ids,
+            "quarantined_ids": quarantined_ids,
+            "missing_ids": failed_ids - quarantined_ids,
             "batch_id": batch_id,
-            "batch_pages": len(self._requested_page_ids(selected)),
+            "batch_pages": requested_page_count,
             "batch_wait_seconds": 0.0,
-            "batch_kdl_seconds": elapsed,
+            "batch_queue_wait_seconds": 0.0,
+            "batch_kdl_seconds": total_service_seconds,
             "batch_total_seconds": elapsed,
+            "parse_attempts": attempts,
+            "retry_count": retry_count,
+            "quarantined_pages": len(quarantined_ids),
+            "missing_pages": len(failed_ids - quarantined_ids),
+            "failure_reasons": failure_reasons,
         }
 
     def _ensure_chunks_and_index(
         self, page_ids: set[str]
-    ) -> tuple[float, int, float]:
-        started = time.perf_counter()
+    ) -> tuple[float, int, float, float]:
+        lock_wait_started = time.perf_counter()
         with self._chunk_lock:
+            lock_acquired = time.perf_counter()
+            lock_wait_seconds = lock_acquired - lock_wait_started
             with self._state_lock:
                 available_page_ids = set(self._records_by_page)
             new_page_ids = [
@@ -729,7 +1152,12 @@ class OnDemandPerQueryRunner:
             if self._chunk_index is None or new_page_ids:
                 if self._chunks_by_id:
                     index_seconds = self._rebuild_chunk_index()
-        return time.perf_counter() - started, len(new_page_ids), index_seconds
+        return (
+            time.perf_counter() - lock_acquired,
+            len(new_page_ids),
+            index_seconds,
+            lock_wait_seconds,
+        )
 
     def _prepared_chunks(self, output: Any, records: list[dict[str, Any]]) -> list[PreparedChunk]:
         object_to_page = {
@@ -838,15 +1266,23 @@ class OnDemandPerQueryRunner:
         )
 
     def _record_page_id(self, record: dict[str, Any]) -> str | None:
+        if not isinstance(record, dict):
+            return None
         metadata = record.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            return None
         source_metadata = metadata.get("source_metadata") or metadata
+        if not isinstance(source_metadata, dict):
+            return None
         original_path = source_metadata.get("discovery_original_path")
         indices = source_metadata.get("discovery_page_indices")
         if not original_path or not isinstance(indices, list) or len(indices) != 1:
             return None
-        return self._page_id_by_location.get(
-            (str(Path(original_path).resolve()), int(indices[0]))
-        )
+        try:
+            location = (str(Path(original_path).resolve()), int(indices[0]))
+        except (TypeError, ValueError, OSError):
+            return None
+        return self._page_id_by_location.get(location)
 
     def _make_cache_key(self) -> str:
         payload = {

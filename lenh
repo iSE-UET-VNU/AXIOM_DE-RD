@@ -17,8 +17,13 @@ python -m research.data_discovery.run_docbench_e2e \
   --config configs/pipeline.docbench-pages.yaml \
   --docbench-root data/raw/DocBench \
   --retrieval-scope file \
-  --max-documents 2 \
-  --limit 10 \
+  --output-dir data/benchmark/b_docbench_pages_file_scope_new
+
+  python -m research.data_discovery.run_docbench_pages \
+  --config configs/pipeline.docbench-pages.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope lake \
+  --output-dir data/benchmark/b_docbench_pages_lake_scope
 
 
 
@@ -40,3 +45,59 @@ python -m research.data_discovery.run_docbench_e2e \
 
 
   đối với docbench, có nhiều câu hỏi KHONG_DU_THONG_TIN, có thể là chúng thuôc loại Una. (unanswerable) và nếu kết quả trả về KHONG_DU_THONG_TIN thì judge không chấp nhận nó đúng. Hãy implement thêm đoạn rejudge lại những câu hỏi mà kết quả trả về là KHONG_DU_THONG_TIN. Implement theo 2 hướng: nếu câu trả lời là KHONG_DU_THONG_TIN thì ngay lúc nó nhận được câu trả lời thì regen & rejudge lại luôn (nếu nó vẫn là KHONG_DU_THONG_TIN thì không regen & rejudge lại nữa); và hướng thứ 2 là nếu đã chạy hết các câu hỏi rồi thì khi chạy lại nó chỉ chạy những câu hỏi mà có câu trả lời là KHONG_DU_THONG_TIN thôi. Lý do là tôi muốn từ lần sau nó sẽ chạy theo hướng 1 để tôi không cần chạy lại nữa; còn hiện tại tôi đang chạy gần xong các câu hỏi rồi nên tôi cần chờ nó chạy xong rồi chạy lại. Implement chức năng này cho cả 3 pipeline docbench. 
+
+
+
+  python -m research.data_discovery.run_docbench_e2e \
+  --config configs/pipeline.docbench-on-demand-basic-file.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope file \
+  --output-dir data/benchmark/b_docbench_on_demand_basic_file_1
+
+  python -m research.data_discovery.run_docbench_e2e \
+  --config configs/pipeline.docbench-on-demand-basic-lake.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope lake \
+  --output-dir data/benchmark/b_docbench_on_demand_basic_lake
+
+    python -m research.data_discovery.run_docbench_e2e \
+  --config configs/pipeline.docbench-on-demand-basic-file.yaml \
+  --docbench-root data/raw/DocBench \
+  --retrieval-scope file \
+  --output-dir data/benchmark/test_file_32_workers_fix_timing_v2
+
+  pkill -INT -f 'research.data_discovery.run_docbench_e2e.*pipeline.docbench-on-demand-basic-file.yaml'
+
+
+
+  python -m research.data_discovery.run_vidore_e2e \
+  --subset physics \
+  --language french \
+  --benchmark-root data/raw \
+  --index-dir data/work/vidore_v3/physics/discovery_bm25 \
+  --parser-config configs/pipeline.data-discovery.yaml \
+  --chunking-config configs/pipeline.data-discovery.yaml \
+  --work-dir data/work/vidore_v3/physics/discovery_e2e \
+  --on-demand-cache-dir data/work/vidore_v3/physics/discovery_e2e/on-demand-cache \
+  --output-dir data/benchmark/vidore_v3/results/physics_discovery_e2e \
+  --on-demand-per-query \
+  --arms chunks \
+  --top-k-pages 10 \
+  --top-k-chunks 10 \
+  --depth 100 \
+  --alpha 0.7 \
+  --query-workers 64 \
+  --workers 64 \
+  --kdl-request-batch-size 128 
+  --request-batch-size 128
+
+
+python scripts/visualize_docbench_run.py \
+--run-dir data/benchmark/on_demand_basic
+
+  python -m research.data_discovery.run_docbench_e2e \
+    --config configs/pipeline.0-benchmark-on-demand-basic.yaml \
+    --docbench-root "data/raw/0.1. BENCHMARK/0.1. BENCHMARK" \
+    --retrieval-scope lake \
+    --max-context-chunks 3 \
+    --output-dir data/benchmark/on_demand_basic_1

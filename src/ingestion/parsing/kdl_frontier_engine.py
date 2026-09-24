@@ -48,6 +48,7 @@ import os
 import re
 import time
 import unicodedata
+import uuid
 from collections import Counter
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -2781,6 +2782,50 @@ def _nano_payload(
     return payload
 
 
+def _emit_kdl_http_event(
+    host_health: KDLHostHealth | None,
+    event: str,
+    *,
+    request_id: str,
+    attempt: int,
+    stage: str | None,
+    mode: str,
+    url: str,
+    payload_count: int,
+    elapsed_ms: float | None = None,
+    status_code: int | None = None,
+    error: BaseException | None = None,
+) -> None:
+    """Emit request-level KDL telemetry without logging prompt/image payloads."""
+
+    event_logger = getattr(host_health, "event_logger", None)
+    if event_logger is None:
+        return
+    fields: dict[str, Any] = {
+        "request_id": request_id,
+        "attempt": attempt,
+        "stage": stage,
+        "mode": mode,
+        "url": url,
+        "payload_count": payload_count,
+    }
+    if elapsed_ms is not None:
+        fields["elapsed_ms"] = round(elapsed_ms, 3)
+    if status_code is not None:
+        fields["status_code"] = status_code
+    if error is not None:
+        fields.update(
+            {
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "is_timeout": isinstance(
+                    error, (httpx.TimeoutException, asyncio.TimeoutError)
+                ),
+            }
+        )
+    event_logger.emit(event, **fields)
+
+
 async def _nano_chat(
     client: httpx.AsyncClient,
     url: str,
@@ -2800,17 +2845,43 @@ async def _nano_chat(
     result: str | None = None
     retries = 0
     started = time.perf_counter()
+    request_id = uuid.uuid4().hex
     limiter = sequence_limiter or SequenceLimiter(1)
-    async with semaphore, limiter.hold(1):
-        for attempt in range(max_retries + 1):
-            if host_health is not None:
-                host_health.before_request(stage=stage)
-            attempt_started = time.perf_counter()
-            try:
+    attempt = 0
+    while True:
+        if host_health is not None:
+            await host_health.wait_until_ready(stage=stage)
+        attempt_started = time.perf_counter()
+        try:
+            # Hold concurrency slots only for the actual HTTP request.  In
+            # particular, never hold them while waiting for host recovery.
+            async with semaphore, limiter.hold(1):
+                _emit_kdl_http_event(
+                    host_health,
+                    "kdl_http_request_started",
+                    request_id=request_id,
+                    attempt=attempt + 1,
+                    stage=stage,
+                    mode="single",
+                    url=url,
+                    payload_count=1,
+                )
                 resp = await client.post(
                     url,
                     json={**payload, "chat_template_kwargs": {"enable_thinking": False}},
                     headers=headers,
+                )
+                _emit_kdl_http_event(
+                    host_health,
+                    "kdl_http_response_received",
+                    request_id=request_id,
+                    attempt=attempt + 1,
+                    stage=stage,
+                    mode="single",
+                    url=url,
+                    payload_count=1,
+                    elapsed_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                    status_code=resp.status_code,
                 )
                 if resp.status_code >= 500 or resp.status_code in {408, 429}:
                     raise httpx.HTTPStatusError(
@@ -2827,20 +2898,42 @@ async def _nano_chat(
                 data = resp.json()
                 result = data["choices"][0]["message"]["content"]
                 break
-            except KDLHostUnavailableError:
-                raise
-            except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as e:
-                last_exc = e
-                if host_health is not None:
+        except KDLHostUnavailableError:
+            raise
+        except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as e:
+            last_exc = e
+            _emit_kdl_http_event(
+                host_health,
+                "kdl_http_request_failed",
+                request_id=request_id,
+                attempt=attempt + 1,
+                stage=stage,
+                mode="single",
+                url=url,
+                payload_count=1,
+                elapsed_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                status_code=getattr(getattr(e, "response", None), "status_code", None),
+                error=e,
+            )
+            if host_health is not None:
+                try:
                     host_health.record_failure(
                         e,
                         stage=stage,
                         attempt=attempt + 1,
                         latency_ms=(time.perf_counter() - attempt_started) * 1000.0,
                     )
-                if attempt < max_retries:
-                    retries += 1
-                    await asyncio.sleep(min(10.0, 2.0 * (2 ** attempt)))
+                except KDLHostUnavailableError:
+                    # A threshold breach opens the circuit.  Recovery is
+                    # handled by the shared async cooldown/probe loop and
+                    # does not consume the ordinary per-request retries.
+                    continue
+            if attempt < max_retries:
+                attempt += 1
+                retries += 1
+                await asyncio.sleep(min(10.0, 2.0 * (2 ** (attempt - 1))))
+                continue
+            break
     if result is None and last_exc is not None:
         logger.warning("stage request failed after retries: %s", last_exc)
     if usage is not None and stage is not None:
@@ -2880,14 +2973,39 @@ async def _nano_chat_batch(
     retries = 0
     last_exc: Exception | None = None
     started = time.perf_counter()
+    request_id = uuid.uuid4().hex
     limiter = sequence_limiter or SequenceLimiter(len(payloads))
-    async with semaphore, limiter.hold(len(payloads)):
-        for attempt in range(max_retries + 1):
-            if host_health is not None:
-                host_health.before_request(stage=stage)
-            attempt_started = time.perf_counter()
-            try:
+    attempt = 0
+    while True:
+        if host_health is not None:
+            await host_health.wait_until_ready(stage=stage)
+        attempt_started = time.perf_counter()
+        try:
+            # Do not hold the weighted sequence slot during a recovery wait.
+            async with semaphore, limiter.hold(len(payloads)):
+                _emit_kdl_http_event(
+                    host_health,
+                    "kdl_http_request_started",
+                    request_id=request_id,
+                    attempt=attempt + 1,
+                    stage=stage,
+                    mode="batch",
+                    url=url,
+                    payload_count=len(payloads),
+                )
                 resp = await client.post(url, json=batch_payload, headers=headers)
+                _emit_kdl_http_event(
+                    host_health,
+                    "kdl_http_response_received",
+                    request_id=request_id,
+                    attempt=attempt + 1,
+                    stage=stage,
+                    mode="batch",
+                    url=url,
+                    payload_count=len(payloads),
+                    elapsed_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                    status_code=resp.status_code,
+                )
                 if resp.status_code >= 500 or resp.status_code in {408, 429}:
                     raise httpx.HTTPStatusError(
                         f"{resp.status_code}", request=resp.request, response=resp
@@ -2909,20 +3027,41 @@ async def _nano_chat_batch(
                     if 0 <= index < len(results):
                         results[index] = (choice.get("message") or {}).get("content")
                 break
-            except KDLHostUnavailableError:
-                raise
-            except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as exc:
-                last_exc = exc
-                if host_health is not None:
+        except KDLHostUnavailableError:
+            raise
+        except (httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError) as exc:
+            last_exc = exc
+            _emit_kdl_http_event(
+                host_health,
+                "kdl_http_request_failed",
+                request_id=request_id,
+                attempt=attempt + 1,
+                stage=stage,
+                mode="batch",
+                url=url,
+                payload_count=len(payloads),
+                elapsed_ms=(time.perf_counter() - attempt_started) * 1000.0,
+                status_code=getattr(
+                    getattr(exc, "response", None), "status_code", None
+                ),
+                error=exc,
+            )
+            if host_health is not None:
+                try:
                     host_health.record_failure(
                         exc,
                         stage=stage,
                         attempt=attempt + 1,
                         latency_ms=(time.perf_counter() - attempt_started) * 1000.0,
                     )
-                if attempt < max_retries:
-                    retries += 1
-                    await asyncio.sleep(min(10.0, 2.0 * (2 ** attempt)))
+                except KDLHostUnavailableError:
+                    continue
+            if attempt < max_retries:
+                attempt += 1
+                retries += 1
+                await asyncio.sleep(min(10.0, 2.0 * (2 ** (attempt - 1))))
+                continue
+            break
     if all(result is None for result in results) and last_exc is not None:
         logger.warning("batch request failed after retries: %s", last_exc)
     if usage is not None and stage is not None:
@@ -3258,6 +3397,8 @@ class _NanoEngine:
         request_batch_size: int = 1,
         max_model_sequences: int = 32,
         host_failure_threshold: int = 3,
+        host_recovery_seconds: float = 30.0,
+        host_recovery_attempts: int = 5,
         host_abort_on_open: bool = True,
         event_log_path: str | None = None,
         host_health: KDLHostHealth | None = None,
@@ -3297,6 +3438,8 @@ class _NanoEngine:
             base,
             failure_threshold=host_failure_threshold,
             abort_on_open=host_abort_on_open,
+            recovery_cooldown_seconds=host_recovery_seconds,
+            recovery_max_attempts=host_recovery_attempts,
             event_logger=self._event_logger,
         )
         # Optional async component invoked after layout grouping and before

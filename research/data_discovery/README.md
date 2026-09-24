@@ -178,8 +178,52 @@ light preparation: pdf-inspector page text
 light retrieval:   BM25 page retrieval
 accurate parse:    KDL + pdf-inspector for selected pages only
 baseline_legacy:   fixed_overlap 512/128 -> text-embedding-3-small -> hybrid
-answer/judge:      generator + binary DocBench judge
+answer/judge:      generator + 0/0.5/1 DocBench judge
 ```
+
+### Flat `0. BENCHMARK` bundle
+
+The exported bundle at
+`data/raw/0. BENCHMARK-*/0. BENCHMARK/` is also accepted by the same runner.
+It is detected by the presence of `documents.jsonl` and `queries.jsonl`; PDF
+paths are resolved relative to that directory, and `qrels.jsonl` is used for
+the retrieval report. The adapter handles the three sources in one lake:
+`vidore_physics` (22 PDFs/80 questions), `vidore_industrial` (16/75), and
+`mpdocvqa` (63/65), for 101 PDFs and 220 questions total.
+
+Use the dedicated config and run a small smoke test first:
+
+```bash
+.venv/bin/python -m research.data_discovery.run_docbench_e2e \
+  --config configs/pipeline.0-benchmark-on-demand-basic.yaml \
+  --docbench-root "data/raw/0. BENCHMARK-20260915T030813Z-1-001/0. BENCHMARK" \
+  --retrieval-scope lake \
+  --max-documents 3 \
+  --limit 10 \
+  --skip-qa
+```
+
+For the complete end-to-end run (KDL endpoint and `OPENROUTER_API_KEY` must be
+available), remove `--skip-qa` and the smoke limits:
+
+```bash
+.venv/bin/python -m research.data_discovery.run_docbench_e2e \
+  --config configs/pipeline.0-benchmark-on-demand-basic.yaml \
+  --docbench-root "data/raw/0. BENCHMARK-20260915T030813Z-1-001/0. BENCHMARK" \
+  --retrieval-scope lake
+```
+
+The output is under `data/benchmark/0_benchmark_on_demand_basic/`. In the
+report, `correct_only` is the strict QA accuracy, while
+`correct_plus_partial` credits both 1 and 0.5 judgments. The bundle qrels add
+`file_recall` over unique PDF documents in the light top-20 page ranking. All
+other retrieval `recall@k` and `NDCG@k` fields are page-level metrics; the
+accurate ranking maps chunks back to their source pages before scoring. Timing
+fields map directly to the requested table:
+`light_preparation_seconds_all_data`,
+`online_latency_seconds_per_query` (`Light Retrieval`, `Parsing`,
+`Chunk&Embed&Index`, `Retrieval`, `Overall`), and
+`infer_time_seconds_per_query`.
 
 The original DocBench checkout is expected to have this shape. The runner
 accepts either `DocBench` or `DocBench/data` as `--docbench-root`:
@@ -204,8 +248,8 @@ VLLM_API_KEY=<optional>
 OPENROUTER_API_KEY=<your-openrouter-key>
 ```
 
-Run the complete dataset with retrieval over the selected/evaluated document
-set (`file` mode):
+Run the complete dataset with per-question retrieval restricted to the
+DocBench document that owns the question (`file` mode):
 
 ```powershell
 python -m research.data_discovery.run_docbench_e2e `
@@ -264,8 +308,12 @@ question whose retry also returns the sentinel is not regenerated repeatedly.
 For the page-context experiment, use the separate
 `run_docbench_pages.py` runner. It keeps BM25 as the light page-discovery
 step, parses the selected pages with KDL + pdf-inspector, and sends each
-question's parsed page text directly to the generator. Each successful page is
-checkpointed before the next KDL request. It does not
+question's parsed page text directly to the generator. Selected pages are
+submitted in bounded batches (configurable with `--parse-batch-size`) so the
+KDL global scheduler can batch requests across pages. Missing or quarantined
+pages are rebatched and retried within the same run; `--parse-retry-attempts`
+controls the number of retries after the initial attempt (default `2`). Each
+batch is checkpointed for resume. It does not
 run fixed chunking, embeddings, or a second retrieval stage:
 
 ```text
@@ -283,16 +331,24 @@ python -m research.data_discovery.run_docbench_pages `
   --max-documents 2 `
   --limit 10 `
   --top-k-pages 10 `
+  --parse-batch-size 32 `
+  --parse-retry-attempts 2 `
   --workers 4
 ```
 
-Use `--retrieval-scope lake` to build the light page index over every PDF in
-the lake while evaluating only the selected documents. `--workers` controls
+Use `--retrieval-scope lake` to let each question search every PDF in the
+lake while evaluating only the selected documents. In `file` mode, each
+question's page retrieval is filtered to its own document. `--workers` controls
 parallel generator/judge requests. Parsed page text is passed as one context
-unit per page; `--max-page-chars` and `--max-context-chars` only cap the LLM
+unit per page; `--parse-batch-size` controls how many one-page inputs share
+each KDL parse call. `--max-page-chars` and `--max-context-chars` only cap the LLM
 context and do not create chunks. The runner writes discovery rows to
 `discovery/<scope>_pages.jsonl`, answers to `qa/<scope>_pages.jsonl`, and a
 pages-specific report and manifest.
+
+Page-level retries are separate from KDL's `parsing.kdl.max_retries`: the KDL
+setting retries individual HTTP requests, while `parse_retry_attempts` retries
+whole pages that still have no usable enriched record after a batch finishes.
 
 If a run is interrupted, rerun the same command. Successful QA rows and
 successfully parsed pages are reused automatically; only missing or non-`ok`
@@ -333,10 +389,69 @@ indexes/                    cached pdf-inspector page BM25 indexes
 cache/<scope>/               parsed pages and prepared chunks
 retrieval/<scope>_*.jsonl    page/chunk retrieval rows and timings
 qa/<scope>_*.jsonl           generated answers and judge results
-reports/<scope>_*.json       aggregate DocBench report
-manifest_<scope>.json        resolved run contract and paths
+reports/<scope>_*_verN.json  immutable aggregate/timing reports for each run
+manifest_<scope>_verN.json   resolved run contract and report paths for each run
 logs/                        timestamped text and JSONL runtime events
 ```
+
+### Review retrieval and QA in one HTML file
+
+Generate a self-contained qualitative review page for a completed run. The
+left rail supports search, score/retrieval filters, and sorting; the detail
+view combines the gold answer, generated answer, judge output, qrels, BM25
+page ranking, accurate chunks, QA context markers, and timing metadata:
+
+```bash
+.venv/bin/python scripts/visualize_docbench_run.py \
+  --run-dir data/benchmark/on_demand_basic \
+  --output data/benchmark/on_demand_basic/retrieval_qa_review.html
+```
+
+The default output is `<run-dir>/retrieval_qa_review.html`. The page is fully
+offline and does not require a web server; open it directly in a browser.
+Use `j`/`k` to move between questions, or use the previous/next buttons.
+For each question, the **Gold page coverage** table is the main retrieval
+check: it shows every gold page, its relevance grade, the Light BM25 rank and
+score, the Accurate chunk rank and score, and whether the page entered the QA
+context. `HIT` means the page is within the configured top-k; clicking a rank
+jumps to the corresponding page/chunk evidence card.
+
+### Compare the canonical baseline with on-demand
+
+The canonical `baseline_pdf_inspector_tesseract` package and the on-demand run
+use different page-ID conventions: baseline IDs are zero-based, while
+on-demand IDs are one-based PDF page numbers. The comparison tool normalizes
+both before computing page overlap, gold-page hits, rank movement, and parse
+similarity:
+
+```bash
+.venv/bin/python scripts/compare_docbench_runs.py \
+  --baseline-dir data/benchmark/baseline_pdf_inspector_tesseract \
+  --ondemand-dir data/benchmark/on_demand_basic_1 \
+  --output data/benchmark/on_demand_basic_1/baseline_comparison.html
+```
+
+The generated page has separate **Parse compare** and **Query compare** modes.
+Parse compare is document/page based and shows baseline text beside on-demand
+KDL text, availability, OCR provenance, text similarity, and parser component
+counts. Query compare shows gold-page rank coverage, top-20 overlap, baseline
+only/on-demand only pages, scores, page text, and on-demand QA. The canonical
+baseline README states that it does not include QA JSONL, so that side is shown
+as unavailable rather than being treated as an empty answer.
+
+Each invocation uses the next `verN` number, so it never overwrites an earlier
+aggregate report or timing summary in the same output directory.
+
+The on-demand timing summary separates elapsed latency from shared-resource
+service work. `total_runtime_seconds_all_data.Overall` is the wall-clock
+runtime for the run; `online_latency_seconds_per_query.Overall` is the
+end-to-end query latency and includes queueing. KDL queue wait and chunk-lock
+wait are reported in `queue_wait_seconds_per_query`, while
+`amortized_service_work_seconds_per_query` divides unique phase work by the
+number of completed queries. `query_latency_percentiles_seconds` contains
+p50/p95/p99 query latency, and `online_throughput_queries_per_second` reports
+run throughput. Phase service timings exclude KDL queue wait and chunk-lock
+wait, so they should not be added together to reproduce wall-clock runtime.
 
 ## Output and caching
 

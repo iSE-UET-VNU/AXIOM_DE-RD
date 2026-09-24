@@ -6,14 +6,11 @@ import asyncio
 import io
 import json
 import logging
-import multiprocessing
 import os
 import time
 from collections import Counter, deque
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from queue import Empty
 from typing import Any, Callable
 
 import httpx
@@ -45,6 +42,7 @@ class KDLConfig:
     model: str = "kdl-frontier-parser-nano"
     dpi: int = 144
     request_timeout_seconds: float = 3600.0
+    render_timeout_seconds: float = 120.0
     max_retries: int = 2
     max_pages: int = 400
     max_workers: int = 32
@@ -65,6 +63,8 @@ class KDLConfig:
     project_root: str | None = None
     host_failure_threshold: int = 3
     host_abort_on_open: bool = True
+    host_recovery_seconds: float = 30.0
+    host_recovery_attempts: int = 5
     event_log_path: str | None = None
     host_health: KDLHostHealth | None = None
 
@@ -118,6 +118,9 @@ class KDLConfig:
                 "request_timeout_seconds",
                 float(values.get("timeout_seconds", 3600.0)),
             ),
+            render_timeout_seconds=_positive_float(
+                values, "render_timeout_seconds", 120.0
+            ),
             max_retries=_non_negative_int(values, "max_retries", 2),
             max_pages=_positive_int(values, "max_pages", 400),
             max_workers=max_workers,
@@ -154,6 +157,12 @@ class KDLConfig:
                 int(os.getenv("KDL_HOST_FAILURE_THRESHOLD", "3")),
             ),
             host_abort_on_open=_as_bool(values.get("host_abort_on_open", True)),
+            host_recovery_seconds=_positive_float(
+                values, "host_recovery_seconds", 30.0
+            ),
+            host_recovery_attempts=_non_negative_int(
+                values, "host_recovery_attempts", 5
+            ),
             event_log_path=_optional_string(values.get("event_log_path")),
             host_health=(
                 values.get("_host_health")
@@ -331,7 +340,6 @@ class KDLProvider:
         job_queue: asyncio.Queue[int | None] = asyncio.Queue(
             maxsize=worker_count
         )
-        loop = asyncio.get_running_loop()
 
         def report(index: int, outcome: ParsedData | Exception) -> None:
             document = prepared[index]
@@ -375,7 +383,7 @@ class KDLProvider:
             for _ in range(worker_count):
                 await job_queue.put(None)
 
-        async def worker(executor: ProcessPoolExecutor) -> None:
+        async def worker() -> None:
             async with httpx.AsyncClient(
                 timeout=self.config.request_timeout_seconds
             ) as client:
@@ -392,13 +400,23 @@ class KDLProvider:
                         for page_index in range(document.page_count):
                             image: Image.Image | None = None
                             try:
-                                image = await loop.run_in_executor(
-                                    executor,
-                                    _render_page,
+                                render_started = time.monotonic()
+                                image = _render_page(
                                     str(document.path),
                                     page_index,
                                     self.config.dpi,
                                 )
+                                render_elapsed = time.monotonic() - render_started
+                                if render_elapsed > self.config.render_timeout_seconds:
+                                    logger.warning(
+                                        "KDL page render exceeded warning threshold "
+                                        "path=%s page=%s elapsed_seconds=%.3f "
+                                        "threshold_seconds=%.3f",
+                                        document.path,
+                                        page_index + 1,
+                                        render_elapsed,
+                                        self.config.render_timeout_seconds,
+                                    )
                                 kwargs: dict[str, Any] = {
                                     "sequence_limiter": sequence_limiter,
                                     "usage": document.usage,
@@ -433,14 +451,50 @@ class KDLProvider:
             if document.failure is not None:
                 report(index, document.failure)
 
-        with ProcessPoolExecutor(max_workers=self.config.render_processes) as executor:
-            workers = [
-                asyncio.create_task(worker(executor))
-                for _ in range(worker_count)
-            ]
-            await producer()
-            await job_queue.join()
-            await asyncio.gather(*workers)
+        # The on-demand scheduler frequently parses one-page temporary PDFs.
+        # Rendering synchronously here avoids creating a process/thread pool
+        # for every micro-batch. The expensive, concurrent part of this
+        # scheduler remains the remote KDL request stage.
+        workers = [
+            asyncio.create_task(worker())
+            for _ in range(worker_count)
+        ]
+        await producer()
+        pending_workers = set(workers)
+        try:
+            while pending_workers:
+                done, pending_workers = await asyncio.wait(
+                    pending_workers,
+                    return_when=asyncio.FIRST_EXCEPTION,
+                )
+                failure = next(
+                    (
+                        task.exception()
+                        for task in done
+                        if not task.cancelled() and task.exception() is not None
+                    ),
+                    None,
+                )
+                if failure is None:
+                    continue
+
+                # A host circuit failure must abort all sibling document
+                # workers immediately.  Waiting for job_queue.join() first
+                # can otherwise leave the caller blocked behind queued pages.
+                for task in pending_workers:
+                    task.cancel()
+                if pending_workers:
+                    await asyncio.gather(
+                        *pending_workers,
+                        return_exceptions=True,
+                    )
+                raise failure
+        finally:
+            remaining = [task for task in workers if not task.done()]
+            for task in remaining:
+                task.cancel()
+            if remaining:
+                await asyncio.gather(*remaining, return_exceptions=True)
 
         for index, outcome in enumerate(outcomes):
             if outcome is None:
@@ -473,52 +527,7 @@ class KDLProvider:
         }
         wall_started = time.perf_counter()
 
-        persistence_queue: asyncio.Queue[tuple[int, ParsedData | Exception] | None] = (
-            asyncio.Queue()
-        )
         persistence_errors: list[Exception] = []
-        persistence_executor: ThreadPoolExecutor | None = None
-        persistence_task: asyncio.Task[None] | None = None
-        loop = asyncio.get_running_loop()
-
-        if on_document_complete is not None:
-            persistence_executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="kdl-persistence",
-            )
-
-            async def persist_completed_documents() -> None:
-                assert persistence_executor is not None
-                while True:
-                    item = await persistence_queue.get()
-                    try:
-                        if item is None:
-                            return
-                        index, outcome = item
-                        try:
-                            await loop.run_in_executor(
-                                persistence_executor,
-                                on_document_complete,
-                                index,
-                                outcome,
-                            )
-                        except Exception as exc:  # pragma: no cover - caller-specific
-                            persistence_errors.append(exc)
-                    finally:
-                        persistence_queue.task_done()
-
-            persistence_task = asyncio.create_task(persist_completed_documents())
-
-        async def close_persistence() -> None:
-            if persistence_task is None:
-                return
-            if not persistence_task.done():
-                await persistence_queue.join()
-                persistence_queue.put_nowait(None)
-                await persistence_queue.join()
-                await persistence_task
-            if persistence_executor is not None:
-                await asyncio.to_thread(persistence_executor.shutdown, True)
 
         recognition_active = False
 
@@ -531,10 +540,13 @@ class KDLProvider:
             if recognition_active:
                 telemetry["documents_finalized_during_recognition"] += 1
             if on_document_complete is not None:
-                persistence_queue.put_nowait((index, outcome))
+                try:
+                    on_document_complete(index, outcome)
+                except Exception as exc:  # pragma: no cover - caller-specific
+                    persistence_errors.append(exc)
                 telemetry["persistence_queue_peak"] = max(
                     telemetry["persistence_queue_peak"],
-                    persistence_queue.qsize(),
+                    1,
                 )
 
         def finalize_document(index: int) -> None:
@@ -584,7 +596,6 @@ class KDLProvider:
                     telemetry,
                 )
             except KDLHostUnavailableError:
-                await close_persistence()
                 raise
             telemetry["layout_phase_latency_ms"] = round(
                 (time.perf_counter() - layout_started) * 1000.0, 3
@@ -639,7 +650,6 @@ class KDLProvider:
                         complete_jobs,
                     )
                 except KDLHostUnavailableError:
-                    await close_persistence()
                     raise
             recognition_active = False
             telemetry["recognition_phase_latency_ms"] = round(
@@ -654,8 +664,6 @@ class KDLProvider:
                 finalize_document(index)
 
         persistence_drain_started = time.perf_counter()
-        if on_document_complete is not None:
-            await close_persistence()
         telemetry["post_recognition_persistence_drain_ms"] = round(
             (time.perf_counter() - persistence_drain_started) * 1000.0,
             3,
@@ -706,151 +714,287 @@ class KDLProvider:
         sequence_limiter: SequenceLimiter,
         telemetry: dict[str, Any],
     ) -> None:
-        context = multiprocessing.get_context("spawn")
-        task_queue = context.Queue()
-        rendered_queue = context.Queue(maxsize=self.config.max_model_sequences)
-        image_slots = context.BoundedSemaphore(self.config.max_model_sequences)
-        cancelled = context.Array("b", len(prepared), lock=False)
-        process_count = min(self.config.render_processes, len(document_indexes))
-        processes = [
-            context.Process(
-                target=_kdl_document_worker,
-                args=(
-                    task_queue,
-                    rendered_queue,
-                    image_slots,
-                    cancelled,
-                    self.config.dpi,
-                    "layout",
-                ),
-                name=f"kdl-layout-render-{index + 1}",
-            )
-            for index in range(process_count)
-        ]
-        for process in processes:
-            process.start()
-        for document_index in document_indexes:
-            task_queue.put(
-                (document_index, str(prepared[document_index].path), None)
-            )
-        for _ in processes:
-            task_queue.put(None)
+        # Keep the global barrier asynchronous without renderer processes:
+        # nested process queues can deadlock inside an asyncio worker.
+        await self._run_global_layout_phase_local(
+            prepared,
+            document_indexes,
+            engine,
+            usage,
+            request_semaphore,
+            sequence_limiter,
+            telemetry,
+        )
+    async def _run_global_layout_phase_local(
+        self,
+        prepared: list[_KDLDocument],
+        document_indexes: list[int],
+        engine: NanoEngine,
+        usage: NanoUsage,
+        request_semaphore: asyncio.Semaphore,
+        sequence_limiter: SequenceLimiter,
+        telemetry: dict[str, Any],
+    ) -> None:
+        """Render pages locally, then issue corpus-wide layout batches."""
+        async def render_page(document_index: int, page_index: int):
+            document = prepared[document_index]
+            started = time.monotonic()
+            image = _render_page(str(document.path), page_index, self.config.dpi)
+            elapsed = time.monotonic() - started
+            if elapsed > self.config.render_timeout_seconds:
+                logger.warning(
+                    "KDL page render exceeded warning threshold path=%s page=%s "
+                    "elapsed_seconds=%.3f threshold_seconds=%.3f",
+                    document.path,
+                    page_index + 1,
+                    elapsed,
+                    self.config.render_timeout_seconds,
+                )
+            return document_index, page_index, image
 
+        rendered = await asyncio.gather(
+            *(render_page(index, page_index)
+              for index in document_indexes
+              for page_index in range(prepared[index].page_count)),
+            return_exceptions=True,
+        )
         pending: list[tuple[int, int, Image.Image]] = []
-        in_flight: dict[
-            asyncio.Task[list[dict[str, list[dict[str, Any]]]]],
-            list[tuple[int, int, Image.Image]],
-        ] = {}
-        completed_documents: set[int] = set()
+        for item in rendered:
+            if isinstance(item, Exception):
+                logger.warning("global layout render failed: %s", item)
+                continue
+            pending.append(item)
+        telemetry["layout_rendered_pages"] = len(pending)
+        telemetry["queue_peak"] = max(telemetry.get("queue_peak", 0), len(pending))
 
-        async with httpx.AsyncClient(
-            timeout=self.config.request_timeout_seconds
-        ) as client:
-            async def submit(*, force: bool = False) -> None:
-                while (
-                    pending
-                    and len(in_flight) < self.config.request_workers
-                    and (force or len(pending) >= self.config.request_batch_size)
-                ):
-                    take = min(self.config.request_batch_size, len(pending))
-                    batch = pending[:take]
-                    del pending[:take]
+        async with httpx.AsyncClient(timeout=self.config.request_timeout_seconds) as client:
+            for offset in range(0, len(pending), self.config.request_batch_size * self.config.request_workers):
+                window = pending[offset : offset + self.config.request_batch_size * self.config.request_workers]
+                tasks: list[tuple[asyncio.Task[Any], list[tuple[int, int, Image.Image]]]] = []
+                for start in range(0, len(window), self.config.request_batch_size):
+                    batch = window[start : start + self.config.request_batch_size]
                     task = asyncio.create_task(
                         engine.layout_batch(
                             client,
-                            [
-                                (image, page_index + 1)
-                                for _, page_index, image in batch
-                            ],
+                            [(image, page_index + 1) for _, page_index, image in batch],
                             request_semaphore,
                             sequence_limiter=sequence_limiter,
                             usage=usage,
                         )
                     )
-                    in_flight[task] = batch
-
-            try:
-                while (
-                    len(completed_documents) < len(document_indexes)
-                    or pending
-                    or in_flight
-                ):
-                    event: Any | None = None
+                    tasks.append((task, batch))
+                results = await asyncio.gather(*(task for task, _ in tasks), return_exceptions=True)
+                for result, (_, batch) in zip(results, tasks, strict=True):
                     try:
-                        event = await asyncio.to_thread(
-                            rendered_queue.get, True, 0.05
-                        )
-                    except Empty:
-                        pass
-                    if (
-                        event is None
-                        and not any(process.is_alive() for process in processes)
-                        and len(completed_documents) < len(document_indexes)
-                    ):
-                        missing = set(document_indexes) - completed_documents
-                        for document_index in missing:
-                            if prepared[document_index].failure is None:
-                                prepared[document_index].failure = RuntimeError(
-                                    "KDL layout renderer exited before document completion."
-                                )
-                        completed_documents.update(missing)
-                    if event is not None:
-                        event_type, document_index, page_index, payload = event
-                        if event_type == "page":
-                            image = _deserialize_image(payload)
-                            pending.append((document_index, page_index, image))
-                            telemetry["layout_rendered_pages"] += 1
-                            telemetry["queue_peak"] = max(
-                                telemetry["queue_peak"],
-                                len(pending) + len(in_flight),
-                            )
-                        elif event_type == "error":
-                            error_type, message = payload
-                            if prepared[document_index].failure is None:
-                                prepared[document_index].failure = RuntimeError(
-                                    f"page {page_index + 1}: {error_type}: {message}"
-                                )
-                            cancelled[document_index] = 1
-                        elif event_type == "done":
-                            completed_documents.add(document_index)
-
-                    force = len(completed_documents) == len(document_indexes)
-                    await submit(force=force)
-                    for task in [task for task in in_flight if task.done()]:
-                        batch = in_flight.pop(task)
-                        try:
-                            grouped_pages = task.result()
-                        except KDLHostUnavailableError:
-                            raise
-                        except Exception as exc:
-                            grouped_pages = [
-                                {"text": [], "table": [], "picture": [], "formula": []}
-                                for _ in batch
-                            ]
-                            logger.warning("global layout batch failed: %s", exc)
-                        for (document_index, page_index, image), grouped in zip(
-                            batch, grouped_pages, strict=True
-                        ):
-                            prepared[document_index].layout_pages[page_index] = grouped
+                        if isinstance(result, KDLHostUnavailableError):
+                            raise result
+                        grouped_pages = result if isinstance(result, list) else []
+                        if len(grouped_pages) != len(batch):
+                            raise RuntimeError("KDL layout batch returned an unexpected page count")
+                    except KDLHostUnavailableError:
+                        for _, _, image in batch:
                             image.close()
-                            image_slots.release()
-                    await submit(force=force)
-            finally:
-                for _, _, image in pending:
-                    image.close()
-                    image_slots.release()
-                for task, batch in in_flight.items():
-                    if not task.done():
-                        task.cancel()
-                    for _, _, image in batch:
+                        raise
+                    except Exception as exc:
+                        logger.warning("global layout batch failed: %s", exc)
+                        grouped_pages = [
+                            {"text": [], "table": [], "picture": [], "formula": []}
+                            for _ in batch
+                        ]
+                    for (document_index, page_index, image), grouped in zip(batch, grouped_pages, strict=True):
+                        prepared[document_index].layout_pages[page_index] = grouped
                         image.close()
-                        image_slots.release()
-                await asyncio.gather(*in_flight, return_exceptions=True)
-                _stop_processes(processes)
-                task_queue.close()
-                task_queue.cancel_join_thread()
-                rendered_queue.close()
-                rendered_queue.cancel_join_thread()
+
+        # A render failure is represented by an empty layout page so the
+        # document can still be finalized and reported by the normal path.
+        for document_index in document_indexes:
+            document = prepared[document_index]
+            for page_index, grouped in enumerate(document.layout_pages):
+                if grouped is None:
+                    document.layout_pages[page_index] = {
+                        "text": [], "table": [], "picture": [], "formula": []
+                    }
+
+    async def _run_global_recognition_phase(
+        self,
+        prepared: list[_KDLDocument],
+        crop_tasks: dict[int, dict[int, list[dict[str, Any]]]],
+        job_map: dict[str, dict[str, Any]],
+        engine: NanoEngine,
+        usage: NanoUsage,
+        request_semaphore: asyncio.Semaphore,
+        sequence_limiter: SequenceLimiter,
+        telemetry: dict[str, Any],
+        on_jobs_completed: Callable[[list[dict[str, Any]]], None],
+    ) -> None:
+        await self._run_global_recognition_phase_local(
+            prepared, crop_tasks, job_map, engine, usage,
+            request_semaphore, sequence_limiter, telemetry, on_jobs_completed,
+        )
+    async def _run_global_recognition_phase_local(
+        self,
+        prepared: list[_KDLDocument],
+        crop_tasks: dict[int, dict[int, list[dict[str, Any]]]],
+        job_map: dict[str, dict[str, Any]],
+        engine: NanoEngine,
+        usage: NanoUsage,
+        request_semaphore: asyncio.Semaphore,
+        sequence_limiter: SequenceLimiter,
+        telemetry: dict[str, Any],
+        on_jobs_completed: Callable[[list[dict[str, Any]]], None],
+    ) -> None:
+        """Prepare local crops and recognize them in global batches."""
+        queues: dict[str, deque[dict[str, Any]]] = {
+            "text": deque(), "table_fullpage": deque(), "table": deque(),
+            "picture": deque(), "formula": deque(),
+        }
+        emitted_ids: set[str] = set()
+        def complete(elements: list[dict[str, Any]]) -> None:
+            normalized: list[dict[str, Any]] = []
+            for element in elements:
+                job_id = str(element.get("job_id") or "")
+                if not job_id or job_id in emitted_ids:
+                    continue
+                emitted_ids.add(job_id)
+                original = job_map.get(job_id)
+                if original is not None and original is not element:
+                    for key in (
+                        "content",
+                        "recognition_source",
+                        "picture_path",
+                        "crop_size",
+                    ):
+                        if key in element:
+                            original[key] = element[key]
+                    normalized.append(original)
+                else:
+                    normalized.append(element)
+            if normalized:
+                on_jobs_completed(normalized)
+
+        for document_index, pages in crop_tasks.items():
+            document = prepared[document_index]
+            for page_index, candidates in pages.items():
+                try:
+                    page_image = _render_page(
+                        str(document.path), page_index, self.config.dpi
+                    )
+                    fullpage = preprocess_for_vlm(page_image)
+                    try:
+                        fullpage_payload = _serialize_image(fullpage)
+                    finally:
+                        fullpage.close()
+                    grouped = _nano_group_by_bucket(candidates, page_image)
+                    page_image.close()
+                except Exception as exc:
+                    logger.warning("global crop render failed: %s", exc)
+                    for candidate in candidates:
+                        original = job_map.get(str(candidate.get("job_id") or ""))
+                        if original is not None:
+                            original["content"] = ""
+                            original["recognition_source"] = "kdl_crop"
+                            complete([original])
+                    continue
+
+                grouped_ids: set[str] = set()
+                fullpage_needed = {
+                    str(candidate.get("job_id") or "")
+                    for candidate in candidates
+                    if candidate.get("fullpage_table")
+                }
+                for stage, values in grouped.items():
+                    for element in values:
+                        job_id = str(element.get("job_id") or "")
+                        grouped_ids.add(job_id)
+                        if job_id in fullpage_needed and stage == "table":
+                            # Give each request its own image so cleanup is
+                            # independent when a table falls back to OCR.
+                            with Image.open(io.BytesIO(fullpage_payload)) as fullpage:
+                                element["fullpage_image"] = fullpage.convert("RGB").copy()
+                            queues["table_fullpage"].append(element)
+                        else:
+                            queues[stage].append(element)
+                for candidate in candidates:
+                    job_id = str(candidate.get("job_id") or "")
+                    if job_id not in grouped_ids:
+                        original = job_map.get(job_id)
+                        if original is not None:
+                            original["content"] = ""
+                            original["recognition_source"] = "kdl_crop"
+                            complete([original])
+
+        stage_order = ("text", "table_fullpage", "table", "picture", "formula")
+        async with httpx.AsyncClient(timeout=self.config.request_timeout_seconds) as client:
+            for queue_name in stage_order:
+                batches: list[list[dict[str, Any]]] = []
+                while queues[queue_name]:
+                    batches.append([
+                        queues[queue_name].popleft()
+                        for _ in range(min(self.config.request_batch_size, len(queues[queue_name])))
+                    ])
+                if not batches:
+                    continue
+                stage = "table" if queue_name == "table_fullpage" else queue_name
+
+                async def recognize(elements: list[dict[str, Any]]) -> Any:
+                    try:
+                        return await engine.recognize_prepared_batch(
+                            client, stage, elements, request_semaphore,
+                            sequence_limiter=sequence_limiter, usage=usage,
+                            image_key=("fullpage_image" if queue_name == "table_fullpage" else "preprocessed_image"),
+                            fullpage_table=queue_name == "table_fullpage",
+                        )
+                    except KDLHostUnavailableError:
+                        raise
+                    except Exception as exc:
+                        logger.warning("global recognition batch failed: %s", exc)
+                        for element in elements:
+                            element["content"] = ""
+                            element["recognition_source"] = f"kdl_{stage}"
+                        return []
+
+                async def recognize_batch(
+                    elements: list[dict[str, Any]],
+                ) -> tuple[list[dict[str, Any]], Any]:
+                    return elements, await recognize(elements)
+
+                tasks = [
+                    asyncio.create_task(recognize_batch(elements))
+                    for elements in batches
+                ]
+                for task in asyncio.as_completed(tasks):
+                    elements, fallbacks = await task
+                    if isinstance(fallbacks, KDLHostUnavailableError):
+                        raise fallbacks
+                    fallback_ids = {id(element) for element in (fallbacks or [])}
+                    for element in elements:
+                        fullpage = element.pop("fullpage_image", None)
+                        if fullpage is not None:
+                            fullpage.close()
+                        if id(element) in fallback_ids:
+                            queues["table"].append(element)
+                        else:
+                            complete([element])
+                telemetry["recognition_jobs"] = telemetry.get("recognition_jobs", 0)
+
+        for element in job_map.values():
+            crop_size = element.pop("crop_size", None)
+            element.pop("preprocessed_image", None)
+            element.pop("fullpage_image", None)
+            element.pop("fullpage_table", None)
+            element.pop("job_id", None)
+            if (
+                _element_stage(element) == "picture"
+                and crop_size is not None
+                and min(crop_size) >= 25
+            ):
+                page_number = int(element.get("page_number", 1))
+                layout_order = int(element.get("layout_order", 0))
+                element["picture_path"] = (
+                    "artifacts/cropped_pictures/"
+                    f"page_{page_number:03d}_picture_{layout_order:03d}.png"
+                )
+
 
     async def _prepare_global_recognition(
         self,
@@ -934,247 +1078,6 @@ class KDLProvider:
                 crop_tasks[document_index] = document_crop_pages
         return job_map, crop_tasks
 
-    async def _run_global_recognition_phase(
-        self,
-        prepared: list[_KDLDocument],
-        crop_tasks: dict[int, dict[int, list[dict[str, Any]]]],
-        job_map: dict[str, dict[str, Any]],
-        engine: NanoEngine,
-        usage: NanoUsage,
-        request_semaphore: asyncio.Semaphore,
-        sequence_limiter: SequenceLimiter,
-        telemetry: dict[str, Any],
-        on_jobs_completed: Callable[[list[dict[str, Any]]], None],
-    ) -> None:
-        context = multiprocessing.get_context("spawn")
-        task_queue = context.Queue()
-        crop_queue = context.Queue(maxsize=self.config.max_model_sequences)
-        crop_slots = context.BoundedSemaphore(self.config.max_model_sequences)
-        cancelled = context.Array("b", len(prepared), lock=False)
-        process_count = min(self.config.render_processes, len(crop_tasks))
-        processes = [
-            context.Process(
-                target=_kdl_document_worker,
-                args=(
-                    task_queue,
-                    crop_queue,
-                    crop_slots,
-                    cancelled,
-                    self.config.dpi,
-                    "crop",
-                ),
-                name=f"kdl-crop-render-{index + 1}",
-            )
-            for index in range(process_count)
-        ]
-        for process in processes:
-            process.start()
-        for document_index, pages in crop_tasks.items():
-            task_queue.put(
-                (document_index, str(prepared[document_index].path), pages)
-            )
-        for _ in processes:
-            task_queue.put(None)
-
-        queues: dict[str, deque[dict[str, Any]]] = {
-            "text": deque(),
-            "table_fullpage": deque(),
-            "table": deque(),
-            "picture": deque(),
-            "formula": deque(),
-        }
-        stage_order = tuple(queues)
-        stage_cursor = 0
-        in_flight: dict[
-            asyncio.Task[list[dict[str, Any]]],
-            tuple[str, list[dict[str, Any]]],
-        ] = {}
-        completed_documents: set[int] = set()
-
-        async with httpx.AsyncClient(
-            timeout=self.config.request_timeout_seconds
-        ) as client:
-            async def submit(*, force: bool = False) -> None:
-                nonlocal stage_cursor
-                while len(in_flight) < self.config.request_workers:
-                    selected: str | None = None
-                    for offset in range(len(stage_order)):
-                        candidate = stage_order[(stage_cursor + offset) % len(stage_order)]
-                        if len(queues[candidate]) >= self.config.request_batch_size:
-                            selected = candidate
-                            stage_cursor = (stage_cursor + offset + 1) % len(stage_order)
-                            break
-                    if selected is None and force:
-                        for offset in range(len(stage_order)):
-                            candidate = stage_order[(stage_cursor + offset) % len(stage_order)]
-                            if queues[candidate]:
-                                selected = candidate
-                                stage_cursor = (stage_cursor + offset + 1) % len(stage_order)
-                                break
-                    if selected is None:
-                        return
-                    take = min(self.config.request_batch_size, len(queues[selected]))
-                    elements = [queues[selected].popleft() for _ in range(take)]
-                    model_stage = "table" if selected == "table_fullpage" else selected
-                    task = asyncio.create_task(
-                        engine.recognize_prepared_batch(
-                            client,
-                            model_stage,
-                            elements,
-                            request_semaphore,
-                            sequence_limiter=sequence_limiter,
-                            usage=usage,
-                            image_key=(
-                                "fullpage_image"
-                                if selected == "table_fullpage"
-                                else "preprocessed_image"
-                            ),
-                            fullpage_table=selected == "table_fullpage",
-                        )
-                    )
-                    in_flight[task] = (selected, elements)
-
-            try:
-                while (
-                    len(completed_documents) < len(crop_tasks)
-                    or any(queues.values())
-                    or in_flight
-                ):
-                    event: Any | None = None
-                    try:
-                        event = await asyncio.to_thread(
-                            crop_queue.get, True, 0.05
-                        )
-                    except Empty:
-                        pass
-                    if (
-                        event is None
-                        and not any(process.is_alive() for process in processes)
-                        and len(completed_documents) < len(crop_tasks)
-                    ):
-                        missing = set(crop_tasks) - completed_documents
-                        for document_index in missing:
-                            if prepared[document_index].failure is None:
-                                prepared[document_index].failure = RuntimeError(
-                                    "KDL crop renderer exited before document completion."
-                                )
-                        completed_documents.update(missing)
-                    if event is not None:
-                        event_type, document_index, page_index, payload = event
-                        if event_type == "crop":
-                            job_id, stage, image_bytes, fullpage_bytes, crop_size = payload
-                            element = job_map[job_id]
-                            element["preprocessed_image"] = _deserialize_image(image_bytes)
-                            element["crop_size"] = tuple(crop_size)
-                            if fullpage_bytes is not None:
-                                element["fullpage_image"] = _deserialize_image(
-                                    fullpage_bytes
-                                )
-                                queue_name = "table_fullpage"
-                            else:
-                                queue_name = stage
-                            if (
-                                stage == "picture"
-                                and min(element["preprocessed_image"].size) < 25
-                            ):
-                                element["content"] = ""
-                                element["recognition_source"] = "kdl_picture"
-                                _close_job_images(element)
-                                crop_slots.release()
-                                on_jobs_completed([element])
-                            else:
-                                queues[queue_name].append(element)
-                            telemetry["queue_peak"] = max(
-                                telemetry["queue_peak"],
-                                sum(len(queue) for queue in queues.values()),
-                            )
-                        elif event_type == "skipped":
-                            skipped_elements: list[dict[str, Any]] = []
-                            for job_id in payload:
-                                element = job_map[job_id]
-                                stage = _element_stage(element)
-                                element["content"] = ""
-                                element["recognition_source"] = f"kdl_{stage}"
-                                skipped_elements.append(element)
-                            on_jobs_completed(skipped_elements)
-                        elif event_type == "page_done":
-                            telemetry["recognition_rendered_pages"] += 1
-                        elif event_type == "error":
-                            error_type, message = payload
-                            if prepared[document_index].failure is None:
-                                prepared[document_index].failure = RuntimeError(
-                                    f"page {page_index + 1}: {error_type}: {message}"
-                                )
-                            cancelled[document_index] = 1
-                        elif event_type == "done":
-                            completed_documents.add(document_index)
-
-                    force = len(completed_documents) == len(crop_tasks)
-                    await submit(force=force)
-                    for task in [task for task in in_flight if task.done()]:
-                        queue_name, elements = in_flight.pop(task)
-                        try:
-                            table_fallbacks = task.result()
-                        except KDLHostUnavailableError:
-                            raise
-                        except Exception as exc:
-                            logger.warning("global recognition batch failed: %s", exc)
-                            table_fallbacks = []
-                            for element in elements:
-                                stage = _element_stage(element)
-                                element["content"] = ""
-                                element["recognition_source"] = f"kdl_{stage}"
-                        fallback_ids = {id(element) for element in table_fallbacks}
-                        completed_elements: list[dict[str, Any]] = []
-                        for element in elements:
-                            fullpage = element.pop("fullpage_image", None)
-                            if fullpage is not None:
-                                fullpage.close()
-                            if id(element) in fallback_ids:
-                                queues["table"].append(element)
-                                continue
-                            _close_job_images(element)
-                            crop_slots.release()
-                            completed_elements.append(element)
-                        on_jobs_completed(completed_elements)
-                    await submit(force=force)
-            finally:
-                for queue in queues.values():
-                    while queue:
-                        element = queue.popleft()
-                        _close_job_images(element)
-                        crop_slots.release()
-                for task, (_, elements) in in_flight.items():
-                    if not task.done():
-                        task.cancel()
-                    for element in elements:
-                        _close_job_images(element)
-                        crop_slots.release()
-                await asyncio.gather(*in_flight, return_exceptions=True)
-                _stop_processes(processes)
-                task_queue.close()
-                task_queue.cancel_join_thread()
-                crop_queue.close()
-                crop_queue.cancel_join_thread()
-
-        for element in job_map.values():
-            crop_size = element.pop("crop_size", None)
-            element.pop("preprocessed_image", None)
-            element.pop("fullpage_image", None)
-            element.pop("fullpage_table", None)
-            element.pop("job_id", None)
-            if (
-                _element_stage(element) == "picture"
-                and crop_size is not None
-                and min(crop_size) >= 25
-            ):
-                page_number = int(element.get("page_number", 1))
-                layout_order = int(element.get("layout_order", 0))
-                element["picture_path"] = (
-                    "artifacts/cropped_pictures/"
-                    f"page_{page_number:03d}_picture_{layout_order:03d}.png"
-                )
-
     def _engine(self) -> NanoEngine:
         return NanoEngine(
             self.config.endpoint_url,
@@ -1194,6 +1097,8 @@ class KDLProvider:
             request_batch_size=self.config.request_batch_size,
             max_model_sequences=self.config.max_model_sequences,
             host_failure_threshold=self.config.host_failure_threshold,
+            host_recovery_seconds=self.config.host_recovery_seconds,
+            host_recovery_attempts=self.config.host_recovery_attempts,
             host_abort_on_open=self.config.host_abort_on_open,
             event_log_path=self.config.event_log_path,
             host_health=self.config.host_health,
@@ -1251,6 +1156,9 @@ class KDLProvider:
             "request_batch_size": self.config.request_batch_size,
             "max_model_sequences": self.config.max_model_sequences,
             "request_timeout_seconds": self.config.request_timeout_seconds,
+            "render_timeout_seconds": self.config.render_timeout_seconds,
+            "host_recovery_seconds": self.config.host_recovery_seconds,
+            "host_recovery_attempts": self.config.host_recovery_attempts,
             "max_retries": self.config.max_retries,
             "max_output_tokens": {
                 "layout": self.config.layout_max_output_tokens,
@@ -1336,209 +1244,8 @@ def _serialize_image(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
-def _deserialize_image(payload: bytes) -> Image.Image:
-    with Image.open(io.BytesIO(payload)) as image:
-        return image.convert("RGB").copy()
-
-
-def _render_open_document_page(
-    document: Any,
-    file_path: Path,
-    page_index: int,
-    dpi: int,
-) -> Image.Image:
-    if document is None:
-        if page_index != 0:
-            raise IndexError(f"Image has no page {page_index + 1}")
-        with Image.open(file_path) as image:
-            return image.convert("RGB").copy()
-    import pymupdf as fitz
-
-    page = document.load_page(page_index)
-    pixmap = page.get_pixmap(
-        matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0),
-        alpha=False,
-    )
-    with Image.open(io.BytesIO(pixmap.tobytes("png"))) as image:
-        return image.convert("RGB").copy()
-
-
-def _kdl_document_worker(
-    task_queue: Any,
-    output_queue: Any,
-    image_slots: Any,
-    cancelled: Any,
-    dpi: int,
-    mode: str,
-) -> None:
-    """Open one document per task and emit layout pages or bbox crops."""
-
-    while True:
-        task = task_queue.get()
-        if task is None:
-            return
-        document_index, raw_path, page_jobs = task
-        file_path = Path(raw_path)
-        document: Any | None = None
-        try:
-            if file_path.suffix.lower() == ".pdf":
-                import pymupdf as fitz
-
-                document = fitz.open(str(file_path))
-                page_indexes = (
-                    range(document.page_count)
-                    if mode == "layout"
-                    else sorted(int(index) for index in page_jobs)
-                )
-            else:
-                page_indexes = (0,)
-
-            for page_index in page_indexes:
-                if cancelled[document_index]:
-                    break
-                page_image: Image.Image | None = None
-                try:
-                    page_image = _render_open_document_page(
-                        document,
-                        file_path,
-                        page_index,
-                        dpi,
-                    )
-                    if mode == "layout":
-                        serialized_page = _serialize_image(page_image)
-                        image_slots.acquire()
-                        output_queue.put(
-                            (
-                                "page",
-                                document_index,
-                                page_index,
-                                serialized_page,
-                            )
-                        )
-                        continue
-
-                    candidates = list(page_jobs[page_index])
-                    grouped = _nano_group_by_bucket(candidates, page_image)
-                    candidate_flags = {
-                        str(candidate["job_id"]): bool(
-                            candidate.get("fullpage_table")
-                        )
-                        for candidate in candidates
-                    }
-                    materialized = [
-                        (stage, element)
-                        for stage in ("text", "table", "picture", "formula")
-                        for element in grouped[stage]
-                    ]
-                    emitted: set[str] = set()
-                    fullpage_bytes: bytes | None = None
-                    if any(
-                        stage == "table"
-                        and candidate_flags.get(str(element.get("job_id")), False)
-                        for stage, element in materialized
-                    ):
-                        fullpage = preprocess_for_vlm(page_image)
-                        try:
-                            fullpage_bytes = _serialize_image(fullpage)
-                        finally:
-                            fullpage.close()
-
-                    for stage, element in materialized:
-                        job_id = str(element["job_id"])
-                        preprocessed = element["preprocessed_image"]
-                        cropped = element.get("cropped_image")
-                        crop_size = (
-                            cropped.size if cropped is not None else preprocessed.size
-                        )
-                        serialized_crop = _serialize_image(preprocessed)
-                        image_slots.acquire()
-                        output_queue.put(
-                            (
-                                "crop",
-                                document_index,
-                                page_index,
-                                (
-                                    job_id,
-                                    stage,
-                                    serialized_crop,
-                                    (
-                                        fullpage_bytes
-                                        if stage == "table"
-                                        and candidate_flags.get(job_id, False)
-                                        else None
-                                    ),
-                                    crop_size,
-                                ),
-                            )
-                        )
-                        emitted.add(job_id)
-                        preprocessed.close()
-                        if cropped is not None:
-                            cropped.close()
-                    skipped = [
-                        str(candidate["job_id"])
-                        for candidate in candidates
-                        if str(candidate["job_id"]) not in emitted
-                    ]
-                    if skipped:
-                        output_queue.put(
-                            (
-                                "skipped",
-                                document_index,
-                                page_index,
-                                skipped,
-                            )
-                        )
-                    output_queue.put(
-                        ("page_done", document_index, page_index, None)
-                    )
-                except Exception as exc:
-                    cancelled[document_index] = 1
-                    output_queue.put(
-                        (
-                            "error",
-                            document_index,
-                            page_index,
-                            (type(exc).__name__, str(exc)),
-                        )
-                    )
-                    break
-                finally:
-                    if page_image is not None:
-                        page_image.close()
-        except Exception as exc:
-            cancelled[document_index] = 1
-            output_queue.put(
-                (
-                    "error",
-                    document_index,
-                    -1,
-                    (type(exc).__name__, str(exc)),
-                )
-            )
-        finally:
-            if document is not None:
-                document.close()
-            output_queue.put(("done", document_index, -1, None))
-
-
 def _element_stage(element: dict[str, Any]) -> str:
     return layout_recognition_bucket(str(element.get("category") or "Text"))
-
-
-def _close_job_images(element: dict[str, Any]) -> None:
-    for key in ("preprocessed_image", "fullpage_image"):
-        image = element.pop(key, None)
-        if image is not None:
-            image.close()
-
-
-def _stop_processes(processes: list[Any]) -> None:
-    for process in processes:
-        process.join(timeout=5)
-        if process.is_alive():
-            process.terminate()
-            process.join(timeout=5)
 
 
 def _render_page(path: str, page_index: int, dpi: int) -> Image.Image:
