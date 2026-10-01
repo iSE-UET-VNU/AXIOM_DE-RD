@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6,11 +7,35 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 from ..bench import BENCH, group_of, load_jsonl, queries as load_queries, work, write_jsonl
-from ..qa import (ANSWER_PROMPT, GENERATOR, JUDGE, MAX_TOKENS, MAX_TOKENS_RETRY, SEED, TEMPERATURE, WORKERS,
-                  cached, generate, judge, settings_key)
+from ..qa import (ANSWER_PROMPT, GENERATOR, JUDGE, JUDGE_PROMPT, MAX_TOKENS, MAX_TOKENS_RETRY, SEED, TEMPERATURE,
+                  WORKERS, format_gold, generate, judge, settings_key)
 
 
-def run(tag, bench=BENCH):
+def cache_path(folder, key):
+    return folder / (hashlib.sha256(key.encode()).hexdigest() + ".json")
+
+
+def cached_or_refuse(folder, key, compute, allow_api, what):
+    path = cache_path(folder, key)
+    if path.exists():
+        return json.loads(path.read_text())
+    if not allow_api:
+        raise SystemExit(f"{what} is not cached (would call a live API); rerun with --allow-api to permit it")
+    value = compute()
+    path.write_text(json.dumps(value, ensure_ascii=False))
+    return value
+
+
+def judge_guarded(query, answers, answer, allow_api, bench):
+    folder = work("qa_cache", "judge", bench=bench)
+    prompt = JUDGE_PROMPT.format(query=query, true_answer=format_gold(answers), test_answer=answer.strip())
+    key = settings_key(JUDGE) + prompt
+    if not cache_path(folder, key).exists() and not allow_api:
+        raise SystemExit("the judge call for this answer is not cached; rerun with --allow-api to permit it")
+    return judge(query, answers, answer)
+
+
+def run(tag, bench=BENCH, allow_api=False):
     folder = work("results", tag, bench=bench)
     records = load_jsonl(folder / "per_query.jsonl")
     queries = load_queries(bench)
@@ -20,9 +45,9 @@ def run(tag, bench=BENCH):
         prompt = ANSWER_PROMPT.format(
             documents="\n\n".join(f"[{i + 1}] {c}" for i, c in enumerate(chunks)), query=record["query"])
         try:
-            answer = cached(work("qa_cache", "answers", bench=bench), settings_key(GENERATOR) + prompt,
-                            lambda: generate(prompt))
-            label = judge(record["query"], record["answers"] or [""], answer["answer"])
+            answer = cached_or_refuse(work("qa_cache", "answers", bench=bench), settings_key(GENERATOR) + prompt,
+                                      lambda: generate(prompt), allow_api, "the answer for this query")
+            label = judge_guarded(record["query"], record["answers"] or [""], answer["answer"], allow_api, bench)
         except Exception as error:
             return {"qid": record["query_id"], "answer": "", "label": None, "error": str(error)[:300],
                     "n_chunks": len(chunks)}
@@ -30,8 +55,18 @@ def run(tag, bench=BENCH):
                 "gen_seconds": answer["gen_seconds"], "n_chunks": len(chunks),
                 "correct": label == "Correct", "credited": label in ("Correct", "Partially Correct")}
 
+    print(f"[qa] evaluating {len(records)} queries with {WORKERS} workers...")
+    rows = {}
     with ThreadPoolExecutor(WORKERS) as pool:
-        rows = {r["qid"]: r for r in (f.result() for f in as_completed([pool.submit(one, r) for r in records]))}
+        futures = [pool.submit(one, r) for r in records]
+        done = 0
+        for f in as_completed(futures):
+            r = f.result()
+            rows[r["qid"]] = r
+            done += 1
+            if done % 10 == 0 or done == len(records):
+                print(f"\r[qa] evaluated {done}/{len(records)} queries...", end="", flush=True)
+    print("\r" + " " * 50 + "\r", end="", flush=True)
 
     ok = [r for r in rows.values() if r["label"]]
     by = defaultdict(list)

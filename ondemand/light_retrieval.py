@@ -60,32 +60,65 @@ def normalise(values):
     return np.clip(values, 0, None) / top
 
 
-def dense_signal(rows, qids, queries, bench, cache_name, allow_api):
-    cache = work("embedding_cache", cache_name, bench=bench)
+def cache_misses(texts, cache):
+    return sum(not (cache / (hashlib.sha256((DENSE_MODEL + "\n" + t).encode()).hexdigest() + ".json")).exists()
+               for t in texts)
+
+
+def chunk_vectors(rows, cache, allow_api, extra_texts=()):
     owners, chunks = [], []
     for i, row in enumerate(rows):
         for chunk in page_chunks(real_text(row["text"])):
             owners.append(i)
             chunks.append(chunk)
-    owners = np.array(owners, dtype=int)
-    wanted = chunks + [queries[q]["query"] for q in qids]
+    wanted = chunks + list(extra_texts)
     if not allow_api:
-        missing = sum(not (cache / (hashlib.sha256((DENSE_MODEL + "\n" + t).encode()).hexdigest() + ".json")).exists()
-                      for t in wanted)
+        missing = cache_misses(wanted, cache)
         if missing:
             raise SystemExit(f"{missing} of {len(wanted)} texts are not in {cache}; rerun with --allow-api to embed them")
+    print(f"[light-retrieval] loading embeddings for {len(chunks)} chunks...")
     vectors = np.zeros((len(chunks), DENSE_DIM), dtype=np.float32)
     for start in range(0, len(chunks), DENSE_SLICE):
         vectors[start:start + DENSE_SLICE] = embed(chunks[start:start + DENSE_SLICE], DENSE_MODEL, cache)
     vectors /= np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-9
-    qvecs = embed([queries[q]["query"] for q in qids], DENSE_MODEL, cache)
+    return np.array(owners, dtype=int), vectors
+
+
+def page_scores(owners, vectors, qvec, n_pages):
+    page = np.full(n_pages, -1e9, dtype=np.float32)
+    np.maximum.at(page, owners, vectors @ qvec)
+    return page
+
+
+def dense_signal(rows, qids, queries, bench, cache_name, allow_api):
+    cache = work("embedding_cache", cache_name, bench=bench)
+    texts = [queries[q]["query"] for q in qids]
+    owners, vectors = chunk_vectors(rows, cache, allow_api, texts)
+    qvecs = embed(texts, DENSE_MODEL, cache)
     qvecs /= np.linalg.norm(qvecs, axis=1, keepdims=True) + 1e-9
-    out = {}
-    for i, q in enumerate(qids):
-        page = np.full(len(rows), -1e9, dtype=np.float32)
-        np.maximum.at(page, owners, vectors @ qvecs[i])
-        out[q] = page
-    return out
+    print(f"[light-retrieval] computed dense matrix ({len(vectors)} chunks x {len(qids)} queries)")
+    return {q: page_scores(owners, vectors, qvecs[i], len(rows)) for i, q in enumerate(qids)}
+
+
+class LiveRetriever:
+    def __init__(self, bench=BENCH, pages_name="pages_ppocrv5.jsonl", cache_name="te3s_ppocr", allow_api=False,
+                 **settings):
+        source = work("light_prep", bench=bench) / pages_name
+        if not source.exists():
+            raise SystemExit(f"{source} is missing; free-text queries need the light-prep pages to search")
+        rows = load_jsonl(source)
+        self.n_pages, self.allow_api = len(rows), allow_api
+        self.cache = work("embedding_cache", cache_name, bench=bench)
+        self.hierarchy = Hierarchy(rows, **settings)
+        self.owners, self.vectors = chunk_vectors(rows, self.cache, allow_api)
+
+    def retrieve(self, query):
+        if not self.allow_api and cache_misses([query], self.cache):
+            raise SystemExit("this query's embedding is not cached, and embedding it is one API call; "
+                             "rerun with --allow-api to permit it")
+        qvec = embed([query], DENSE_MODEL, self.cache)[0]
+        qvec = qvec / (np.linalg.norm(qvec) + 1e-9)
+        return self.hierarchy.rank(query, page_scores(self.owners, self.vectors, qvec, self.n_pages))
 
 
 class Hierarchy:
@@ -148,13 +181,17 @@ def build(bench=BENCH, pages_name="pages_ocr_ppocr.jsonl", name=None, signals="a
     rows = load_jsonl(out / pages_name)
     gold, queries = load_gold(bench), load_queries(bench)
     qids = sorted(gold)
+    print(f"[light-retrieval] loaded {len(rows)} pages from {pages_name}")
     hierarchy = Hierarchy(rows, file_k, page_k, w_dense, parent, signals, analyzer, file_mode, file_direct)
     dense = dense_signal(rows, qids, queries, bench, cache_name, allow_api)
     ranked, scores, notes, seconds = {}, {}, {}, []
-    for q in qids:
+    for i, q in enumerate(qids, 1):
         started = perf_counter()
         ranked[q], scores[q], notes[q] = hierarchy.rank(queries[q]["query"], dense[q])
         seconds.append(perf_counter() - started)
+        if i % 25 == 0 or i == len(qids):
+            print(f"\r[light-retrieval] ranked {i}/{len(qids)} queries...", end="", flush=True)
+    print("\r" + " " * 50 + "\r", end="", flush=True)
 
     gate = {q: ranked[q][:page_k] for q in qids}
     metrics = {}

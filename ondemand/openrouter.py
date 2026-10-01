@@ -10,18 +10,31 @@ from dotenv import load_dotenv
 
 from .bench import ROOT
 
-URL = "https://openrouter.ai/api/v1"
 load_dotenv(ROOT / ".env")
+
+URL = (os.getenv("OPENROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
+
+
+def _get_api_key():
+    key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError("No LLM API key found. Please set OPENROUTER_API_KEY or OPENAI_API_KEY in your .env file.")
+    return key
 
 
 def _post(path, body, timeout=180, retries=4):
     last = ""
+    api_key = _get_api_key()
+    headers = {"Authorization": f"Bearer {api_key}"}
+    referer = os.getenv("OPENROUTER_HTTP_REFERER")
+    if referer:
+        headers["HTTP-Referer"] = referer
+
     for attempt in range(retries):
         if attempt:
             time.sleep(min(2 ** attempt, 30))
         try:
-            response = requests.post(f"{URL}/{path}", json=body, timeout=timeout,
-                                     headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"})
+            response = requests.post(f"{URL}/{path}", json=body, timeout=timeout, headers=headers)
             payload = response.json()
         except (requests.RequestException, ValueError) as error:
             last = str(error)
@@ -43,12 +56,16 @@ def embed(texts, model, cache_dir, batch=32):
             out[i] = json.loads(key(t).read_text())
         else:
             todo.append(i)
-    for s in range(0, len(todo), batch):
-        idx = todo[s:s + batch]
-        data = _post("embeddings", {"model": model, "input": [texts[i] for i in idx]})["data"]
-        for i, item in zip(idx, sorted(data, key=lambda d: d["index"])):
-            out[i] = item["embedding"]
-            key(texts[i]).write_text(json.dumps(item["embedding"]))
+    if todo:
+        total_batches = (len(todo) + batch - 1) // batch
+        for b_idx, s in enumerate(range(0, len(todo), batch), 1):
+            idx = todo[s:s + batch]
+            print(f"\r[embed] embedding batch {b_idx}/{total_batches} ({len(idx)} texts via {model})...", end="", flush=True)
+            data = _post("embeddings", {"model": model, "input": [texts[i] for i in idx]})["data"]
+            for i, item in zip(idx, sorted(data, key=lambda d: d["index"])):
+                out[i] = item["embedding"]
+                key(texts[i]).write_text(json.dumps(item["embedding"]))
+        print("\r" + " " * 70 + "\r", end="", flush=True)
     return np.asarray(out, dtype=np.float32)
 
 

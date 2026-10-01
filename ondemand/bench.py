@@ -62,3 +62,9 @@ def group_of(qid, query):
     if source_of(qid) == "ohrbench":
         return "ohrbench:" + query["metadata"].get("visual_class", "?")
     return source_of(qid)
+
+
+FLAWED_QIDS = frozenset([
+    "ohrbench::88e9648f-a993-4d8a-8f68-49ad9ce6c492",  # Genoa PCT number: OHR-Bench's own gt_text carries the typo
+    "ohrbench::85bb98a2-00c5-4c67-9343-4e3c70487b7c",  # NV-T60 tape: gt_text table row is mangled, gold took the wrong cell
+])

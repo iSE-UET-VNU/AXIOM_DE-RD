@@ -2,7 +2,7 @@ from time import perf_counter
 
 import numpy as np
 
-from ..text import ChunkBM25, windows
+from ..text import ChunkBM25, real_text, windows
 from .registry import register
 
 ALPHA, DEPTH = 0.7, 100
@@ -25,8 +25,9 @@ class FixedChunker:
     def __call__(self, passages):
         out = []
         for passage in passages:
-            for start, end in windows(passage.text, self.n_words, self.overlap):
-                piece = passage.text[start:end]
+            text = real_text(passage.text)
+            for start, end in windows(text, self.n_words, self.overlap):
+                piece = text[start:end]
                 if piece.strip():
                     out.append(Chunk(passage.page_id, piece, passage.rank, len(out)))
         return out
