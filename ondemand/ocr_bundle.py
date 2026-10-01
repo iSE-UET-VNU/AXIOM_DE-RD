@@ -5,6 +5,7 @@ from collections import defaultdict
 import fitz
 
 from .bench import BENCH, documents, gold as load_gold, group_of, load_jsonl, queries as load_queries, source_of, work
+from .light_prep import wants_ocr
 from .text import real_text
 
 CONF = 60
@@ -14,8 +15,11 @@ def weak(row):
     return row["ocr_applied"] and (row["ocr_mean_confidence"] < CONF or row["ocr_word_count"] == 0)
 
 
-def build(bench=BENCH):
-    rows = [r for r in load_jsonl(work("light_prep", bench=bench) / "pages_ocr_sparse.jsonl") if weak(r)]
+SELECTORS = {"weak": weak, "targets": wants_ocr}
+
+
+def build(bench=BENCH, select="weak", name=None):
+    rows = [r for r in load_jsonl(work("light_prep", bench=bench) / "pages_ocr_sparse.jsonl") if SELECTORS[select](r)]
     kdl = {r["page_id"]: r["text"] for r in load_jsonl(work("kdl", bench=bench) / "kdl_pages.jsonl")}
     gold, queries = load_gold(bench), load_queries(bench)
     evidence = defaultdict(list)
@@ -28,7 +32,7 @@ def build(bench=BENCH):
                 evidence[u].append({"query_id": q, "group": group_of(q, queries[q]),
                                     "evidence_context": meta.get("evidence_context", ""), "answers": queries[q]["answers"]})
     path_of = {d["doc_id"]: bench / d["path"] for d in documents(bench)}
-    out = work("upload", bench=bench) / "light_ocr_bundle.zip"
+    out = work("upload", bench=bench) / (name or f"light_ocr_bundle_{select}.zip")
     out.unlink(missing_ok=True)
     manifest = []
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:

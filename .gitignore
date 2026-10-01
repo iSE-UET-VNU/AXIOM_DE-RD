@@ -66,6 +66,8 @@ data/subset/
 # the on-demand v2 Colab notebooks: the earlier KDL_serving_ondemand_textual_colab.ipynb was lost to the *.ipynb rule
 !colab/
 !colab/*.ipynb
+!kaggle/
+!kaggle/*.ipynb
 
 # ---------------------------------------------------------------------------
 # research/ is tracked: it holds the evaluation harness -- corpus build,

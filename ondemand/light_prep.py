@@ -92,7 +92,7 @@ def wants_ocr(row):
     return is_uninformative(row["text"]) or row["needs_ocr"] or mostly_image(row["text"])
 
 
-def run(bench=BENCH, workers=8):
+def run(bench=BENCH, workers=8, ocr="tesseract", name=None):
     out = work("light_prep", bench=bench)
     timings = Timings(out / "timings.jsonl", stage_group="light_prep")
     rows = []
@@ -110,6 +110,11 @@ def run(bench=BENCH, workers=8):
             raise ValueError(f"{doc['doc_id']}: parsed {len(pages)} pages, manifest says {expected}")
         rows.extend(page_row(doc, p["page_index"], p["text"], needs_ocr=p["needs_ocr"], pdf_type=pdf_type) for p in pages)
         timings.record("pdf_inspector_parse", "page", len(pages), perf_counter() - started, doc_id=doc["doc_id"])
+
+    if ocr == "none":
+        path = out / (name or "pages_inspector.jsonl")
+        write_jsonl(path, rows)
+        return path
 
     cache_path = out / "ocr_results.jsonl"
     cached = {r["unit"]: r for r in (load_jsonl(cache_path) if cache_path.exists() else [])
@@ -140,5 +145,6 @@ def run(bench=BENCH, workers=8):
                 r.update(text=(kept + "\n" + res["text"]).strip(),
                          text_source="pdf_inspector+tesseract" if kept else "tesseract", visual_only=False)
         final.append(r)
-    write_jsonl(out / "pages_ocr_sparse.jsonl", final)
-    return out / "pages_ocr_sparse.jsonl"
+    path = out / (name or "pages_ocr_sparse.jsonl")
+    write_jsonl(path, final)
+    return path

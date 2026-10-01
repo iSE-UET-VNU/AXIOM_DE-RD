@@ -4,11 +4,13 @@ import zipfile
 from pathlib import Path
 
 from .bench import BENCH, load_jsonl, work, write_jsonl
+from .light_prep import wants_ocr as is_target
 from .text import real_text
 
 ENGINE = "ppocrv5_doc"
 RESULTS = "light_ocr_results_comparison_btw_ppocr.zip"
 OUTPUT = "pages_ocr_ppocr.jsonl"
+PURE_OUTPUT = "pages_ppocrv5.jsonl"
 
 
 def read_results(path):
@@ -20,6 +22,36 @@ def read_results(path):
         if source in names:
             boxes = {r["unit"]: r["lines"] for r in map(json.loads, zf.open(source).read().decode().splitlines())}
     return texts, boxes
+
+
+def merge_pure(bench=BENCH, results=None, pages_name="pages_inspector.jsonl", name=None):
+    out = work("light_prep", bench=bench)
+    results = Path(results) if results else Path(__file__).resolve().parent.parent / RESULTS
+    texts, boxes = read_results(results)
+    rows, replaced, missing = [], 0, []
+    for row in load_jsonl(out / pages_name):
+        row = dict(row)
+        new = texts.get(row["page_id"])
+        if new is None:
+            if is_target(row):
+                missing.append(row["page_id"])
+        else:
+            base = real_text(row["text"])
+            text = (base + "\n" + new["text"]).strip()
+            lines = boxes.get(row["page_id"], [])
+            row.update(text=text, visual_only=not text.strip(), ocr_applied=True,
+                       text_source=("pdf_inspector+" if base else "") + ENGINE,
+                       ocr_word_count=len(new["text"].split()),
+                       ocr_mean_confidence=round(100 * statistics.mean([l["score"] for l in lines]), 2) if lines else 0.0,
+                       ocr_seconds=new["seconds"], ocr_render_seconds=0.0, ocr_error=new.get("error"))
+            replaced += 1
+        rows.append(row)
+    if missing:
+        raise SystemExit(f"{len(missing)} pages need OCR but are absent from {results.name}, e.g. {missing[:3]}")
+    path = out / (name or PURE_OUTPUT)
+    write_jsonl(path, rows)
+    print(f"{replaced} pages carry {ENGINE} text -> {path}")
+    return path
 
 
 def merge(bench=BENCH, results=None):
