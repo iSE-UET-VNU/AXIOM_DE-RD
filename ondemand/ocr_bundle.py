@@ -15,11 +15,15 @@ def weak(row):
     return row["ocr_applied"] and (row["ocr_mean_confidence"] < CONF or row["ocr_word_count"] == 0)
 
 
-SELECTORS = {"weak": weak, "targets": wants_ocr}
+SELECTORS = {"weak": (weak, "pages_ocr_sparse.jsonl"), "targets": (wants_ocr, "pages_inspector.jsonl")}
 
 
-def build(bench=BENCH, select="weak", name=None):
-    rows = [r for r in load_jsonl(work("light_prep", bench=bench) / "pages_ocr_sparse.jsonl") if SELECTORS[select](r)]
+def build(bench=BENCH, select="weak", name=None, pages_name=None):
+    keep, default_pages = SELECTORS[select]
+    source = work("light_prep", bench=bench) / (pages_name or default_pages)
+    if not source.exists():
+        raise SystemExit(f"{source} is missing; build it first (light-prep --ocr none writes pages_inspector.jsonl)")
+    rows = [r for r in load_jsonl(source) if keep(r)]
     kdl = {r["page_id"]: r["text"] for r in load_jsonl(work("kdl", bench=bench) / "kdl_pages.jsonl")}
     gold, queries = load_gold(bench), load_queries(bench)
     evidence = defaultdict(list)

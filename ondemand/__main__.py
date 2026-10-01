@@ -13,6 +13,7 @@ def main():
     p.add_argument("--name")
     p = sub.add_parser("ocr-bundle")
     p.add_argument("--select", choices=tuple(ocr_bundle.SELECTORS), default="weak")
+    p.add_argument("--pages")
     p.add_argument("--name")
     p = sub.add_parser("merge-ocr")
     p.add_argument("--results", required=True)
@@ -49,7 +50,7 @@ def main():
     if args.cmd == "light-prep":
         print(light_prep.run(workers=args.workers, ocr=args.ocr, name=args.name))
     elif args.cmd == "ocr-bundle":
-        print(ocr_bundle.build(select=args.select, name=args.name))
+        print(ocr_bundle.build(select=args.select, name=args.name, pages_name=args.pages))
     elif args.cmd == "merge-ocr":
         if args.base == "inspector":
             print(light_ocr.merge_pure(results=args.results, pages_name=args.pages, name=args.name))
