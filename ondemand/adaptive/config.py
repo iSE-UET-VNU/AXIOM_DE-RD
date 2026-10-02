@@ -18,10 +18,18 @@ class AdaptiveConfig:
     chandra_endpoint: Optional[str] = None
     chandra_api_key: str = ""
     chandra_model: str = "datalab-to/chandra-ocr-2"
+    chandra_local: bool = False
 
-    # ColPali / ColVec Visual Reranking
-    colpali_endpoint: Optional[str] = None
-    colpali_api_key: str = ""
+    # ColVec Visual Reranking
+    colvec_endpoint: Optional[str] = None
+    colvec_api_key: str = ""
+    colvec_model: str = "webAI-Official/webAI-ColVec1.1-4b"
+    colvec_local: bool = False
+
+    # PP-OCRv5 Text & Layout
+    ppocr_endpoint: Optional[str] = None
+    ppocr_api_key: str = ""
+    ppocr_local: bool = False
 
     # KDL / Layout Parsing
     kdl_endpoint: Optional[str] = None
@@ -50,14 +58,27 @@ class AdaptiveConfig:
                          or os.getenv("CHANDRA_MODEL")
                          or os.getenv("VLLM_MODEL_NAME")
                          or "datalab-to/chandra-ocr-2")
+        chandra_local = bool(overrides.get("chandra_local")
+                             or os.getenv("CHANDRA_LOCAL") in ("1", "true", "True"))
 
-        colpali_ep = (overrides.get("colpali_endpoint")
-                      or os.getenv("COLPALI_ENDPOINT")
-                      or os.getenv("COLVEC_ENDPOINT"))
-        colpali_key = (overrides.get("colpali_api_key")
-                       or os.getenv("COLPALI_API_KEY")
-                       or os.getenv("COLVEC_API_KEY")
-                       or "")
+        colvec_ep = (overrides.get("colvec_endpoint")
+                     or os.getenv("COLVEC_ENDPOINT"))
+        colvec_key = (overrides.get("colvec_api_key")
+                      or os.getenv("COLVEC_API_KEY")
+                      or "")
+        colvec_model = (overrides.get("colvec_model")
+                        or os.getenv("COLVEC_MODEL")
+                        or "webAI-Official/webAI-ColVec1.1-4b")
+        colvec_local = bool(overrides.get("colvec_local")
+                            or os.getenv("COLVEC_LOCAL") in ("1", "true", "True"))
+
+        ppocr_ep = (overrides.get("ppocr_endpoint")
+                    or os.getenv("PPOCR_ENDPOINT"))
+        ppocr_key = (overrides.get("ppocr_api_key")
+                     or os.getenv("PPOCR_API_KEY")
+                     or "")
+        ppocr_local = bool(overrides.get("ppocr_local")
+                           or os.getenv("PPOCR_LOCAL") in ("1", "true", "True"))
 
         kdl_ep = (overrides.get("kdl_endpoint")
                   or os.getenv("KDL_ENDPOINT")
@@ -84,8 +105,14 @@ class AdaptiveConfig:
             chandra_endpoint=chandra_ep,
             chandra_api_key=chandra_key,
             chandra_model=chandra_model,
-            colpali_endpoint=colpali_ep,
-            colpali_api_key=colpali_key,
+            chandra_local=chandra_local,
+            colvec_endpoint=colvec_ep,
+            colvec_api_key=colvec_key,
+            colvec_model=colvec_model,
+            colvec_local=colvec_local,
+            ppocr_endpoint=ppocr_ep,
+            ppocr_api_key=ppocr_key,
+            ppocr_local=ppocr_local,
             kdl_endpoint=kdl_ep,
             kdl_model=kdl_model,
             openrouter_api_key=or_key,
@@ -149,14 +176,32 @@ def ping_endpoint(url: Optional[str], api_key: str = "", timeout: float = 3.0) -
     return {"configured": True, "reachable": False, "url": url, "status": "unreachable", "error": last_err[:120]}
 
 
+def get_hardware_info() -> Dict[str, Any]:
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            import torch
+            if torch.cuda.is_available():
+                dev = torch.cuda.get_device_properties(0)
+                vram_gb = round(dev.total_memory / (1024**3), 1)
+                bf16 = torch.cuda.is_bf16_supported() if hasattr(torch.cuda, "is_bf16_supported") else False
+                return {"cuda": True, "device_name": dev.name, "vram_gb": vram_gb, "bf16": bf16}
+            return {"cuda": False, "device_name": "CPU", "vram_gb": 0.0, "bf16": False}
+        except Exception:
+            return {"cuda": False, "device_name": "CPU (No torch)", "vram_gb": 0.0, "bf16": False}
+
+
 def doctor(bench=BENCH, verbose=True) -> Dict[str, Any]:
     cfg = get_config()
     fp = fingerprint(bench)
+    hw = get_hardware_info()
 
     # 1. Endpoints
     endpoints = {
         "chandra": ping_endpoint(cfg.chandra_endpoint, cfg.chandra_api_key),
-        "colpali": ping_endpoint(cfg.colpali_endpoint, cfg.colpali_api_key),
+        "colvec": ping_endpoint(cfg.colvec_endpoint, cfg.colvec_api_key),
+        "ppocr": ping_endpoint(cfg.ppocr_endpoint, cfg.ppocr_api_key),
         "kdl": ping_endpoint(cfg.kdl_endpoint),
     }
 
@@ -180,11 +225,13 @@ def doctor(bench=BENCH, verbose=True) -> Dict[str, Any]:
 
     report = {
         "bundle_fingerprint": fp,
+        "hardware": hw,
         "endpoints": endpoints,
         "api_keys": keys,
         "artifacts": artifacts_status,
         "active_models": {
             "chandra_model": cfg.chandra_model,
+            "colvec_model": cfg.colvec_model,
             "qa_model": cfg.qa_model,
             "judge_model": cfg.judge_model
         }
@@ -196,39 +243,56 @@ def doctor(bench=BENCH, verbose=True) -> Dict[str, Any]:
         print("=" * 65)
         print(f"Benchmark Fingerprint: {fp}\n")
 
-        print("1. EXTERNAL ENDPOINTS & APIS (optional live overrides):")
+        print("1. EXTERNAL / HOSTED ENDPOINTS (optional live microservices):")
         # Chandra
         ch_s = endpoints["chandra"]["status"]
         ch_url = cfg.chandra_endpoint or "None (default: local OCR fallback)"
         print(f"  • Chandra (Enrich): [{ch_s.upper():11s}] -> {ch_url}")
 
-        # ColPali — only used if no ColVec cache; the default scorer is colvec_cached, not this.
-        cp_s = endpoints["colpali"]["status"]
-        cp_url = cfg.colpali_endpoint or "None (not needed: default scorer is ColVec, see below)"
-        print(f"  • ColPali live (Visual): [{cp_s.upper():11s}] -> {cp_url}")
+        # ColVec — live endpoint override; the default scorer is colvec_cached
+        cv_s = endpoints["colvec"]["status"]
+        cv_url = cfg.colvec_endpoint or "None (default: ColVec cached scores matrix)"
+        print(f"  • ColVec live (Visual): [{cv_s.upper():11s}] -> {cv_url}")
+
+        # PP-OCR
+        pp_s = endpoints["ppocr"]["status"]
+        pp_url = cfg.ppocr_endpoint or "None (default: pages_ppocrv5.jsonl corpus)"
+        print(f"  • PP-OCRv5 (Text):  [{pp_s.upper():11s}] -> {pp_url}")
 
         # OpenRouter / OpenAI
         or_status = "CONFIGURED" if keys["openrouter_or_openai"] else "MISSING"
         print(f"  • LLM/VLM API Key:  [{or_status:11s}] -> {cfg.openrouter_base_url}")
 
-        print("\n2. LOCAL DATA ARTIFACTS:")
+        print("\n2. COMPUTE HARDWARE & LOCAL IN-PROCESS FLAGS:")
+        if hw["cuda"]:
+            print(f"  • Compute Device:    CUDA [{hw['device_name']}] ({hw['vram_gb']} GiB VRAM)")
+            print(f"  • --chandra-local:   SUPPORTED (in-process Chandra2 on GPU)")
+            print(f"  • --colvec-local:    SUPPORTED (in-process ColVec 4b on GPU)")
+            print(f"  • --ppocr-local:     SUPPORTED (in-process PaddleOCR on GPU)")
+        else:
+            print(f"  • Compute Device:    CPU (No CUDA GPU detected)")
+            print(f"  • Local GPU Flags:   DISABLED (safely runs via precomputed caches/endpoints)")
+
+        print("\n3. LOCAL DATA ARTIFACTS (Default Offline Caches):")
         for name, present in artifacts_status.items():
             mark = "✓ PRESENT" if present else "✗ MISSING"
             print(f"  • {name:20s}: {mark}")
 
-        print("\n3. TOOL READINESS:")
+        print("\n4. TOOL READINESS:")
         print("  • Light Branch:   READY (Local CPU OCR text + BM25/Dense)")
         has_colvec = artifacts_status["colvec_scores"]
-        vis_ready = has_colvec or endpoints["colpali"]["reachable"]
+        vis_ready = has_colvec or endpoints["colvec"]["reachable"] or hw["cuda"]
         if has_colvec:
             vis_mode = "READY (ColVec cache, default — no live endpoint needed)"
-        elif endpoints["colpali"]["reachable"]:
-            vis_mode = "READY (live ColPali endpoint, no ColVec cache found)"
+        elif endpoints["colvec"]["reachable"]:
+            vis_mode = "READY (live ColVec endpoint)"
+        elif hw["cuda"]:
+            vis_mode = "READY (--colvec-local on GPU)"
         else:
-            vis_mode = "DEGRADED (no ColVec cache and no live endpoint; will fallback to gate scores)"
+            vis_mode = "DEGRADED (no ColVec cache and no endpoint; will fallback to gate scores)"
         print(f"  • Visual Branch:  {vis_mode}")
-        enr_ready = endpoints["chandra"]["reachable"] or (work("enrich", bench=bench) / "enriched_pages.jsonl").exists()
-        print(f"  • Enrich Branch:  {'READY (Live/Cache)' if enr_ready else 'DEGRADED (will fallback to PP-OCR text)'}")
+        enr_ready = endpoints["chandra"]["reachable"] or (work("enrich", bench=bench) / "enriched_pages.jsonl").exists() or hw["cuda"]
+        print(f"  • Enrich Branch:  {'READY (Live/Cache/GPU)' if enr_ready else 'DEGRADED (will fallback to PP-OCR text)'}")
         print("=" * 65)
 
     return report

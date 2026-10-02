@@ -28,7 +28,13 @@ def main():
     p.add_argument("--allow-api", action="store_true")
     p.add_argument("--exclude-flawed", action="store_true", help="exclude the 2 confirmed-flawed benchmark reference questions")
     p.add_argument("--chandra-endpoint", help="override Chandra OCR endpoint, e.g. http://localhost:8000/v1")
-    p.add_argument("--colpali-endpoint", help="live ColPali endpoint; only used if no ColVec cache is found (default scorer)")
+    p.add_argument("--chandra-local", action="store_true", help="run Chandra OCR locally in-process on GPU")
+    p.add_argument("--colvec-endpoint", dest="colvec_endpoint",
+                   help="live ColVec endpoint; only used if no ColVec cache is found (default scorer)")
+    p.add_argument("--colvec-local", action="store_true", help="run ColVec visual reranker locally in-process on GPU")
+    p.add_argument("--ppocr-endpoint", help="override PP-OCRv5 remote microservice endpoint")
+    p.add_argument("--ppocr-local", action="store_true", help="run PP-OCRv5 locally in-process on GPU/CPU")
+    p.add_argument("--all-local-gpu", action="store_true", help="shortcut: enable all local in-process GPU models")
 
     # 2. Interactive / Single Query Tool Calling
     p = sub.add_parser("query", help="run adaptive retrieval on a single query or benchmark query ID")
@@ -38,7 +44,13 @@ def main():
     p.add_argument("--router", default="rule")
     p.add_argument("--k", default="fixed:20")
     p.add_argument("--chandra-endpoint", help="override Chandra endpoint")
-    p.add_argument("--colpali-endpoint", help="live ColPali endpoint; only used if no ColVec cache is found (default scorer)")
+    p.add_argument("--chandra-local", action="store_true", help="run Chandra OCR locally in-process on GPU")
+    p.add_argument("--colvec-endpoint", dest="colvec_endpoint",
+                   help="live ColVec endpoint; only used if no ColVec cache is found (default scorer)")
+    p.add_argument("--colvec-local", action="store_true", help="run ColVec visual reranker locally in-process on GPU")
+    p.add_argument("--ppocr-endpoint", help="override PP-OCRv5 remote microservice endpoint")
+    p.add_argument("--ppocr-local", action="store_true", help="run PP-OCRv5 locally in-process on GPU/CPU")
+    p.add_argument("--all-local-gpu", action="store_true", help="shortcut: enable all local in-process GPU models")
     p.add_argument("--ranker", default="hybrid", help="chunk ranker: hybrid, page_order, lexical")
     p.add_argument("--store", default="kdl", help="precomputed chunk vectors, e.g. kdl")
     p.add_argument("--allow-api", action="store_true", help="permit embedding calls for uncached texts")
@@ -52,18 +64,31 @@ def main():
 
     args = ap.parse_args()
     if args.cmd == "run":
+        chandra_loc = args.chandra_local or args.all_local_gpu
+        colvec_loc = args.colvec_local or args.all_local_gpu
+        ppocr_loc = args.ppocr_local or args.all_local_gpu
         branch_args = dict(item.split("=", 1) for item in args.branch_arg)
         pipeline.run(args.tag, args.gate, k=args.k, router=args.router, branch_args=branch_args,
                      refine_k=args.refine_k, chunker=args.chunk, ranker=args.ranker,
                      top_chunks=args.top_chunks, pages_name=args.pages, cache_name=args.cache, store=args.store,
                      allow_api=args.allow_api, limit=args.limit, with_qa=args.qa,
                      exclude_flawed=args.exclude_flawed, chandra_endpoint=args.chandra_endpoint,
-                     colpali_endpoint=args.colpali_endpoint)
+                     chandra_local=chandra_loc, colvec_endpoint=args.colvec_endpoint,
+                     colvec_local=colvec_loc, ppocr_endpoint=args.ppocr_endpoint,
+                     ppocr_local=ppocr_loc)
     elif args.cmd == "query":
+        chandra_loc = args.chandra_local or args.all_local_gpu
+        colvec_loc = args.colvec_local or args.all_local_gpu
+        ppocr_loc = args.ppocr_local or args.all_local_gpu
         pipe = pipeline.AdaptivePipeline(gate_name=args.gate, k=args.k, router=args.router,
                                         pages_name=args.pages, ranker=args.ranker, store=args.store,
                                         chandra_endpoint=args.chandra_endpoint,
-                                        colpali_endpoint=args.colpali_endpoint, allow_api=args.allow_api)
+                                        chandra_local=chandra_loc,
+                                        colvec_endpoint=args.colvec_endpoint,
+                                        colvec_local=colvec_loc,
+                                        ppocr_endpoint=args.ppocr_endpoint,
+                                        ppocr_local=ppocr_loc,
+                                        allow_api=args.allow_api)
         res = pipe.query(args.query_text)
         print("=" * 60)
         print(f"Query:  {res['query']}")

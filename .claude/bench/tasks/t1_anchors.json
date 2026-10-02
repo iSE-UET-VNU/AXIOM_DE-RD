@@ -1,0 +1,20 @@
+{
+  "task": "T1",
+  "description": "Handoff chain for a PDF: raw file -> parsed -> cleaned -> enriched -> chunked -> embedded -> persisted, under configs/pipeline.yaml (indexing.engine = chunking_embedding).",
+  "tolerance_lines": 10,
+  "anchors": [
+    {"id": "orchestrator",      "file": "src/pipeline.py",                            "kind": "symbol",  "symbol": "run_pipeline",              "why": "Entry point that sequences every stage."},
+    {"id": "ingestion_stage",   "file": "src/ingestion/runner.py",                    "kind": "symbol",  "symbol": "run",                       "why": "Ingestion stage: raw files -> ParsedData."},
+    {"id": "parser_choice",     "file": "src/ingestion/parsing/parser.py",            "kind": "symbol",  "symbol": "parse_raw_file",            "why": "Per-file parser selection (lift_api / chandra2 / local) - where a PDF is actually parsed."},
+    {"id": "write_ingested",    "file": "src/artifacts/ingested.py",                  "kind": "symbol",  "symbol": "write_ingested_artifacts",  "why": "Ingested-stage artifact write."},
+    {"id": "cleaning_stage",    "file": "src/cleaning/runner.py",                     "kind": "symbol",  "symbol": "run",                       "why": "Cleaning stage handoff."},
+    {"id": "enrichment_stage",  "file": "src/enrichment/runner.py",                   "kind": "symbol",  "symbol": "run",                       "why": "Enrichment stage handoff."},
+    {"id": "engine_branch",     "file": "src/pipeline.py",                            "kind": "literal", "match": "from .chunking_embedding import pipeline_stage", "why": "The branch that selects the chunking_embedding engine over indexing_cataloging. Missing this means the trace followed the wrong engine."},
+    {"id": "chunk_stage",       "file": "src/chunking_embedding/pipeline_stage.py",   "kind": "symbol",  "symbol": "run",                       "why": "Chunking/embedding stage entry, adapts enriched records."},
+    {"id": "field_routing",     "file": "src/chunking_embedding/fields.py",           "kind": "symbol",  "symbol": "route_document",            "why": "Splits a document into per-field chunking calls."},
+    {"id": "chunker_invoke",    "file": "src/chunking_embedding/fields.py",           "kind": "symbol",  "symbol": "_run_chunker",              "why": "The actual chunker invocation with injected Resources."},
+    {"id": "chunker_lookup",    "file": "src/chunking_embedding/registry.py",         "kind": "symbol",  "symbol": "get_chunker",               "why": "Name -> chunker resolution."},
+    {"id": "embedder_lookup",   "file": "src/chunking_embedding/registry.py",         "kind": "symbol",  "symbol": "get_embedder",              "why": "Name -> embedder resolution."},
+    {"id": "write_embedded",    "file": "src/artifacts/pipeline_output.py",           "kind": "symbol",  "symbol": "write_embedded_artifacts",  "why": "Embedded-stage artifact write - the end of the trace."}
+  ]
+}

@@ -4,7 +4,7 @@
 Raw data ──► Light Prep ──► Light Retrieval ──► SubData ──► Router ──► Branch ──► Chunk&Rank ──► QA Reader
              (PP-OCRv5)     (BM25 + Dense Qwen/TE3) (top-k)     (Rule/    ├─ 1. Light (CPU OCR)
                                                                  Fixed)   ├─ 2. Enrich (Chandra vLLM / OCR)
-                                                                          └─ 3. Visual (ColVec cache [default] / ColPali live + KDL)
+                                                                          └─ 3. Visual (ColVec cache [default] / ColVec live + KDL)
 ```
 
 This module provides a modular, reliable tool-calling architecture for document retrieval and question answering across heterogeneous formats (native text, scanned contracts, engineering drawings, tables, and figures).
@@ -21,7 +21,7 @@ python -m ondemand.adaptive doctor
 ```
 
 The `doctor` command inspects:
-- **Endpoints**: `CHANDRA_ENDPOINT` / `VLLM_API_BASE`, `COLPALI_ENDPOINT`, etc.
+- **Endpoints**: `CHANDRA_ENDPOINT` / `VLLM_API_BASE`, `COLVEC_ENDPOINT`, etc.
 - **API Keys**: `OPENROUTER_API_KEY` / `OPENAI_API_KEY`
 - **Local Artifacts**: gates, PP-OCRv5 text, ColVec scores, KDL parses, embedding caches
 - **Tool Readiness**: reports whether branches are running in Live/Cached mode or Graceful Fallback mode.
@@ -38,8 +38,8 @@ CHANDRA_ENDPOINT=http://localhost:8000/v1
 CHANDRA_MODEL=datalab-to/chandra-ocr-2
 
 # Optional: only needed to override the default ColVec cache with a live
-# ColPali reranking endpoint for the visual branch.
-# COLPALI_ENDPOINT=http://localhost:8001/v1
+# ColVec reranking endpoint for the visual branch.
+# COLVEC_ENDPOINT=http://localhost:8001/v1
 
 # LLM / Vision QA API keys
 OPENROUTER_API_KEY=your_key_here
@@ -147,7 +147,12 @@ python -m ondemand.adaptive run --tag adaptive_full_qa \
 | `--store` | `kdl` | Precomputed chunk vectors (e.g. `kdl`) to avoid embedding calls |
 | `--exclude-flawed` | `off` | Filter out the 2 confirmed flawed benchmark ground truth questions ($N=218$) |
 | `--chandra-endpoint` | `None` | Override Chandra OCR / layout vLLM endpoint |
-| `--colpali-endpoint` | `None` | Live ColPali endpoint; only used if no `colvec_scores.npy` cache is found. The visual branch's **default scorer is the ColVec cache**, not a live endpoint. |
+| `--chandra-local` | `off` | Run Chandra OCR locally in-process on GPU (requires CUDA) |
+| `--colvec-endpoint` | `None` | Live ColVec endpoint; only used if no `colvec_scores.npy` cache is found. The visual branch's **default scorer is the ColVec cache**, not a live endpoint. |
+| `--colvec-local` | `off` | Run ColVec visual reranker locally in-process on GPU (requires CUDA) |
+| `--ppocr-endpoint` | `None` | Override PP-OCRv5 remote microservice endpoint |
+| `--ppocr-local` | `off` | Run PP-OCRv5 locally in-process on GPU/CPU |
+| `--all-local-gpu` | `off` | Shortcut: enable all local in-process GPU models |
 | `--qa` | `off` | Run end-to-end VLM generation and judging |
 | `--allow-api` | `off` | Allow live OpenAI/OpenRouter embedding API calls if uncached |
 
@@ -156,6 +161,6 @@ python -m ondemand.adaptive run --tag adaptive_full_qa \
 ## 5. Built-in Resilience & Graceful Fallbacks
 
 The architecture is built so teammates will **never experience hard crashes** when running across different environments:
-1. **Chandra Enricher**: If no remote endpoint is provided or reachable, automatically falls back to local PaddleOCR text with an informative log.
-2. **Visual Branch**: scores pages with the cached `colvec_scores.npy` matrix by default — no live endpoint needed. If that cache is missing (or stale for the current benchmark bundle) and `--colpali-endpoint` is set, it calls that endpoint instead. If neither is available, it falls back to the plain dense gate scores. Separately, if `kdl_pages.jsonl` is missing, page text falls back to OCR text. Every fallback prints a loud warning to stderr (see `fallback.py`).
-3. **Adaptive K**: Dynamically saves 15-20% page budget when the top candidate is clearly dominant, while preserving 100% recall.
+1. **Chandra Enricher**: If no remote endpoint is provided or reachable, automatically falls back to local PaddleOCR text with an informative log. If `--chandra-local` is passed on a GPU machine, it runs in-process.
+2. **Visual Branch**: scores pages with the cached `colvec_scores.npy` matrix by default — no live endpoint needed. If `--colvec-local` is passed, it computes late interaction scores via ColVec directly on GPU. If neither cache nor live endpoint/GPU is available, it falls back to the plain dense gate scores.
+3. **Kaggle Notebook**: A ready-to-run notebook is provided at `kaggle/adaptive_evaluation.ipynb` for 1-click evaluation on a Kaggle T4 GPU.

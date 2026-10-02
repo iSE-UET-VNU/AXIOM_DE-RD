@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(nohup:*)",
+      "Bash(curl:*)",
+      "Edit(data/**)",
+      "Write(data/**)"
+    ],
+    "ask": [
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(/usr/local/Caskroom/miniconda/base/envs/axiom-de-rd/bin/python:*)",
+      "Bash(rm:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git rm:*)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}

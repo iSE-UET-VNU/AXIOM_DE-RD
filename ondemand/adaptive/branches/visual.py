@@ -7,7 +7,7 @@ from time import perf_counter
 import numpy as np
 import requests
 
-from ...bench import BENCH, fingerprint, load_jsonl, work
+from ...bench import BENCH, documents, fingerprint, load_jsonl, work
 from .. import fallback
 from ..config import get_config
 from ..registry import build, register
@@ -25,15 +25,14 @@ class Scorer:
 
 
 @register("scorer", "colvec_endpoint")
-@register("scorer", "colpali")
 class EndpointColVec(Scorer):
-    name = "colpali_endpoint"
+    name = "colvec_endpoint"
 
     def __init__(self, argument=None, bench=BENCH, **context):
         cfg = get_config()
         self.endpoint = (argument if argument and (argument.startswith("http://") or argument.startswith("https://"))
-                         else context.get("colpali_endpoint") or cfg.colpali_endpoint)
-        self.api_key = context.get("colpali_api_key") or cfg.colpali_api_key
+                         else context.get("colvec_endpoint") or cfg.colvec_endpoint)
+        self.api_key = context.get("colvec_api_key") or cfg.colvec_api_key
         self.bench = bench
         self.cache_dir = work("colvec", "cache", bench=bench)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -61,16 +60,112 @@ class EndpointColVec(Scorer):
                 cache_file.write_text(json.dumps(scores), encoding="utf-8")
                 return scores
             except Exception as err:
-                fallback.warn("colpali_endpoint", f"the endpoint call failed ({err}); ranking by the light-retrieval "
-                                                  f"scores instead of ColPali")
+                fallback.warn("colvec_endpoint", f"the endpoint call failed ({err}); ranking by the light-retrieval "
+                                                  f"scores instead of ColVec")
         else:
-            fallback.warn("colpali_endpoint", "no ColPali endpoint is configured; ranking by the light-retrieval "
-                                              "scores instead of ColPali")
+            fallback.warn("colvec_endpoint", "no ColVec endpoint is configured; ranking by the light-retrieval "
+                                             "scores instead of ColVec")
 
         return {p: (subdata.scores.get(p, 0.0) if subdata else 0.0) for p in pages}
 
     def describe(self):
-        return f"colpali_endpoint:{self.endpoint or 'fallback'}"
+        return f"colvec_endpoint:{self.endpoint or 'fallback'}"
+
+
+@register("scorer", "colvec_local")
+class LocalColVec(Scorer):
+    name = "colvec_local"
+
+    def __init__(self, argument=None, bench=BENCH, **context):
+        cfg = get_config()
+        self.bench = bench
+        self.model_id = argument or context.get("colvec_model") or cfg.colvec_model or "webAI-Official/webAI-ColVec1.1-4b"
+        self.docs = {d["doc_id"]: bench / d["path"] for d in documents(bench)}
+        self.model = None
+        self.processor = None
+        self._cache_q = {}
+        self._cache_p = {}
+        self.cache_dir = work("colvec", "cache", bench=bench)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _load_model(self):
+        if self.model is not None:
+            return
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"Local ColVec in-process execution (--colvec-local) requested, but no CUDA GPU is available.\n"
+                f"Use a GPU runtime (e.g. Kaggle T4, Colab L4/A100) or use the precomputed disk cache (default)."
+            )
+        from transformers import AutoModel, AutoProcessor
+        dev = "cuda:0"
+        gpu = torch.cuda.get_device_properties(0)
+        vram_gb = gpu.total_memory / 1024**3
+        dtype = torch.bfloat16 if any(x in gpu.name for x in ("A100", "H100", "L4", "L40", "RTX 40")) else torch.float16
+        self.processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True, max_num_visual_tokens=1792)
+        self.model = AutoModel.from_pretrained(
+            self.model_id, trust_remote_code=True, attn_implementation="sdpa",
+            device_map=dev, torch_dtype=dtype
+        ).eval()
+
+    def _render_page_pil(self, page_id):
+        if "#page=" not in page_id:
+            return None
+        doc_id, page_str = page_id.split("#page=")
+        path = self.docs.get(doc_id)
+        if not path or not path.exists():
+            return None
+        import fitz
+        from PIL import Image
+        with fitz.open(path) as doc:
+            page = doc.load_page(int(page_str))
+            pix = page.get_pixmap(dpi=144, colorspace=fitz.csRGB, alpha=False)
+            return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+    def score(self, qid, pages, subdata=None):
+        query = subdata.query if subdata else ""
+        cache_key = hashlib.sha256(f"local:{self.model_id}:{qid}:{','.join(pages)}".encode("utf-8")).hexdigest()
+        cache_file = self.cache_dir / f"{cache_key}.json"
+        if cache_file.exists():
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+
+        self._load_model()
+        import torch
+
+        # 1. Encode query
+        if qid not in self._cache_q:
+            inp = self.processor.process_queries([query]).to(self.model.device)
+            with torch.inference_mode():
+                out = self.model(**inp)
+                emb = out.embeddings if hasattr(out, "embeddings") else out.last_hidden_state
+                self._cache_q[qid] = emb[0].to(torch.float16)
+        q_emb = self._cache_q[qid]  # [q_len, dim]
+
+        # 2. Score each page with MaxSim late interaction
+        scores = {}
+        for p in pages:
+            if p not in self._cache_p:
+                img = self._render_page_pil(p)
+                if img is None:
+                    continue
+                inp_img = self.processor.process_images([img]).to(self.model.device)
+                with torch.inference_mode():
+                    out_img = self.model(**inp_img)
+                    emb_img = out_img.embeddings if hasattr(out_img, "embeddings") else out_img.last_hidden_state
+                    self._cache_p[p] = emb_img[0].to(torch.float16)
+
+            p_emb = self._cache_p.get(p)
+            if p_emb is not None:
+                sim = torch.einsum("ld,md->lm", q_emb, p_emb)
+                scores[p] = float(sim.max(dim=1).values.sum().item())
+            else:
+                scores[p] = subdata.scores.get(p, 0.0) if subdata else 0.0
+
+        cache_file.write_text(json.dumps(scores), encoding="utf-8")
+        return scores
+
+    def describe(self):
+        return f"colvec_local:{self.model_id}"
 
 
 @register("scorer", "colvec_cached")
@@ -94,11 +189,17 @@ class CachedColVec(Scorer):
                 self.row = {q: i for i, q in enumerate(json.loads((folder / "colvec_qids.json").read_text()))}
 
         self.endpoint_scorer = None
+        self.local_scorer = None
         cfg = get_config()
-        if not self.has_cache and (cfg.colpali_endpoint or (argument and argument.startswith("http"))):
+        if context.get("colvec_local") or cfg.colvec_local or argument == "colvec_local":
+            self.local_scorer = LocalColVec(argument, bench=bench, **context)
+        elif not self.has_cache and (cfg.colvec_endpoint or (argument and argument.startswith("http"))):
             self.endpoint_scorer = EndpointColVec(argument, bench=bench, **context)
 
     def score(self, qid, pages, subdata=None):
+        if self.local_scorer:
+            return self.local_scorer.score(qid, pages, subdata=subdata)
+
         if self.has_cache and qid in self.row:
             row = self.matrix[self.row[qid]]
             # If all pages in col, use cached matrix
@@ -113,6 +214,8 @@ class CachedColVec(Scorer):
         return {p: (subdata.scores.get(p, 0.0) if subdata else 0.0) for p in pages}
 
     def describe(self):
+        if self.local_scorer:
+            return self.local_scorer.describe()
         if self.has_cache:
             return "colvec_cached"
         if self.endpoint_scorer:
@@ -174,7 +277,7 @@ class CachedKDL(Parser):
 class VisualBranch:
     name = "visual"
 
-    def __init__(self, argument, scorer="colvec_cached", parser="kdl_cached", refine_k="fixed:10", **context):
+    def __init__(self, argument=None, scorer="colvec_cached", parser="kdl_cached", refine_k="fixed:10", **context):
         self.scorer = build("scorer", argument or scorer, **context)
         self.parser = build("parser", parser, **context)
         self.refine_k = build("k", refine_k, **context)

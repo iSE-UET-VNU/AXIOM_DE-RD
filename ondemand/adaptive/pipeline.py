@@ -31,7 +31,9 @@ def load_gate(name, bench=BENCH):
 def run(tag, gate_name, k="fixed:20", router="fixed:visual", branch_args=None, refine_k="fixed:10",
         chunker="fixed:512:128", ranker="hybrid", top_chunks=10, pages_name="pages_ocr_ppocr.jsonl",
         cache_name="te3s_ppocr", store=None, allow_api=False, limit=None, bench=BENCH, with_qa=False,
-        exclude_flawed=False, chandra_endpoint=None, colpali_endpoint=None):
+        exclude_flawed=False, chandra_endpoint=None, chandra_local=False,
+        colvec_endpoint=None, colvec_local=False,
+        ppocr_endpoint=None, ppocr_local=False):
     fallback.reset()
     gate = load_gate(gate_name, bench)
     gold, queries = load_gold(bench), load_queries(bench)
@@ -44,13 +46,19 @@ def run(tag, gate_name, k="fixed:20", router="fixed:visual", branch_args=None, r
 
     cfg = get_config()
     chandra_ep = chandra_endpoint or cfg.chandra_endpoint
-    colpali_ep = colpali_endpoint or cfg.colpali_endpoint
+    chandra_loc = chandra_local or cfg.chandra_local
+    colvec_ep = colvec_endpoint or cfg.colvec_endpoint
+    colvec_loc = colvec_local or cfg.colvec_local
+    ppocr_ep = ppocr_endpoint or cfg.ppocr_endpoint
+    ppocr_loc = ppocr_local or cfg.ppocr_local
 
     embedder = Embedder(bench=bench, cache_name=cache_name, allow_api=allow_api, store=store,
                         query_ids={q["query"]: q["query_id"] for q in queries.values()})
     context = {"bench": bench, "pages_name": pages_name, "refine_k": refine_k, "embedder": embedder,
                "cache_name": cache_name, "allow_api": allow_api, "gate": gate,
-               "chandra_endpoint": chandra_ep, "colpali_endpoint": colpali_ep}
+               "chandra_endpoint": chandra_ep, "chandra_local": chandra_loc,
+               "colvec_endpoint": colvec_ep, "colvec_local": colvec_loc,
+               "ppocr_endpoint": ppocr_ep, "ppocr_local": ppocr_loc}
     k_policy = build("k", k, **context)
     route = build("router", router, **context)
     chunk_rank = ChunkRank(build("chunker", chunker, **context), build("ranker", ranker, **context), top_chunks)
@@ -176,7 +184,10 @@ class AdaptivePipeline:
 
     def __init__(self, gate_name="gate_ppocrv5_all.json", k="fixed:20", router="rule",
                  pages_name="pages_ppocrv5.jsonl", ranker="hybrid", top_chunks=10, store="kdl",
-                 chandra_endpoint=None, colpali_endpoint=None, bench=BENCH, allow_api=False):
+                 chandra_endpoint=None, chandra_local=False,
+                 colvec_endpoint=None, colvec_local=False,
+                 ppocr_endpoint=None, ppocr_local=False,
+                 bench=BENCH, allow_api=False):
         self.bench = bench
         self.pages_name = pages_name
         self.allow_api = allow_api
@@ -187,12 +198,19 @@ class AdaptivePipeline:
                                 query_ids={q["query"]: q["query_id"] for q in self.queries.values()})
         cfg = get_config()
         chandra_ep = chandra_endpoint or cfg.chandra_endpoint
-        colpali_ep = colpali_endpoint or cfg.colpali_endpoint
+        chandra_loc = chandra_local or cfg.chandra_local
+        colvec_ep = colvec_endpoint or cfg.colvec_endpoint
+        colvec_loc = colvec_local or cfg.colvec_local
+        ppocr_ep = ppocr_endpoint or cfg.ppocr_endpoint
+        ppocr_loc = ppocr_local or cfg.ppocr_local
 
         self.context = {
             "bench": bench, "pages_name": pages_name, "embedder": self.embedder,
-            "gate": self.gate, "chandra_endpoint": chandra_ep,
-            "colpali_endpoint": colpali_ep, "allow_api": allow_api
+            "gate": self.gate,
+            "chandra_endpoint": chandra_ep, "chandra_local": chandra_loc,
+            "colvec_endpoint": colvec_ep, "colvec_local": colvec_loc,
+            "ppocr_endpoint": ppocr_ep, "ppocr_local": ppocr_loc,
+            "allow_api": allow_api
         }
         self.k_policy = build("k", k, **self.context)
         self.router = build("router", router, **self.context)

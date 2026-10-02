@@ -34,7 +34,7 @@ class Enricher:
 class CachedEnricher(Enricher):
     name = "cached"
 
-    def __init__(self, argument, bench=BENCH, **_):
+    def __init__(self, argument=None, bench=BENCH, **_):
         source = work("enrich", bench=bench) / (argument or "enriched_pages.jsonl")
         if not source.exists():
             raise SystemExit(f"{source} is missing; no enriched parse is cached for this bundle")
@@ -52,7 +52,7 @@ class CachedEnricher(Enricher):
 class ChandraEnricher(Enricher):
     name = "chandra"
 
-    def __init__(self, argument, bench=BENCH, pages_name="pages_ppocrv5.jsonl", **context):
+    def __init__(self, argument=None, bench=BENCH, pages_name="pages_ppocrv5.jsonl", **context):
         cfg = get_config()
         self.endpoint = (argument if argument and (argument.startswith("http://") or argument.startswith("https://"))
                          else context.get("chandra_endpoint") or cfg.chandra_endpoint)
@@ -140,6 +140,7 @@ class ChandraEnricher(Enricher):
                     except Exception as err:
                         fallback.warn("chandra_error", f"the call to {self.endpoint} failed ({err}); using the light OCR "
                                                        f"text for this page instead of Chandra")
+                        self.endpoint = None
 
             if not self.endpoint:
                 fallback.warn("chandra_endpoint", "CHANDRA_ENDPOINT is not set (.env or --chandra-endpoint); using the "
@@ -153,12 +154,115 @@ class ChandraEnricher(Enricher):
         return f"chandra:{ep}"
 
 
+@register("enricher", "chandra_local")
+class LocalChandraEnricher(Enricher):
+    name = "chandra_local"
+
+    def __init__(self, argument=None, bench=BENCH, pages_name="pages_ppocrv5.jsonl", **context):
+        cfg = get_config()
+        self.bench = bench
+        self.model_name = argument or context.get("chandra_model") or cfg.chandra_model or "datalab-to/chandra-ocr-2"
+        self.cache_dir = work("enrich", "cache", bench=bench)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.docs = {d["doc_id"]: bench / d["path"] for d in documents(bench)}
+
+        # Memory cache
+        source = work("enrich", bench=bench) / "enriched_pages.jsonl"
+        self.memory_cache = {r["page_id"]: r["text"] for r in load_jsonl(source)} if source.exists() else {}
+
+        # Fallback text
+        lp_source = work("light_prep", bench=bench) / pages_name
+        self.fallback = {r["page_id"]: r["text"] for r in load_jsonl(lp_source)} if lp_source.exists() else {}
+
+        self.manager = None
+
+    def _load_manager(self):
+        if self.manager is not None:
+            return
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"Local Chandra in-process execution (--chandra-local) requested, but no CUDA GPU is available.\n"
+                f"Use a GPU runtime (e.g. Kaggle T4, Colab L4/A100) or specify --chandra-endpoint."
+            )
+        try:
+            from chandra.model import InferenceManager
+            self.manager = InferenceManager(method="hf")
+        except ImportError:
+            from transformers import pipeline
+            self.manager = pipeline("image-to-text", model=self.model_name, device="cuda:0")
+
+    def _render_page_pil(self, page_id):
+        if "#page=" not in page_id:
+            return None
+        doc_id, page_str = page_id.split("#page=")
+        path = self.docs.get(doc_id)
+        if not path or not path.exists():
+            return None
+        import fitz
+        from PIL import Image
+        try:
+            with fitz.open(path) as doc:
+                page = doc.load_page(int(page_str))
+                pix = page.get_pixmap(dpi=144)
+                return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        except Exception:
+            return None
+
+    def parse(self, page_ids):
+        out = {}
+        for p in page_ids:
+            if p in self.memory_cache:
+                out[p] = self.memory_cache[p]
+                continue
+
+            cache_file = self.cache_dir / (hashlib.sha256(f"local:{self.model_name}\n{PROMPT}\n{p}".encode("utf-8")).hexdigest() + ".json")
+            if cache_file.exists():
+                text = json.loads(cache_file.read_text(encoding="utf-8")).get("text", "")
+                self.memory_cache[p] = text
+                out[p] = text
+                continue
+
+            img = self._render_page_pil(p)
+            if not img:
+                out[p] = self.fallback.get(p, "")
+                continue
+
+            try:
+                self._load_manager()
+                if hasattr(self.manager, "generate"):
+                    from chandra.model.schema import BatchInputItem
+                    item = BatchInputItem(image=img, prompt_type="ocr_layout")
+                    results = list(self.manager.generate([item], max_output_tokens=4096))
+                    text = str(getattr(results[0], "markdown", "") or "")
+                else:
+                    res = self.manager(img, prompt=PROMPT)
+                    text = res[0]["generated_text"] if res else ""
+
+                cache_file.write_text(json.dumps({"page_id": p, "text": text}, ensure_ascii=False), encoding="utf-8")
+                self.memory_cache[p] = text
+                out[p] = text
+            except Exception as err:
+                fallback.warn("chandra_local_error", f"local Chandra generation failed for {p} ({err}); falling back to OCR text")
+                out[p] = self.fallback.get(p, "")
+
+        return out
+
+    def describe(self):
+        return f"chandra_local:{self.model_name}"
+
+
 @register("branch", "enrich")
 class EnrichBranch:
     name = "enrich"
 
-    def __init__(self, argument, enricher="chandra", **context):
-        self.enricher = build("enricher", argument or enricher, **context)
+    def __init__(self, argument=None, enricher="chandra", **context):
+        cfg = get_config()
+        if context.get("chandra_local") or cfg.chandra_local or argument == "chandra_local":
+            enricher_name = "chandra_local"
+        else:
+            enricher_name = argument or enricher
+        self.enricher = build("enricher", enricher_name, **context)
 
     def run(self, subdata):
         started = perf_counter()
@@ -166,9 +270,9 @@ class EnrichBranch:
         text = self.enricher.parse(pages)
         passages = [Passage(page, text.get(page, ""), rank) for rank, page in enumerate(pages, 1)]
         return BranchOutput(self.name, passages,
-                            cost={"seconds": perf_counter() - started, "pages": len(passages),
-                                  "parsed_pages": len(passages)},
-                            notes={"enricher": self.enricher.describe()})
+                             cost={"seconds": perf_counter() - started, "pages": len(passages),
+                                   "parsed_pages": len(passages)},
+                             notes={"enricher": self.enricher.describe()})
 
     def describe(self):
         return f"enrich:{self.enricher.describe()}"

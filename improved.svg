@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1166" height="1200" viewBox="0 0 1166 1200">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#000"/></marker>
+</defs>
+<style>
+.b{fill:#F7D66E;stroke:#000;stroke-width:2}
+.g{fill:#D9D9D9;stroke:#000;stroke-width:2}
+.t{font-family:Arial,Helvetica,sans-serif;font-size:21px;fill:#000;text-anchor:middle;dominant-baseline:middle}
+.ti{font-family:Arial,Helvetica,sans-serif;font-size:30px;font-weight:bold;fill:#000;text-anchor:middle}
+.r{font-family:Arial,Helvetica,sans-serif;font-size:17px;fill:#E8453A}
+.d{font-family:Arial,Helvetica,sans-serif;font-size:17px;font-style:italic;fill:#333}
+line,path.ar{stroke:#000;stroke-width:2;fill:none}
+</style>
+<rect width="1166" height="1200" fill="#fff"/>
+<text class="ti" x="583" y="56">Kiến trúc retrieval sau khi bổ sung SEP và nhánh thị giác</text>
+
+<rect class="g" x="250" y="100" width="250" height="62" rx="2"/>
+<text class="t" x="375" y="132">Trang tài liệu</text>
+<line x1="375" y1="162" x2="375" y2="204" marker-end="url(#a)"/>
+
+<rect class="b" x="250" y="210" width="250" height="62" rx="2"/>
+<text class="t" x="375" y="242">Chunking</text>
+<text class="r" x="238" y="248" text-anchor="end">512 từ · chồng lấn 128</text>
+
+<path class="ar" d="M375 272 L375 302 L255 302 L255 326" marker-end="url(#a)"/>
+<path class="ar" d="M375 302 L505 302 L505 326" marker-end="url(#a)"/>
+
+<rect class="b" x="145" y="332" width="220" height="62" rx="2"/>
+<text class="t" x="255" y="364">Chỉ mục BM25</text>
+<text class="r" x="255" y="418" text-anchor="middle">analyzer plain</text>
+
+<rect class="b" x="390" y="332" width="230" height="62" rx="2"/>
+<text class="t" x="505" y="364">Chỉ mục dense</text>
+<text class="r" x="505" y="418" text-anchor="middle">text-embedding-3-small</text>
+
+<line x1="40" y1="452" x2="1126" y2="452" stroke="#000" stroke-width="2" stroke-dasharray="12 8"/>
+<text class="d" x="52" y="444">ngoại tuyến · một lần</text>
+<text class="d" x="52" y="474">trực tuyến · mỗi truy vấn</text>
+
+<rect class="g" x="800" y="490" width="230" height="62" rx="2"/>
+<text class="t" x="915" y="522">Truy vấn</text>
+<line x1="915" y1="552" x2="915" y2="586" marker-end="url(#a)"/>
+
+<rect class="b" x="790" y="590" width="250" height="78" rx="2"/>
+<text class="t" x="915" y="620">Nhúng + phân tích</text>
+<text class="t" x="915" y="646">truy vấn</text>
+
+<line x1="255" y1="394" x2="255" y2="594" marker-end="url(#a)"/>
+<line x1="505" y1="394" x2="505" y2="594" marker-end="url(#a)"/>
+<line x1="788" y1="629" x2="626" y2="629" marker-end="url(#a)"/>
+
+<rect class="b" x="145" y="598" width="475" height="62" rx="2"/>
+<text class="t" x="382" y="630">MaxP: điểm trang = điểm chunk cao nhất</text>
+<line x1="382" y1="660" x2="382" y2="694" marker-end="url(#a)"/>
+
+<rect class="b" x="145" y="698" width="475" height="62" rx="2"/>
+<text class="t" x="382" y="730">α-fuse</text>
+<text class="r" x="645" y="736">0,30 · BM25 + 0,70 · dense</text>
+<line x1="382" y1="760" x2="382" y2="796" marker-end="url(#a)"/>
+
+<rect class="b" x="145" y="800" width="475" height="62" rx="2"/>
+<text class="t" x="382" y="832">Pool 100 trang</text>
+<text class="r" x="645" y="838">hit@100 ≈ 98%</text>
+
+<path class="ar" d="M382 862 L382 898 L235 898 L235 926" marker-end="url(#a)"/>
+<path class="ar" d="M382 898 L455 898 L455 926" marker-end="url(#a)"/>
+<path class="ar" d="M382 898 L675 898 L675 926" marker-end="url(#a)"/>
+
+<rect class="b" x="145" y="932" width="180" height="62" rx="2"/>
+<text class="t" x="235" y="964" style="font-weight:bold">SEP</text>
+<rect class="b" x="350" y="932" width="210" height="62" rx="2"/>
+<text class="t" x="455" y="964" style="font-weight:bold">Nhánh thị giác</text>
+<rect class="b" x="570" y="932" width="210" height="62" rx="2"/>
+<text class="t" x="675" y="964" style="font-weight:bold">Cross-encoder</text>
+
+<path class="ar" d="M235 994 L235 1022 L675 1022 L675 994"/>
+<path class="ar" d="M455 994 L455 1022"/>
+<line x1="382" y1="1022" x2="382" y2="1082" marker-end="url(#a)"/>
+
+<text class="r" x="215" y="1062" text-anchor="middle">+0,3 ms/truy vấn</text>
+<text class="r" x="478" y="1062" text-anchor="middle">ColVec-8b · w = 0,8</text>
+<text class="r" x="700" y="1062" text-anchor="middle">top-20 · 0,7 s/truy vấn</text>
+
+<rect class="g" x="250" y="1086" width="265" height="78" rx="2"/>
+<text class="t" x="382" y="1116">Top-10 trang</text>
+<text class="t" x="382" y="1142">+ bằng chứng</text>
+</svg>
