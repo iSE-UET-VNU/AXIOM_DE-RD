@@ -1,303 +1,152 @@
-import hashlib
-import json
-import os
-from pathlib import Path
+from dataclasses import replace
 from time import perf_counter
 
-import numpy as np
-import requests
-
-from ...bench import BENCH, documents, fingerprint, load_jsonl, work
-from .. import fallback
+from ...bench import BENCH, load_jsonl, work
+from .. import fallback, services
 from ..config import get_config
 from ..registry import build, register
 from ..subdata import BranchOutput, Passage
 
 
-class Scorer:
-    name = "base"
-
-    def score(self, qid, pages, subdata=None):
-        raise NotImplementedError
-
-    def describe(self):
-        return self.name
+def service_for(name, mode=None, bench=BENCH):
+    if mode is None:
+        return services.get(name, bench)
+    return services.create(name, replace(get_config(), **{f"{name}_mode": mode}), bench)
 
 
-@register("scorer", "colvec_endpoint")
-class EndpointColVec(Scorer):
-    name = "colvec_endpoint"
+class ColVecScorer:
+    name = "colvec"
+    mode = None
 
-    def __init__(self, argument=None, bench=BENCH, **context):
-        cfg = get_config()
-        self.endpoint = (argument if argument and (argument.startswith("http://") or argument.startswith("https://"))
-                         else context.get("colvec_endpoint") or cfg.colvec_endpoint)
-        self.api_key = context.get("colvec_api_key") or cfg.colvec_api_key
-        self.bench = bench
-        self.cache_dir = work("colvec", "cache", bench=bench)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, argument=None, bench=BENCH, **_):
+        self.service = service_for("colvec", self.mode, bench)
 
-    def score(self, qid, pages, subdata=None):
+    def prepare(self, items):
+        self.service.prepare(items)
+        services.release(self.service)
+
+    def score(self, qid, pages, subdata=None, warn=True):
         query = subdata.query if subdata else ""
-        cache_key = hashlib.sha256(f"{qid}:{','.join(pages)}".encode("utf-8")).hexdigest()
-        cache_file = self.cache_dir / f"{cache_key}.json"
-
-        if cache_file.exists():
-            return json.loads(cache_file.read_text(encoding="utf-8"))
-
-        if self.endpoint:
-            url = self.endpoint.rstrip("/")
-            if not url.endswith("/rerank"):
-                url = f"{url}/rerank"
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-            payload = {"query": query, "documents": pages, "qid": qid}
-            try:
-                res = requests.post(url, json=payload, headers=headers, timeout=60)
-                res.raise_for_status()
-                scores = res.json().get("scores", {})
-                cache_file.write_text(json.dumps(scores), encoding="utf-8")
-                return scores
-            except Exception as err:
-                fallback.warn("colvec_endpoint", f"the endpoint call failed ({err}); ranking by the light-retrieval "
-                                                  f"scores instead of ColVec")
-        else:
-            fallback.warn("colvec_endpoint", "no ColVec endpoint is configured; ranking by the light-retrieval "
-                                             "scores instead of ColVec")
-
-        return {p: (subdata.scores.get(p, 0.0) if subdata else 0.0) for p in pages}
-
-    def describe(self):
-        return f"colvec_endpoint:{self.endpoint or 'fallback'}"
-
-
-@register("scorer", "colvec_local")
-class LocalColVec(Scorer):
-    name = "colvec_local"
-
-    def __init__(self, argument=None, bench=BENCH, **context):
-        cfg = get_config()
-        self.bench = bench
-        self.model_id = argument or context.get("colvec_model") or cfg.colvec_model or "webAI-Official/webAI-ColVec1.1-4b"
-        self.docs = {d["doc_id"]: bench / d["path"] for d in documents(bench)}
-        self.model = None
-        self.processor = None
-        self._cache_q = {}
-        self._cache_p = {}
-        self.cache_dir = work("colvec", "cache", bench=bench)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-    def _load_model(self):
-        if self.model is not None:
-            return
-        import torch
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                f"Local ColVec in-process execution (--colvec-local) requested, but no CUDA GPU is available.\n"
-                f"Use a GPU runtime (e.g. Kaggle T4, Colab L4/A100) or use the precomputed disk cache (default)."
-            )
-        from transformers import AutoModel, AutoProcessor
-        dev = "cuda:0"
-        gpu = torch.cuda.get_device_properties(0)
-        vram_gb = gpu.total_memory / 1024**3
-        dtype = torch.bfloat16 if any(x in gpu.name for x in ("A100", "H100", "L4", "L40", "RTX 40")) else torch.float16
-        self.processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True, max_num_visual_tokens=1792)
-        self.model = AutoModel.from_pretrained(
-            self.model_id, trust_remote_code=True, attn_implementation="sdpa",
-            device_map=dev, torch_dtype=dtype
-        ).eval()
-
-    def _render_page_pil(self, page_id):
-        if "#page=" not in page_id:
-            return None
-        doc_id, page_str = page_id.split("#page=")
-        path = self.docs.get(doc_id)
-        if not path or not path.exists():
-            return None
-        import fitz
-        from PIL import Image
-        with fitz.open(path) as doc:
-            page = doc.load_page(int(page_str))
-            pix = page.get_pixmap(dpi=144, colorspace=fitz.csRGB, alpha=False)
-            return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-
-    def score(self, qid, pages, subdata=None):
-        query = subdata.query if subdata else ""
-        cache_key = hashlib.sha256(f"local:{self.model_id}:{qid}:{','.join(pages)}".encode("utf-8")).hexdigest()
-        cache_file = self.cache_dir / f"{cache_key}.json"
-        if cache_file.exists():
-            return json.loads(cache_file.read_text(encoding="utf-8"))
-
-        self._load_model()
-        import torch
-
-        # 1. Encode query
-        if qid not in self._cache_q:
-            inp = self.processor.process_queries([query]).to(self.model.device)
-            with torch.inference_mode():
-                out = self.model(**inp)
-                emb = out.embeddings if hasattr(out, "embeddings") else out.last_hidden_state
-                self._cache_q[qid] = emb[0].to(torch.float16)
-        q_emb = self._cache_q[qid]  # [q_len, dim]
-
-        # 2. Score each page with MaxSim late interaction
-        scores = {}
-        for p in pages:
-            if p not in self._cache_p:
-                img = self._render_page_pil(p)
-                if img is None:
-                    continue
-                inp_img = self.processor.process_images([img]).to(self.model.device)
-                with torch.inference_mode():
-                    out_img = self.model(**inp_img)
-                    emb_img = out_img.embeddings if hasattr(out_img, "embeddings") else out_img.last_hidden_state
-                    self._cache_p[p] = emb_img[0].to(torch.float16)
-
-            p_emb = self._cache_p.get(p)
-            if p_emb is not None:
-                sim = torch.einsum("ld,md->lm", q_emb, p_emb)
-                scores[p] = float(sim.max(dim=1).values.sum().item())
-            else:
-                scores[p] = subdata.scores.get(p, 0.0) if subdata else 0.0
-
-        cache_file.write_text(json.dumps(scores), encoding="utf-8")
+        scores, missing = self.service.score(qid, query, pages)
+        if missing and warn:
+            fallback.warn(f"colvec_{self.service.mode}", f"{len(missing)} of {len(pages)} pages of {qid} have no "
+                                                         f"ColVec score ({self.service.mode} mode); ranking them by "
+                                                         f"the light-retrieval score instead")
+        for page in missing:
+            scores[page] = subdata.scores.get(page, 0.0) if subdata else 0.0
         return scores
 
+    def seconds(self, pages):
+        return self.service.page_seconds(pages)
+
     def describe(self):
-        return f"colvec_local:{self.model_id}"
+        return f"colvec:{self.service.mode}:{self.service.model_id}"
+
+
+@register("scorer", "colvec")
+class ConfiguredColVec(ColVecScorer):
+    pass
 
 
 @register("scorer", "colvec_cached")
-class CachedColVec(Scorer):
-    name = "colvec_cached"
-
-    def __init__(self, argument=None, bench=BENCH, **context):
-        folder = work("colvec", bench=bench)
-        meta = folder / "colvec_meta.json"
-        scores_file = folder / "colvec_scores.npy"
-        self.has_cache = scores_file.exists() and meta.exists()
-
-        if self.has_cache:
-            if json.loads(meta.read_text())["bundle_fingerprint"] != fingerprint(bench):
-                fallback.warn("colvec_scores", "the cached ColVec matrix is from a different benchmark bundle, so "
-                                               "it is being ignored")
-                self.has_cache = False
-            else:
-                self.matrix = np.load(scores_file)
-                self.col = {k: i for i, k in enumerate(json.loads((folder / "colvec_keys.json").read_text()))}
-                self.row = {q: i for i, q in enumerate(json.loads((folder / "colvec_qids.json").read_text()))}
-
-        self.endpoint_scorer = None
-        self.local_scorer = None
-        cfg = get_config()
-        if context.get("colvec_local") or cfg.colvec_local or argument == "colvec_local":
-            self.local_scorer = LocalColVec(argument, bench=bench, **context)
-        elif not self.has_cache and (cfg.colvec_endpoint or (argument and argument.startswith("http"))):
-            self.endpoint_scorer = EndpointColVec(argument, bench=bench, **context)
-
-    def score(self, qid, pages, subdata=None):
-        if self.local_scorer:
-            return self.local_scorer.score(qid, pages, subdata=subdata)
-
-        if self.has_cache and qid in self.row:
-            row = self.matrix[self.row[qid]]
-            # If all pages in col, use cached matrix
-            if all(p in self.col for p in pages):
-                return {p: float(row[self.col[p]]) for p in pages}
-
-        if self.endpoint_scorer:
-            return self.endpoint_scorer.score(qid, pages, subdata=subdata)
-
-        why = "no cached ColVec matrix" if not self.has_cache else f"{qid} is not in the cached matrix, or some of its pages are"
-        fallback.warn("colvec_scores", f"{why}; ranking by the light-retrieval scores instead of ColVec")
-        return {p: (subdata.scores.get(p, 0.0) if subdata else 0.0) for p in pages}
-
-    def describe(self):
-        if self.local_scorer:
-            return self.local_scorer.describe()
-        if self.has_cache:
-            return "colvec_cached"
-        if self.endpoint_scorer:
-            return self.endpoint_scorer.describe()
-        return "colvec_cached:fallback_dense"
+class CachedColVec(ColVecScorer):
+    mode = "cached"
 
 
-class Parser:
-    name = "base"
+@register("scorer", "colvec_local")
+class LocalColVec(ColVecScorer):
+    mode = "local"
+
+
+@register("scorer", "colvec_endpoint")
+class EndpointColVec(ColVecScorer):
+    mode = "endpoint"
+
+
+class KDLParser:
+    name = "kdl"
+    mode = None
+
+    def __init__(self, argument=None, bench=BENCH, pages_name="pages_ppocrv5.jsonl", **_):
+        self.service = service_for("kdl", self.mode, bench)
+        self.bench, self.pages_name = bench, pages_name
+        self._ocr = None
+
+    def ocr_text(self):
+        if self._ocr is None:
+            source = work("light_prep", bench=self.bench) / self.pages_name
+            self._ocr = {r["page_id"]: r["text"] for r in load_jsonl(source)} if source.exists() else {}
+        return self._ocr
+
+    def prepare(self, page_ids):
+        self.service.prepare(page_ids)
+        services.release(self.service)
 
     def parse(self, page_ids):
-        raise NotImplementedError
+        text, missing = self.service.parse(page_ids)
+        if missing:
+            fallback.warn(f"kdl_{self.service.mode}", f"{len(missing)} pages have no KDL parse ({self.service.mode} "
+                                                      f"mode); using the light OCR text for them")
+            ocr = self.ocr_text()
+            text.update({p: ocr.get(p, "") for p in missing})
+        empty = [p for p in page_ids if not text[p].strip()]
+        return {p: text[p] for p in page_ids}, {"missing_pages": missing, "empty_pages": empty}
+
+    def seconds(self, pages):
+        return self.service.page_seconds(pages)
 
     def describe(self):
-        return self.name
+        return f"kdl:{self.service.mode}:{self.service.provider_name}"
+
+
+@register("parser", "kdl")
+class ConfiguredKDL(KDLParser):
+    pass
 
 
 @register("parser", "kdl_cached")
-class CachedKDL(Parser):
-    name = "kdl_cached"
+class CachedKDL(KDLParser):
+    mode = "cached"
 
-    def __init__(self, argument=None, bench=BENCH, pages_name="pages_ppocrv5.jsonl", **_):
-        source = work("kdl", bench=bench) / (argument or "kdl_pages.jsonl")
-        self.has_kdl = source.exists()
-        if self.has_kdl:
-            self.source = source
-            self.text = {r["page_id"]: r["text"] for r in load_jsonl(source)}
-        else:
-            # Fallback to OCR text
-            lp_source = work("light_prep", bench=bench) / pages_name
-            if not lp_source.exists():
-                lp_source = work("light_prep", bench=bench) / "pages_ocr_ppocr.jsonl"
-            self.source = lp_source
-            self.text = {r["page_id"]: r["text"] for r in load_jsonl(lp_source)} if lp_source.exists() else {}
 
-    def parse(self, page_ids):
-        if not self.has_kdl:
-            fallback.warn("kdl_pages", f"kdl_pages.jsonl is missing, so pages are read from {self.source.name} "
-                                       f"(OCR text, not a KDL parse)")
-
-        out, missing, empty = {}, [], []
-        for page in page_ids:
-            text = self.text.get(page)
-            if text is None:
-                missing.append(page)
-                fallback.warn("kdl_page_missing", f"{page} is not in {self.source.name}; its text is empty")
-                text = ""
-            elif not text.strip():
-                empty.append(page)
-            out[page] = text
-        return out, {"missing_pages": missing, "empty_pages": empty}
-
-    def describe(self):
-        prefix = "kdl_cached" if self.has_kdl else "kdl_cached:fallback_ocr"
-        return f"{prefix}:{self.source.name if self.source else 'none'}"
+@register("parser", "kdl_vllm")
+class VLLMKDL(KDLParser):
+    mode = "vllm"
 
 
 @register("branch", "visual")
 class VisualBranch:
     name = "visual"
 
-    def __init__(self, argument=None, scorer="colvec_cached", parser="kdl_cached", refine_k="fixed:10", **context):
+    def __init__(self, argument=None, scorer="colvec", parser="kdl", refine_k="fixed:10", **context):
         self.scorer = build("scorer", argument or scorer, **context)
         self.parser = build("parser", parser, **context)
         self.refine_k = build("k", refine_k, **context)
 
-    def run(self, subdata):
-        started = perf_counter()
+    def rank(self, subdata, warn=True):
         candidates = subdata.top()
-        scores = self.scorer.score(subdata.qid, candidates, subdata=subdata)
+        scores = self.scorer.score(subdata.qid, candidates, subdata=subdata, warn=warn)
         ranked = sorted(candidates, key=lambda p: (-scores.get(p, 0.0), p))
         refined = subdata.__class__(subdata.qid, subdata.query, ranked, scores, len(ranked), source="visual")
-        keep = ranked[:self.refine_k.choose(refined)]
-        rerank_seconds = perf_counter() - started
+        return candidates, scores, ranked[:self.refine_k.choose(refined)]
 
+    def prepare(self, subdatas):
+        self.scorer.prepare([(s.qid, s.query, s.top()) for s in subdatas])
+        keep = [p for s in subdatas for p in self.rank(s, warn=False)[2]]
+        self.parser.prepare(keep)
+
+    def run(self, subdata):
+        started = perf_counter()
+        candidates, scores, keep = self.rank(subdata)
+        rerank_seconds = perf_counter() - started
         started = perf_counter()
         text, notes = self.parser.parse(keep)
         passages = [Passage(page, text[page], rank) for rank, page in enumerate(keep, 1)]
         return BranchOutput(self.name, passages,
                             cost={"seconds": rerank_seconds + (perf_counter() - started),
                                   "rerank_seconds": rerank_seconds, "pages": len(candidates),
-                                  "parsed_pages": len(keep)},
+                                  "parsed_pages": len(keep), "colvec_model_seconds": self.scorer.seconds(candidates),
+                                  "kdl_model_seconds": self.parser.seconds(keep)},
                             notes={"scorer": self.scorer.describe(), "parser": self.parser.describe(),
                                    "refine_k": self.refine_k.describe(),
                                    "scores": {p: round(scores.get(p, 0.0), 6) for p in keep}, **notes})

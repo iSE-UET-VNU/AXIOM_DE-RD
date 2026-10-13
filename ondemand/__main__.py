@@ -45,7 +45,7 @@ def main():
     p = sub.add_parser("report")
     p.add_argument("--tag", required=True)
     p.add_argument("--gate", default="gate_k20_best.json")
-    sub.add_parser("bundle").add_argument("--target", choices=("colvec", "kdl"), required=True)
+    sub.add_parser("bundle").add_argument("--target", choices=("colvec", "kdl", "adaptive", "handoff"), required=True)
     args = ap.parse_args()
 
     if args.cmd == "light-prep":

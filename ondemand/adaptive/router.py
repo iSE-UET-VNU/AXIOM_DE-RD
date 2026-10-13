@@ -52,7 +52,7 @@ class RuleRouter(Router):
         if not self.pages:
             fallback.warn("router_pages", f"{source.name} is missing, so the router cannot see which pages were OCR'd "
                                           f"and decides from the query wording alone")
-        self.has_chandra = bool(chandra_endpoint or get_config().chandra_endpoint)
+        self.has_chandra = bool(chandra_endpoint or get_config().chandra_mode != "cached")
 
     def route(self, subdata):
         candidates = subdata.top(5)

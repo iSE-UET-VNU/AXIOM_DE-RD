@@ -169,6 +169,9 @@ class Hierarchy:
         scores = (1 - self.parent) * base + self.parent * files[self.owner]
         keep = [i for i, o in enumerate(self.owner) if o in selected]
         order = sorted(keep, key=lambda i: (-scores[i], self.units[i]))[:POOL]
+        if len(order) < POOL:
+            rest = [i for i, o in enumerate(self.owner) if o not in selected]
+            order += sorted(rest, key=lambda i: (-scores[i], self.units[i]))[:POOL - len(order)]
         notes = {"query_language": query_language, "bm25_pages": int(mask.sum()),
                  "files": sorted(self.file_ids[i] for i in selected)}
         return [self.units[i] for i in order], {self.units[i]: float(scores[i]) for i in order}, notes

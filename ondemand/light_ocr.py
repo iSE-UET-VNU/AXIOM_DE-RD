@@ -40,6 +40,18 @@ def read_results(path, engine=None):
     return texts, boxes, engine, inspector
 
 
+def merge_row(row, new, lines, engine):
+    row = dict(row)
+    base = real_text(row["text"])
+    text = (base + "\n" + new["text"]).strip()
+    row.update(text=text, visual_only=not text.strip(), ocr_applied=True,
+               text_source=("pdf_inspector+" if base else "") + engine,
+               ocr_word_count=len(new["text"].split()),
+               ocr_mean_confidence=round(100 * statistics.mean([l["score"] for l in lines]), 2) if lines else 0.0,
+               ocr_seconds=new["seconds"], ocr_render_seconds=0.0, ocr_error=new.get("error"))
+    return row
+
+
 def merge_pure(bench=BENCH, results=None, pages_name="pages_inspector.jsonl", name=None, engine=None):
     out = work("light_prep", bench=bench)
     results = Path(results) if results else Path(__file__).resolve().parent.parent / RESULTS
@@ -59,16 +71,9 @@ def merge_pure(bench=BENCH, results=None, pages_name="pages_inspector.jsonl", na
             if is_target(row):
                 missing.append(row["page_id"])
         else:
-            base = real_text(row["text"])
-            text = (base + "\n" + new["text"]).strip()
-            lines = boxes.get(row["page_id"], [])
-            row.update(text=text, visual_only=not text.strip(), ocr_applied=True,
-                       text_source=("pdf_inspector+" if base else "") + engine,
-                       ocr_word_count=len(new["text"].split()),
-                       ocr_mean_confidence=round(100 * statistics.mean([l["score"] for l in lines]), 2) if lines else 0.0,
-                       ocr_seconds=new["seconds"], ocr_render_seconds=0.0, ocr_error=new.get("error"))
+            row = merge_row(row, new, boxes.get(row["page_id"], []), engine)
             replaced += 1
-            blank += not text.strip()
+            blank += not row["text"].strip()
         rows.append(row)
     if missing:
         raise SystemExit(f"{len(missing)} pages need OCR but are absent from {results.name}, e.g. {missing[:3]}")

@@ -86,7 +86,7 @@ pipe = AdaptivePipeline(
     gate_name="gate_ppocrv5_all.json",
     router="rule",
     pages_name="pages_ppocrv5.jsonl",
-    chandra_endpoint="http://remote-gpu:8000/v1"  # optional override
+    colvec_mode="local", kdl_mode="vllm",   # optional: host the models in this process
 )
 
 result = pipe.query("What is the invoice amount for project X?")
@@ -96,71 +96,88 @@ for chunk in result["chunks"][:3]:
     print(f"[{chunk['page_id']}] {chunk['text'][:80]}...")
 ```
 
-### Direct Tool Calling: Chandra Enricher
-```python
-from ondemand.adaptive import ChandraEnricher
+### Direct Tool Calling: one model service
 
-enricher = ChandraEnricher(endpoint="http://localhost:8000/v1")
-# Automatically renders PDF page image via PyMuPDF and returns structured Markdown
-parsed = enricher.parse(["ohrbench::file_ce1d4cef3196514b#page=18"])
-print(parsed["ohrbench::file_ce1d4cef3196514b#page=18"])
+Each model is a service with the same interface (`prepare`, `parse`/`score`/`ocr`, `close`) and a mode:
+
+| Service | Modes | Hosted how |
+|---|---|---|
+| `colvec` | `cached`, `local`, `endpoint` | in-process HF model (8b, bf16, 1792 visual tokens, 144 dpi) |
+| `kdl` | `cached`, `vllm` | `vllm serve KDLAI/KDL-Frontier-Parser-nano` started and stopped by the service; the selected pages are cut into a sub-PDF |
+| `chandra` | `cached`, `vllm`, `local` | `vllm serve datalab-to/chandra-ocr-2`, or the `chandra` HF backend; prompts and rendering from the `chandra-ocr` package |
+| `ppocr` | `cached`, `local`, `endpoint` | PP-OCRv5 in a worker process (`PPOCR_PYTHON` may point at a separate venv) |
+
+```python
+from ondemand.adaptive.services import KDL, ColVec
+
+with ColVec("local") as colvec:
+    scores, missing = colvec.score("q1", "What does port 2 emit?", ["ohrbench::file_d7c46ad196d20c27#page=3"])
+
+with KDL("vllm") as kdl:
+    text, missing = kdl.parse(["ohrbench::file_d7c46ad196d20c27#page=3"])
 ```
 
-### Direct Tool Calling: Rule Router
-```python
-from ondemand.adaptive import RuleRouter
-from ondemand.adaptive.subdata import SubData
-
-router = RuleRouter()
-# SubData holds query, candidate pages, and gate scores
-subdata = SubData(qid="q1", query="Show the breakdown table of costs", pages=["doc#page=0"], scores={"doc#page=0": 0.8}, k=20)
-branch, notes = router.route(subdata)
-print("Route:", branch, notes)
+```bash
+python -m ondemand.adaptive call colvec --colvec local --qid <query_id> --pages <page_id> ...
+python -m ondemand.adaptive call colvec --colvec local --verify 20     # reproduction gate vs the corpus matrix
+python -m ondemand.adaptive call kdl --kdl vllm --pages <page_id> ... --out kdl.json
+python -m ondemand.adaptive call chandra --chandra vllm --chandra-endpoint http://host:8001/v1 --pages <page_id>
+python -m ondemand.adaptive call ppocr --ppocr local --pages <page_id>
 ```
+
+Every service writes, under `data/work/ondemand_v2/<fp>/<service>/live/<settings-hash>/`:
+`settings.json`, an append-only per-page cache (`pages.jsonl`, or `scores.jsonl` for ColVec), `timings.jsonl`, and
+logs to `data/work/ondemand_v2/<fp>/logs/<service>.log` (vLLM server output in `logs/vllm_<service>.log`).
+A finished page is never recomputed; changing a setting starts a new settings hash.
 
 ---
 
-## 4. Benchmark Evaluation CLI
+## 4. Benchmark run with hosted models
 
 ```bash
-# Run rule router with PP-OCRv5 gate and exclude the 6 flawed benchmark reference questions:
-python -m ondemand.adaptive run --tag adaptive_rule_v5 \
-  --gate gate_ppocrv5_all.json --pages pages_ppocrv5.jsonl \
-  --router rule --k adaptive --ranker page_order --exclude-flawed
+# cache only (any machine)
+python -m ondemand.adaptive run --tag rule_cached --router rule --exclude-flawed
 
-# Full run with QA judging:
-python -m ondemand.adaptive run --tag adaptive_full_qa \
-  --gate gate_ppocrv5_all.json --pages pages_ppocrv5.jsonl \
-  --router rule --k fixed:20 --ranker page_order --qa
+# GPU: ColVec in-process, KDL and Chandra on self-hosted vLLM
+python -m ondemand.adaptive run --tag rule_gpu --router rule --exclude-flawed \
+  --colvec local --kdl vllm --chandra vllm --allow-api
+
+# after a crash or disconnect: same command plus --resume
 ```
 
-### CLI Flags Reference
+A run routes every query first, then runs one model at a time over all the pages it needs (ColVec, then KDL, then
+Chandra, then PP-OCR), releasing the GPU between models, then assembles each query from the caches. `per_query.jsonl`
+is appended one query at a time; `--resume` skips finished queries and refuses to continue with different settings.
+`results/<tag>/` holds `manifest.json` (settings, service modes, GPU, git sha), `run.log`, `per_query.jsonl` and
+`metrics.json`. Each record's `cost` carries `<service>_model_seconds`: the model time its pages took, counted as if the
+query ran alone. `--keep-loaded` keeps every model resident (large GPUs only).
+
+Light prep (pdf-inspector, PP-OCRv5, gate) is a separate one-time step:
+
+```bash
+python -m ondemand.adaptive prep --allow-api      # writes pages_ppocrv5_live.jsonl and gate_ppocrv5_live.json
+```
+
+On Colab or Kaggle: `python -m ondemand bundle --target adaptive`, upload the zip, run `colab/04_adaptive_gpu_run.ipynb`.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--tag` | required | Output experiment name under `data/work/<fp>/results/<tag>/` |
-| `--gate` | `gate_ppocrv5_all.json` | Gate index built via `python -m ondemand light-retrieval` |
-| `--pages` | `pages_ppocrv5.jsonl` | OCR corpus text file |
-| `--router` | `rule` | Routing policy: `rule`, `fixed:light`, `fixed:visual`, `fixed:enrich` |
-| `--k` | `fixed:20` | Candidate page budget: `fixed:N` or `adaptive` (dynamic score-gap) |
-| `--ranker` | `hybrid` | Chunk ranker: `hybrid` (dense+BM25), `page_order`, or `lexical` |
-| `--store` | `kdl` | Precomputed chunk vectors (e.g. `kdl`) to avoid embedding calls |
-| `--exclude-flawed` | `off` | Filter out the 2 confirmed flawed benchmark ground truth questions ($N=218$) |
-| `--chandra-endpoint` | `None` | Override Chandra OCR / layout vLLM endpoint |
-| `--chandra-local` | `off` | Run Chandra OCR locally in-process on GPU (requires CUDA) |
-| `--colvec-endpoint` | `None` | Live ColVec endpoint; only used if no `colvec_scores.npy` cache is found. The visual branch's **default scorer is the ColVec cache**, not a live endpoint. |
-| `--colvec-local` | `off` | Run ColVec visual reranker locally in-process on GPU (requires CUDA) |
-| `--ppocr-endpoint` | `None` | Override PP-OCRv5 remote microservice endpoint |
-| `--ppocr-local` | `off` | Run PP-OCRv5 locally in-process on GPU/CPU |
-| `--all-local-gpu` | `off` | Shortcut: enable all local in-process GPU models |
-| `--qa` | `off` | Run end-to-end VLM generation and judging |
-| `--allow-api` | `off` | Allow live OpenAI/OpenRouter embedding API calls if uncached |
+| `--colvec/--kdl/--chandra/--ppocr MODE` | `.env`, else `cached` | service modes, see the table above |
+| `--colvec-model`, `--colvec-8bit` | 8b, off | smaller GPUs; scores then differ from the cache |
+| `--kdl-endpoint`, `--chandra-endpoint` | none | use a running vLLM server instead of starting one |
+| `--all-local-gpu` | off | colvec local, kdl vllm, chandra vllm, ppocr local |
+| `--resume` | off | continue `results/<tag>` |
+| `--router`, `--k`, `--refine-k`, `--ranker`, `--top-chunks` | `rule`, `fixed:20`, `fixed:10`, `hybrid`, 10 | as before |
+| `--qa`, `--allow-api` | off | QA judging; live embedding/LLM calls |
+
+Environment: `VLLM_BIN` (a `vllm` binary in its own venv), `PPOCR_PYTHON`, `COLVEC_MODE`/`KDL_MODE`/..., `KDL_ENDPOINT`,
+`CHANDRA_ENDPOINT`, `COLVEC_ENDPOINT`, `PPOCR_ENDPOINT`, `OPENROUTER_API_KEY`.
 
 ---
 
-## 5. Built-in Resilience & Graceful Fallbacks
+## 5. Fallbacks
 
-The architecture is built so teammates will **never experience hard crashes** when running across different environments:
-1. **Chandra Enricher**: If no remote endpoint is provided or reachable, automatically falls back to local PaddleOCR text with an informative log. If `--chandra-local` is passed on a GPU machine, it runs in-process.
-2. **Visual Branch**: scores pages with the cached `colvec_scores.npy` matrix by default — no live endpoint needed. If `--colvec-local` is passed, it computes late interaction scores via ColVec directly on GPU. If neither cache nor live endpoint/GPU is available, it falls back to the plain dense gate scores.
-3. **Kaggle Notebook**: A ready-to-run notebook is provided at `kaggle/adaptive_evaluation.ipynb` for 1-click evaluation on a Kaggle T4 GPU.
+A page a service could not produce (no cache entry in cached mode, a failed parse in a live mode) falls back to the
+light OCR text (KDL, Chandra) or the light-retrieval score (ColVec). Every fallback prints a loud warning, is counted per
+query in `per_query.jsonl`, logged in `run.log`, and summarised in `metrics.json` and the end-of-run banner. A run with
+fallbacks is not the configured pipeline.

@@ -67,4 +67,8 @@ def group_of(qid, query):
 FLAWED_QIDS = frozenset([
     "ohrbench::88e9648f-a993-4d8a-8f68-49ad9ce6c492",  # Genoa PCT number: OHR-Bench's own gt_text carries the typo
     "ohrbench::85bb98a2-00c5-4c67-9343-4e3c70487b7c",  # NV-T60 tape: gt_text table row is mangled, gold took the wrong cell
+    "ohrbench::803adf07-c9f4-4910-8c12-277ff7aaac7e",
+    "ohrbench::9291d162-10f7-44da-97ea-36b87ab53a1f",
+    "ohrbench::a4f8b342-072c-411b-bf4c-89fc7c926c46",
+    "vidore_physics::326",
 ])
