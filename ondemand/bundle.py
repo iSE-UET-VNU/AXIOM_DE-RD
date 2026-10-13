@@ -11,17 +11,8 @@ WORK = {"adaptive": ("light_prep/gate_ppocrv5_all.json", "light_prep/pages_ppocr
                      "embedding_cache/te3s_ppocr", "embeddings/kdl", "colvec/colvec_scores.npy",
                      "colvec/colvec_keys.json", "colvec/colvec_qids.json", "colvec/colvec_meta.json",
                      "colvec/query_embeddings.pt", "kdl/kdl_pages.jsonl", "kdl/kdl_meta.json", "qa_cache"),
-        "handoff": ("light_prep/gate_ppocrv5_backfill.json", "light_prep/gate_ppocrv5_all.json",
-                    "light_prep/pages_ppocrv5.jsonl", "light_prep/pages_inspector.jsonl",
-                    "light_prep/pages_ocr_sparse.jsonl", "light_prep/qrels_page_level.jsonl",
-                    "embedding_cache", "embeddings/kdl", "light_v2", "colvec/colvec_scores.npy",
-                    "colvec/colvec_keys.json", "colvec/colvec_qids.json", "colvec/colvec_meta.json",
-                    "colvec/query_embeddings.pt", "kdl/kdl_pages.jsonl", "kdl/kdl_meta.json",
-                    "qa_cache/answers", "qa_cache/judge", "routing/labels_ladder_k100.jsonl",
-                    "routing/labels_r10_k100.jsonl", "routing/labels_light_visual.jsonl",
-                    "routing/scores_ladder_k100.jsonl", "routing/decisions", "routing/ladder_probs",
-                    "results/adaptive_regression", "results/legacy_fullcorpus", "results/plain_bm25_colvec",
-                    "results/oracle_gold", "results/oracle_image")}
+        "handoff": ("light_prep", "colvec", "embedding_cache", "embeddings", "light_v2", "kdl", "qa_cache", "routing",
+                    "results", "enrich", "logs")}
 BENCH_NAME = "0.1. BENCHMARK"
 SKIP = ("__pycache__", ".pyc", ".DS_Store")
 

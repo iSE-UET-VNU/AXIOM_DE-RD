@@ -28,7 +28,7 @@ pip install -e .
 cp .env.example .env        # only OPENROUTER_API_KEY is needed, and only for runs with --allow-api
 ```
 
-Then get the data bundle (`handoff_bundle.zip`, about 660 MB, shared outside git) and unzip it at the repo root:
+Then get the data bundle (`handoff_bundle.zip`, shared outside git) and unzip it at the repo root:
 
 ```bash
 unzip -o handoff_bundle.zip
@@ -44,6 +44,8 @@ To rebuild the zip: `python -m ondemand bundle --target handoff` (writes `data/w
 
 ### What is in the bundle
 
+The files you will use first:
+
 | Path under `data/work/ondemand_v2/ef7f11811803/` | What it is |
 |---|---|
 | `light_prep/gate_ppocrv5_backfill.json` | light retrieval output: top 100 pages per query (`light_run_top100`), settings, gold ranks |
@@ -58,7 +60,8 @@ To rebuild the zip: `python -m ondemand bundle --target handoff` (writes `data/w
 | `qa_cache/answers`, `qa_cache/judge` | generator and judge API cache |
 
 Because the ColVec matrix covers the whole corpus, re-sorting a pool of any size with ColVec costs nothing locally.
-Rendered page images (`qa_cache/page_images`, 112 MB) are not in the bundle; the PDFs they come from are.
+The bundle is the whole work folder except `upload/`: every gate variant, OCR variant, result folder, API cache,
+rendered page image and cloned baseline repo is there, not only the rows listed above.
 
 ## 3. Reproduce the numbers
 
@@ -156,12 +159,28 @@ fixed-depth re-sort at the same number of pages.
 1. **Read the failure cases.** Build a small viewer with one tab per case in 4.2: query, gold pages (image and text),
    both top-10 lists, where each missed gold page ranked. Tag what the evidence is (text, table, chart, diagram).
    `miss_breakdown --per-query` already gives the rows.
-2. **Pool recall against pool size.** The gate stores only the top 100 (`POOL` in `light_retrieval.py`). Raise it and
-   rebuild the gate at 200, 500, 1,000 and the whole corpus, then rerun `miss_breakdown` to see how case 1 turns into
-   cases 2 and 3. The settings of the current gate are recorded inside the gate file (`variant`, `file_k` 3,
-   `w_dense` 0.7, cache `te3s_ppocr`); with the embedding cache this needs no API.
-   A larger pool alone will not help, since whole-corpus ColVec scores 68.60. It only helps together with a tool that
-   ranks differently.
+2. **Build a deep pool first (not built yet, start here).** The idea: light retrieval is what holds us back, so
+   take a very large pool, large enough that 85 to 90% or more of the gold pages are in it, and let the accurate
+   operators work on that pool to push R@10 toward 80.
+   - Today the pool is cut at 100 pages: `POOL = 100` in `light_retrieval.py`, and `gold_rank` in the gate file stops
+     at 100 too. At 100 the pool holds 87.50% of gold pages overall but only 74.27% on industrial, so industrial is
+     what a deeper pool has to fix.
+   - To do: add a `--pool` argument that replaces the `POOL` constant, and store the full list under a new key
+     (the code reads `light_run_top100`; keep that key as the first 100 so nothing else breaks).
+   - Rebuild the gate at 200, 500, 1,000 and the whole corpus, one new file per depth via `--name`, never overwriting
+     `gate_ppocrv5_backfill.json`. Keep its other settings, which are recorded inside the gate file: top 3 files then
+     backfill, `w_dense` 0.7, `--pages pages_ppocrv5.jsonl`, `--cache te3s_ppocr`. With the embedding cache in the
+     bundle this needs no API call. Check `python -m ondemand light-retrieval --help` for the defaults first.
+   - Then for each depth run `python -m ondemand.routing_ladder labels --gate <new gate> --k <depth>` and
+     `python -m ondemand.miss_breakdown --gate <new gate> --labels <new labels> --k <depth>`, and read how the
+     "not in the pool" points move into the two ranking cases. `routing_ladder labels` writes to a fixed file name
+     (`LABELS`), so copy or parameterise it per depth.
+   - ColVec over any depth is free: the cached matrix scores every query against all 5,091 pages.
+   - Expect this alone not to raise R@10. ColVec over the whole corpus scores 68.60 against 67.77 over the top 100,
+     and finds only 25 of the 194 out-of-pool gold pages. The deep pool gives the gold pages a chance; a tool that
+     ranks differently (step 3) has to pick them out.
+   - Watch the cost. Accurate operators are paid per page in the pool, which is why the pool was small. Report
+     every result with its pool size and pages scored.
 3. **One tool per case, each with a cost unit** (pages scored, model calls, seconds):
    - Case 1: query expansion or rewriting, a text index of VLM page descriptions, larger pool.
    - Case 2: a document-identification step before page ranking.
