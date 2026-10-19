@@ -173,6 +173,38 @@ On Colab or Kaggle: `python -m ondemand bundle --target adaptive`, upload the zi
 Environment: `VLLM_BIN` (a `vllm` binary in its own venv), `PPOCR_PYTHON`, `COLVEC_MODE`/`KDL_MODE`/..., `KDL_ENDPOINT`,
 `CHANDRA_ENDPOINT`, `COLVEC_ENDPOINT`, `PPOCR_ENDPOINT`, `OPENROUTER_API_KEY`.
 
+### Importing an offline XGBoost Adaptive-K policy
+
+The live pipeline does not train or import XGBoost. Training remains an
+offline research step and exports one integer `chosen_k` per query. Convert
+the nested-OOF CSV into a versioned policy, then attach it to a compatible
+retrieval gate:
+
+```bash
+python scripts/adaptive_k_policy.py export \
+  --predictions path/to/score_modality_oof.csv \
+  --output path/to/xgboost_topk_policy.json \
+  --name xgboost_score_modality_oof \
+  --source-run xgboost_adaptive_k_optimization_20261016 \
+  --metrics '{"mean_k": 59.4318, "macro_recall": 0.852258}'
+
+python scripts/adaptive_k_policy.py apply \
+  --policy ondemand/adaptive/xgboost_score_modality_oof_20261016.json \
+  --gate data/work/ondemand_v2/<fingerprint>/light_prep/gate_ppocrv5.json \
+  --output data/work/ondemand_v2/<fingerprint>/light_prep/gate_ppocrv5_xgb_topk.json
+
+python -m ondemand.adaptive run --tag xgb_topk \
+  --gate gate_ppocrv5_xgb_topk.json --k adaptive --router rule
+```
+
+The importer requires the policy qids to match the gate and refuses to
+silently cap K. The continuous policy can request up to 200 pages, so rebuild
+the global PP-OCRv5/Qwen gate after this change to materialise
+`light_run_top200`. `--allow-cap` is available only for an explicitly labelled
+diagnostic run. OOF qid lookups are benchmark evaluation artifacts, not a
+policy for unseen user queries; unseen queries continue to use the existing
+score-gap fallback.
+
 ---
 
 ## 5. Fallbacks

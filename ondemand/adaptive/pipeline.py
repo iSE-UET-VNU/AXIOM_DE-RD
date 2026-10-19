@@ -56,8 +56,18 @@ def git_state():
 
 def subdata_for(gate, qid, query):
     pages = gate["gate"][qid]
-    scores = dict(zip(pages, gate.get("gate_scores", {}).get(qid, [])))
-    return SubData(qid, query, gate.get("light_run_top100", {}).get(qid, pages), scores, len(pages))
+    # Continuous Adaptive-K experiments use a cap of 200.  Prefer the deepest
+    # explicitly materialised ranking, while retaining old top-100 gates.
+    ranked = gate.get("light_run_top200", {}).get(qid)
+    ranked_scores = gate.get("light_run_scores_top200", {}).get(qid)
+    if not ranked:
+        ranked = gate.get("light_run_top100", {}).get(qid, pages)
+        ranked_scores = gate.get("light_run_scores_top100", {}).get(qid)
+    if ranked_scores is None:
+        # Legacy gates only stored scores for the small initial gate.
+        ranked_scores = gate.get("gate_scores", {}).get(qid, [])
+    scores = dict(zip(ranked, ranked_scores))
+    return SubData(qid, query, ranked, scores, len(pages))
 
 
 def run(tag, gate_name, k="fixed:20", router="fixed:visual", escalate="none", branch_args=None, refine_k="fixed:10",

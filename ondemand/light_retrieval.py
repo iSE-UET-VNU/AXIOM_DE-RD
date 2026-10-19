@@ -219,7 +219,10 @@ def build(bench=BENCH, pages_name="pages_ocr_ppocr.jsonl", name=None, signals="a
                "gate": gate, "gate_scores": {q: [round(scores[q][u], 6) for u in gate[q]] for q in qids},
                "union": sorted(set().union(*gate.values())), "signal_notes": notes,
                "gold_rank": {q: {u: (ranked[q].index(u) + 1 if u in ranked[q] else None) for u in gold[q]} for q in qids},
-               "light_run_top100": {q: ranked[q][:POOL] for q in qids}}
+               "light_run_top100": {q: ranked[q][:POOL] for q in qids},
+               "light_run_scores_top100": {
+                   q: [round(scores[q][u], 6) for u in ranked[q][:POOL]] for q in qids
+               }}
     path = out / (name or f"gate_{variant}.json")
     path.write_text(json.dumps(payload), encoding="utf-8")
     for group, m in metrics.items():

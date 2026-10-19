@@ -49,7 +49,10 @@ class AdaptiveK(KPolicy):
     def choose(self, subdata):
         # 1. Gate-level precomputed confidence rule if available
         if subdata.qid in self.gate_adaptive:
-            return min(self.gate_adaptive[subdata.qid], len(subdata.pages))
+            k = int(self.gate_adaptive[subdata.qid])
+            if k < 1:
+                raise ValueError(f"adaptive K for {subdata.qid!r} must be positive, got {k}")
+            return min(k, len(subdata.pages))
 
         # 2. Dynamic score-gap rule
         candidates = subdata.pages[:20]

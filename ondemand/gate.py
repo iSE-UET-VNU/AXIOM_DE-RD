@@ -110,7 +110,11 @@ def build(bench=BENCH, name="gate_k20_best.json", pages_name="pages_ocr_sparse.j
                "union": union, "adaptive_k": adaptive,
                "adaptive_rule": f"k={K_CONFIDENT} if CV confidence >= {CONFIDENCE} else {K}",
                "gold_rank": {q: {u: (ranked[q].index(u) + 1 if u in ranked[q] else None) for u in gold[q]} for q in qids},
-               "light_run_top100": {q: ranked[q][:100] for q in qids}}
+               "light_run_top100": {q: ranked[q][:100] for q in qids},
+               "light_run_top200": {q: ranked[q][:POOL] for q in qids},
+               "light_run_scores_top200": {
+                   q: [round(float(fused[q][position[u]]), 6) for u in ranked[q][:POOL]] for q in qids
+               }}
     path = out / name
     path.write_text(json.dumps(payload))
     return path
