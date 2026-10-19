@@ -8,7 +8,7 @@ import numpy as np
 
 from ..bench import BENCH, group_of, load_jsonl, queries as load_queries, work, write_jsonl
 from ..qa import (ANSWER_PROMPT, GENERATOR, JUDGE, JUDGE_PROMPT, MAX_TOKENS, MAX_TOKENS_RETRY, SEED, TEMPERATURE,
-                  WORKERS, format_gold, generate, judge, settings_key)
+                  WORKERS, format_gold, generate, judge_detail, settings_key)
 
 
 def cache_path(folder, key):
@@ -27,12 +27,12 @@ def cached_or_refuse(folder, key, compute, allow_api, what):
 
 
 def judge_guarded(query, answers, answer, allow_api, bench):
-    folder = work("qa_cache", "judge", bench=bench)
+    folder = work("qa_cache", "judge_v2", bench=bench)
     prompt = JUDGE_PROMPT.format(query=query, true_answer=format_gold(answers), test_answer=answer.strip())
     key = settings_key(JUDGE) + prompt
     if not cache_path(folder, key).exists() and not allow_api:
         raise SystemExit("the judge call for this answer is not cached; rerun with --allow-api to permit it")
-    return judge(query, answers, answer)
+    return judge_detail(query, answers, answer)
 
 
 def run(tag, bench=BENCH, allow_api=False):
@@ -47,11 +47,13 @@ def run(tag, bench=BENCH, allow_api=False):
         try:
             answer = cached_or_refuse(work("qa_cache", "answers", bench=bench), settings_key(GENERATOR) + prompt,
                                       lambda: generate(prompt), allow_api, "the answer for this query")
-            label = judge_guarded(record["query"], record["answers"] or [""], answer["answer"], allow_api, bench)
+            verdict = judge_guarded(record["query"], record["answers"] or [""], answer["answer"], allow_api, bench)
+            label = verdict["judgment"]
         except Exception as error:
             return {"qid": record["query_id"], "answer": "", "label": None, "error": str(error)[:300],
                     "n_chunks": len(chunks)}
         return {"qid": record["query_id"], "answer": answer["answer"], "label": label, "error": None,
+                "explanation": verdict["explanation"],
                 "gen_seconds": answer["gen_seconds"], "n_chunks": len(chunks),
                 "correct": label == "Correct", "credited": label in ("Correct", "Partially Correct")}
 
@@ -88,7 +90,7 @@ def run(tag, bench=BENCH, allow_api=False):
     readable = [{"query_id": r["qid"], "group": group_of(r["qid"], queries[r["qid"]]),
                  "branch": by_qid[r["qid"]]["branch"], "k": by_qid[r["qid"]]["k"],
                  "query": by_qid[r["qid"]]["query"], "gold_answers": by_qid[r["qid"]]["answers"],
-                 "generated_answer": r["answer"], "judgment": r["label"],
+                 "generated_answer": r["answer"], "judgment": r["label"], "judge_explanation": r.get("explanation"),
                  "correct": bool(r.get("correct")), "credited": bool(r.get("credited")),
                  "n_chunks": r["n_chunks"], "gen_seconds": round(r.get("gen_seconds", 0.0), 3),
                  "error": r["error"]} for r in ordered]

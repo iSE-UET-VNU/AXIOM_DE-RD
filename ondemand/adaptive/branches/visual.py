@@ -1,5 +1,8 @@
+import json
 from dataclasses import replace
 from time import perf_counter
+
+import numpy as np
 
 from ...bench import BENCH, load_jsonl, work
 from .. import fallback, services
@@ -63,6 +66,36 @@ class EndpointColVec(ColVecScorer):
     mode = "endpoint"
 
 
+@register("scorer", "evie_cached")
+class CachedEVIE:
+    name = "evie"
+
+    def __init__(self, argument=None, bench=BENCH, **_):
+        keys = work("colvec", bench=bench)
+        folder = work("routing_axes", "k3", "k3_out_shard0", bench=bench)
+        self.meta = json.loads((folder / "meta.json").read_text())
+        self.matrix = np.load(folder / "evie_scores_2048.npy")
+        self.col = {k: i for i, k in enumerate(json.loads((keys / "colvec_keys.json").read_text()))}
+        self.row = {q: i for i, q in enumerate(json.loads((keys / "colvec_qids.json").read_text()))}
+
+    def prepare(self, items):
+        pass
+
+    def score(self, qid, pages, subdata=None, warn=True):
+        missing = [p for p in pages if qid not in self.row or p not in self.col]
+        if missing and warn:
+            fallback.warn("evie_cached", f"{len(missing)} of {len(pages)} pages of {qid} have no cached EVIE score; "
+                                         f"ranking them by the light-retrieval score instead")
+        fill = lambda p: subdata.scores.get(p, 0.0) if subdata else 0.0
+        return {p: fill(p) if p in missing else float(self.matrix[self.row[qid], self.col[p]]) for p in pages}
+
+    def seconds(self, pages):
+        return 0.0
+
+    def describe(self):
+        return f"evie:cached:{self.meta['evie_commit'][:8]}"
+
+
 class KDLParser:
     name = "kdl"
     mode = None
@@ -114,13 +147,37 @@ class VLLMKDL(KDLParser):
     mode = "vllm"
 
 
+@register("parser", "ppocrv5")
+class LightTextParser:
+    name = "ppocrv5"
+
+    def __init__(self, argument=None, bench=BENCH, pages_name="pages_ppocrv5.jsonl", **_):
+        source = work("light_prep", bench=bench) / (argument or pages_name)
+        self.text = {r["page_id"]: r["text"] for r in load_jsonl(source)}
+
+    def prepare(self, page_ids):
+        pass
+
+    def parse(self, page_ids):
+        text = {p: self.text.get(p, "") for p in page_ids}
+        return text, {"missing_pages": [p for p in page_ids if p not in self.text],
+                      "empty_pages": [p for p in page_ids if not text[p].strip()]}
+
+    def seconds(self, pages):
+        return 0.0
+
+    def describe(self):
+        return "ppocrv5:cached"
+
+
 @register("branch", "visual")
 class VisualBranch:
     name = "visual"
 
     def __init__(self, argument=None, scorer="colvec", parser="kdl", refine_k="fixed:10", **context):
-        self.scorer = build("scorer", argument or scorer, **context)
-        self.parser = build("parser", parser, **context)
+        scorer_spec, _, parser_spec = (argument or scorer).partition("+")
+        self.scorer = build("scorer", scorer_spec, **context)
+        self.parser = build("parser", parser_spec or parser, **context)
         self.refine_k = build("k", refine_k, **context)
 
     def rank(self, subdata, warn=True):

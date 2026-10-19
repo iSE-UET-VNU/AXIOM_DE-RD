@@ -95,6 +95,11 @@ class HybridRanker(Ranker):
         return f"hybrid:{self.alpha}"
 
 
+def reading_order(chunk):
+    doc, _, page = chunk.page_id.partition("#page=")
+    return doc, int(page) if page.isdigit() else 0, chunk.position
+
+
 class ChunkRank:
     def __init__(self, chunker, ranker, top_chunks=10):
         self.chunker, self.ranker, self.top_chunks = chunker, ranker, top_chunks
@@ -103,5 +108,6 @@ class ChunkRank:
         started = perf_counter()
         chunks = self.chunker(passages)
         top, notes = self.ranker.rank(query, chunks, self.top_chunks)
+        top = sorted(top, key=reading_order)
         return top, {"seconds": perf_counter() - started, "chunker": self.chunker.describe(),
-                     "ranker": self.ranker.describe(), **notes}
+                     "ranker": self.ranker.describe(), "order": "reading", **notes}

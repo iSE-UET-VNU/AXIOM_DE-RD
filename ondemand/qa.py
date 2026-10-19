@@ -127,6 +127,21 @@ def judge(query, answers, answer):
                       chat(JUDGE, prompt, max_tokens=256, temperature=TEMPERATURE, seed=SEED))})["judgment"]
 
 
+def parse_reply(reply):
+    text = _FENCE.sub("", (reply or "").strip())
+    try:
+        explanation = str(json.loads(text).get("explanation", ""))
+    except (ValueError, AttributeError):
+        explanation = text
+    return {"judgment": parse_judgment(reply), "explanation": explanation}
+
+
+def judge_detail(query, answers, answer):
+    prompt = JUDGE_PROMPT.format(query=query, true_answer=format_gold(answers), test_answer=answer.strip())
+    return cached(work("qa_cache", "judge_v2"), settings_key(JUDGE) + prompt,
+                  lambda: parse_reply(chat(JUDGE, prompt, max_tokens=256, temperature=TEMPERATURE, seed=SEED)))
+
+
 def run(tag, arm, bench=BENCH):
     res = work("results", tag, bench=bench)
     recs = load_jsonl(res / "per_query.jsonl")

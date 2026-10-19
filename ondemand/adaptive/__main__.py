@@ -68,7 +68,7 @@ def main():
 
     p = sub.add_parser("run", help="gate -> k -> router -> per-model stages -> chunk&rank -> QA, resumable")
     p.add_argument("--tag", required=True)
-    p.add_argument("--gate", default="gate_ppocrv5_all.json")
+    p.add_argument("--gate", default="gate_ppocrv5_ungated.json")
     p.add_argument("--pages", default="pages_ppocrv5.jsonl")
     p.add_argument("--k", default="fixed:20")
     p.add_argument("--router", default="rule")
@@ -89,7 +89,7 @@ def main():
 
     p = sub.add_parser("query", help="one benchmark query id or free-text query")
     p.add_argument("query_text")
-    p.add_argument("--gate", default="gate_ppocrv5_all.json")
+    p.add_argument("--gate", default="gate_ppocrv5_ungated.json")
     p.add_argument("--pages", default="pages_ppocrv5.jsonl")
     p.add_argument("--router", default="rule")
     p.add_argument("--branch", choices=("light", "enrich", "visual"), help="skip the router")
@@ -108,7 +108,7 @@ def main():
     p.add_argument("--qid", help="colvec: benchmark query id")
     p.add_argument("--query", help="colvec: free-text query")
     p.add_argument("--verify", type=int, metavar="N", help="colvec: rescore N gate queries, compare with the corpus matrix")
-    p.add_argument("--gate", default="gate_ppocrv5_all.json")
+    p.add_argument("--gate", default="gate_ppocrv5_ungated.json")
     p.add_argument("--out", help="write the JSON here instead of stdout")
     add_service_args(p)
 

@@ -13,6 +13,7 @@ from .bench import ROOT
 load_dotenv(ROOT / ".env")
 
 URL = (os.getenv("OPENROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
+DECISIONS = "https://openrouter.ai/api/alpha/decisions"
 
 
 def _get_api_key():
@@ -34,7 +35,8 @@ def _post(path, body, timeout=180, retries=4):
         if attempt:
             time.sleep(min(2 ** attempt, 30))
         try:
-            response = requests.post(f"{URL}/{path}", json=body, timeout=timeout, headers=headers)
+            response = requests.post(path if path.startswith("https://") else f"{URL}/{path}", json=body,
+                                     timeout=timeout, headers=headers)
             payload = response.json()
         except (requests.RequestException, ValueError) as error:
             last = str(error)
@@ -69,16 +71,33 @@ def embed(texts, model, cache_dir, batch=32):
     return np.asarray(out, dtype=np.float32)
 
 
-def chat(model, content, max_tokens=512, temperature=0.0, seed=None):
+def chat(model, content, max_tokens=512, temperature=0.0, seed=None, provider=None, logprobs=None,
+         response_format=None, full=False):
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": content}]}
     if seed is not None:
         body["seed"] = seed
+    if provider is not None:
+        body["provider"] = provider if isinstance(provider, dict) else {"order": [provider], "allow_fallbacks": False}
+    if logprobs is not None:
+        body["logprobs"] = True
+        body["top_logprobs"] = logprobs
+    if response_format is not None:
+        body["response_format"] = response_format
     for attempt in range(3):
         if attempt:
             time.sleep(2 ** attempt)
         payload = _post("chat/completions", body)
-        text = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        choice = (payload.get("choices") or [{}])[0]
+        text = (choice.get("message") or {}).get("content") or ""
         if text.strip():
-            return text
+            if full:
+                return payload
+            if logprobs is None:
+                return text
+            return text, (choice.get("logprobs") or {}).get("content") or []
     raise RuntimeError(f"{model}: empty content after 3 attempts")
+
+
+def decide(model, state, questions):
+    return _post(DECISIONS, {"model": model, "state": state, "questions": questions})
