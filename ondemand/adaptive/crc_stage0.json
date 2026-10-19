@@ -1,0 +1,33 @@
+{
+ "eps": 0.02,
+ "loss": "r10",
+ "features": [
+  "top1_top2_gap",
+  "mean_words_top10",
+  "mean_ocr_top10",
+  "mean_scanned_top10"
+ ],
+ "scaler_mean": [
+  0.10557676907454695,
+  259.61588785046735,
+  0.21168224299065436,
+  0.11635514018691588
+ ],
+ "scaler_scale": [
+  0.14544251931013846,
+  146.35479496503845,
+  0.33670194251875674,
+  0.24979203508385747
+ ],
+ "coef": [
+  0.8029756886506471,
+  0.1423141235334602,
+  0.9700950869095717,
+  -0.16744034637086253
+ ],
+ "intercept": 1.4891826632074683,
+ "tau": 0.7325019127584353,
+ "fit_n": 214,
+ "fit_skip_rate": 0.4205607476635514,
+ "fit_source": "routing_axes/crc_router.py stage0_feats, fit on all 214 non-flawed queries (production: no held-out fold available)"
+}

@@ -1,8 +1,10 @@
+import json
 import os
 import re
+from pathlib import Path
 
 from ..bench import BENCH, load_jsonl, work
-from ..text import mostly_image
+from ..text import mostly_image, real_text
 from . import fallback
 from .config import get_config
 from .registry import register
@@ -96,4 +98,42 @@ class RuleRouter(Router):
 
     def describe(self):
         return f"rule:{self.argument}"
+
+
+@register("router", "crc")
+class CRCRouter(Router):
+    name = "crc"
+
+    def __init__(self, argument=None, bench=BENCH, pages_name="pages_ppocrv5.jsonl", model_path=None, **_):
+        self.argument = argument or "stage0"
+        path = Path(model_path) if model_path else Path(__file__).with_name("crc_stage0.json")
+        self.model = json.loads(path.read_text())
+        source = work("light_prep", bench=bench) / pages_name
+        self.pages = {r["page_id"]: r for r in load_jsonl(source)} if source.exists() else {}
+        if not self.pages:
+            fallback.warn("router_pages", f"{source.name} is missing, so the CRC router cannot score "
+                                          "ingest features and will route everything to visual")
+
+    def sufficiency(self, subdata):
+        pages = subdata.pages
+        top50 = sorted((subdata.scores.get(p, 0.0) for p in pages[:50]), reverse=True)
+        gap = top50[0] - top50[1] if len(top50) > 1 else 1.0
+        top10 = pages[:10]
+        words = sum(len(real_text(self.pages.get(p, {}).get("text") or "").split()) for p in top10) / max(len(top10), 1)
+        ocr = sum(bool(self.pages.get(p, {}).get("ocr_applied")) for p in top10) / max(len(top10), 1)
+        scanned = sum(self.pages.get(p, {}).get("pdf_type") != "text_based" for p in top10) / max(len(top10), 1)
+        x = [(v - m) / s for v, m, s in zip((gap, words, ocr, scanned), self.model["scaler_mean"], self.model["scaler_scale"])]
+        z = sum(c * v for c, v in zip(self.model["coef"], x)) + self.model["intercept"]
+        return 1 / (1 + pow(2.718281828459045, -z))
+
+    def route(self, subdata):
+        if not self.pages:
+            return "visual", {"reason": "crc_no_ingest_features"}
+        prob = self.sufficiency(subdata)
+        if prob >= self.model["tau"]:
+            return "light", {"reason": "crc_sufficient", "prob": round(prob, 4), "tau": self.model["tau"]}
+        return "visual", {"reason": "crc_insufficient", "prob": round(prob, 4), "tau": self.model["tau"]}
+
+    def describe(self):
+        return f"crc:{self.argument}:eps={self.model['eps']}"
 

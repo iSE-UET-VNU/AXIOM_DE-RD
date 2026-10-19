@@ -15,6 +15,7 @@ from . import chunk_rank as _chunk_rank, kpolicy as _kpolicy, router as _router 
 from .branches import enrich, light, visual  # noqa: F401
 from ..light_retrieval import LiveRetriever
 from .chunk_rank import ChunkRank
+from .escalate import jev_check, route_action
 from . import fallback, services
 from .config import MODES, get_config
 from .embedding import Embedder
@@ -59,7 +60,7 @@ def subdata_for(gate, qid, query):
     return SubData(qid, query, gate.get("light_run_top100", {}).get(qid, pages), scores, len(pages))
 
 
-def run(tag, gate_name, k="fixed:20", router="fixed:visual", branch_args=None, refine_k="fixed:10",
+def run(tag, gate_name, k="fixed:20", router="fixed:visual", escalate="none", branch_args=None, refine_k="fixed:10",
         chunker="fixed:512:128", ranker="hybrid", top_chunks=10, pages_name="pages_ppocrv5.jsonl",
         cache_name="te3s_ppocr", store=None, allow_api=False, limit=None, bench=BENCH, with_qa=False,
         exclude_flawed=False, resume=False, keep_loaded=False, **service_overrides):
@@ -70,9 +71,9 @@ def run(tag, gate_name, k="fixed:20", router="fixed:visual", branch_args=None, r
     console()
     handler = attach(out / "run.log")
     try:
-        return _run(tag, out, records_path, gate_name, k, router, branch_args or {}, refine_k, chunker, ranker,
-                    top_chunks, pages_name, cache_name, store, allow_api, limit, bench, with_qa, exclude_flawed,
-                    keep_loaded, service_overrides)
+        return _run(tag, out, records_path, gate_name, k, router, escalate, branch_args or {}, refine_k, chunker,
+                    ranker, top_chunks, pages_name, cache_name, store, allow_api, limit, bench, with_qa,
+                    exclude_flawed, keep_loaded, service_overrides)
     except BaseException as error:
         log.error("run %s stopped: %s: %s; rerun with --resume to continue", tag, type(error).__name__, error)
         raise
@@ -81,7 +82,7 @@ def run(tag, gate_name, k="fixed:20", router="fixed:visual", branch_args=None, r
         detach(handler)
 
 
-def _run(tag, out, records_path, gate_name, k, router, branch_args, refine_k, chunker, ranker, top_chunks,
+def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, refine_k, chunker, ranker, top_chunks,
          pages_name, cache_name, store, allow_api, limit, bench, with_qa, exclude_flawed, keep_loaded, overrides):
     fallback.reset()
     services.close_all()
@@ -100,9 +101,9 @@ def _run(tag, out, records_path, gate_name, k, router, branch_args, refine_k, ch
         qids = qids[:limit]
 
     settings = {"gate": gate_name, "gate_variant": gate["variant"], "pages_source": pages_name, "k": k,
-                "router": router, "branch_args": branch_args, "refine_k": refine_k, "chunker": chunker,
-                "ranker": ranker, "top_chunks": top_chunks, "embedding_cache": cache_name, "embedding_store": store,
-                "exclude_flawed": exclude_flawed, "limit": limit, "services": cfg.public()}
+                "router": router, "escalate": escalate, "branch_args": branch_args, "refine_k": refine_k,
+                "chunker": chunker, "ranker": ranker, "top_chunks": top_chunks, "embedding_cache": cache_name,
+                "embedding_store": store, "exclude_flawed": exclude_flawed, "limit": limit, "services": cfg.public()}
     manifest_path = out / "manifest.json"
     if manifest_path.exists():
         previous = json.loads(manifest_path.read_text())
@@ -161,6 +162,19 @@ def _run(tag, out, records_path, gate_name, k, router, branch_args, refine_k, ch
         started, before = perf_counter(), fallback.snapshot()
         output = branch_of(name).run(subdata)
         top, chunk_notes = chunk_rank.run(query, output.passages)
+        escalation = None
+        if escalate == "jev" and name == "light":
+            verdict = jev_check(query, top, allow_api, bench=bench)
+            action = route_action(verdict)
+            escalation = {"checked": True, "action": action, "from": name}
+            if action != "complete":
+                visual = branch_of("visual")
+                if hasattr(visual, "prepare"):
+                    visual.prepare([subdata])
+                output = visual.run(subdata)
+                top, chunk_notes = chunk_rank.run(query, output.passages)
+                name = "visual"
+                escalation["to"] = name
         used = fallback.since(before)
         for kind, n in item["fallbacks"].items():
             used[kind] = used.get(kind, 0) + n
@@ -170,7 +184,7 @@ def _run(tag, out, records_path, gate_name, k, router, branch_args, refine_k, ch
         record = {
             "query_id": qid, "source": queries[qid]["source"], "query": query, "answers": queries[qid]["answers"],
             "gold": [{"unit": u, "relevance": g} for u, g in gold[qid].items()],
-            "k": subdata.k, "branch": name, "route": item["route"], "fallbacks": used,
+            "k": subdata.k, "branch": name, "route": item["route"], "escalation": escalation, "fallbacks": used,
             "subdata": [{"unit": u, "rank": r + 1} for r, u in enumerate(subdata.top())],
             "branch_pages": [{"unit": p.page_id, "rank": p.rank} for p in output.passages],
             "branch_notes": output.notes, "cost": cost,

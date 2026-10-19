@@ -72,6 +72,8 @@ def main():
     p.add_argument("--pages", default="pages_ppocrv5.jsonl")
     p.add_argument("--k", default="fixed:20")
     p.add_argument("--router", default="rule")
+    p.add_argument("--escalate", choices=("none", "jev"), default="none",
+                   help="after light's chunks are ranked, ask Jev whether to re-route that query to visual")
     p.add_argument("--refine-k", default="fixed:10")
     p.add_argument("--branch-arg", action="append", default=[], metavar="BRANCH=SPEC")
     p.add_argument("--chunk", default="fixed:512:128")
@@ -129,7 +131,7 @@ def main():
 
     args = ap.parse_args()
     if args.cmd == "run":
-        pipeline.run(args.tag, args.gate, k=args.k, router=args.router,
+        pipeline.run(args.tag, args.gate, k=args.k, router=args.router, escalate=args.escalate,
                      branch_args=dict(item.split("=", 1) for item in args.branch_arg), refine_k=args.refine_k,
                      chunker=args.chunk, ranker=args.ranker, top_chunks=args.top_chunks, pages_name=args.pages,
                      cache_name=args.cache, store=args.store, allow_api=args.allow_api, limit=args.limit,
