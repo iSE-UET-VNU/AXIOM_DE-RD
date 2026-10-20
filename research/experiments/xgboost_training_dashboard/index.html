@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>XGBoost Continuous-K Training Audit</title>
+  <meta name="description" content="Interactive audit of score-only XGBoost continuous-K training data, predictions, losses, and failure modes.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">ADAPTIVE RETRIEVAL · MODEL AUDIT</p>
+      <h1>XGBoost Continuous-K</h1>
+      <p id="subtitle" class="subtitle"></p>
+    </div>
+    <div class="status"><span></span> Diagnostic run</div>
+  </header>
+
+  <nav class="tabs" aria-label="Dashboard sections">
+    <button class="tab active" data-target="overview">Overview</button>
+    <button class="tab" data-target="data">Training data</button>
+    <button class="tab" data-target="training">Training diagnostics</button>
+    <button class="tab" data-target="features">Features</button>
+    <button class="tab" data-target="provenance">Provenance & issues</button>
+  </nav>
+
+  <main>
+    <section id="overview" class="panel active">
+      <div id="metricCards" class="metric-grid"></div>
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head"><div><p class="kicker">LABELS</p><h2>Continuous-K distribution</h2></div></div>
+          <div id="labelDistribution" class="chart"></div>
+        </article>
+        <article class="card">
+          <div class="card-head"><div><p class="kicker">SOURCES</p><h2>Domain shift</h2></div></div>
+          <div id="sourceDistribution" class="chart"></div>
+        </article>
+      </div>
+      <article class="card">
+        <div class="card-head"><div><p class="kicker">AUDIT FIRST</p><h2>Known issues before optimization</h2></div></div>
+        <div id="issuesOverview" class="issue-grid"></div>
+      </article>
+    </section>
+
+    <section id="data" class="panel">
+      <article class="card table-card">
+        <div class="card-head table-toolbar">
+          <div><p class="kicker">220 QUERY ROWS</p><h2>Features, labels and predictions</h2></div>
+          <div class="controls">
+            <input id="searchInput" type="search" placeholder="Search qid or query…" aria-label="Search rows">
+            <select id="splitFilter" aria-label="Filter by split"><option value="all">All splits</option><option>train</option><option>validation</option><option>test</option></select>
+            <select id="sourceFilter" aria-label="Filter by source"><option value="all">All sources</option></select>
+            <select id="classFilter" aria-label="Filter by target class"><option value="all">All target classes</option></select>
+          </div>
+        </div>
+        <div class="table-note">Click a row to inspect all 21 features, its score curve, and gold-page positions. Click a header to sort.</div>
+        <div class="table-wrap"><table id="queryTable"><thead></thead><tbody></tbody></table></div>
+        <div class="pagination"><button id="prevPage">← Previous</button><span id="pageStatus"></span><button id="nextPage">Next →</button></div>
+      </article>
+      <article id="rowInspector" class="card inspector empty">
+        <div class="empty-state">Select a query row to inspect its model inputs and retrieval curve.</div>
+      </article>
+    </section>
+
+    <section id="training" class="panel">
+      <div id="splitMetrics" class="metric-grid split"></div>
+      <article class="card">
+        <div class="card-head">
+          <div><p class="kicker">BOOSTING HISTORY</p><h2>Train / validation / test loss</h2></div>
+          <div class="segmented"><button class="active" data-loss="rmse">RMSE</button><button data-loss="mae">MAE</button></div>
+        </div>
+        <div id="lossChart" class="chart tall"></div>
+        <p class="footnote">Early stopping observes validation only. Test loss is reconstructed after training for diagnosis and does not select the best iteration.</p>
+      </article>
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head"><div><p class="kicker">DERIVED CLASSES</p><h2>Confusion matrix</h2></div><select id="matrixSplit"><option>test</option><option>validation</option><option>train</option></select></div>
+          <div id="confusionMatrix" class="matrix-wrap"></div>
+        </article>
+        <article class="card">
+          <div class="card-head"><div><p class="kicker">ERROR SHAPE</p><h2>Prediction vs target</h2></div><select id="scatterSplit"><option>test</option><option>validation</option><option>train</option><option>all</option></select></div>
+          <div id="predictionScatter" class="chart"></div>
+        </article>
+      </div>
+      <article class="card">
+        <div class="card-head"><div><p class="kicker">CONFIGURATION</p><h2>Parameters and runtime</h2></div></div>
+        <div id="parameterGrid" class="parameter-grid"></div>
+      </article>
+    </section>
+
+    <section id="features" class="panel">
+      <div class="grid two feature-layout">
+        <article class="card">
+          <div class="card-head"><div><p class="kicker">MODEL USE</p><h2>Gain importance</h2></div></div>
+          <div id="importanceChart" class="chart tall"></div>
+        </article>
+        <article class="card">
+          <div class="card-head"><div><p class="kicker">REDUNDANCY</p><h2>Correlation matrix</h2></div></div>
+          <div id="correlationMatrix" class="correlation-wrap"></div>
+        </article>
+      </div>
+      <article class="card">
+        <div class="card-head"><div><p class="kicker">DATA DICTIONARY</p><h2>Every input feature</h2></div></div>
+        <div class="table-wrap"><table id="featureTable"></table></div>
+      </article>
+    </section>
+
+    <section id="provenance" class="panel">
+      <div class="grid two">
+        <article class="card narrative"><p class="kicker">SCORE PIPELINE</p><h2>What “raw score” actually means</h2><pre id="scoreProvenance"></pre></article>
+        <article class="card narrative"><p class="kicker">TARGET PIPELINE</p><h2>How the label is produced</h2><pre id="labelProvenance"></pre></article>
+      </div>
+      <article class="card"><div class="card-head"><div><p class="kicker">FULL AUDIT</p><h2>Issues and decisions required</h2></div></div><div id="issuesFull" class="issue-list"></div></article>
+      <article class="card"><div class="card-head"><div><p class="kicker">EXPERIMENT CONTRACT</p><h2>Split, versions and guardrails</h2></div></div><div id="metaGrid" class="parameter-grid"></div></article>
+    </section>
+  </main>
+
+  <footer>Generated from the exact diagnostic training run · no remote data calls</footer>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -394,3 +394,18 @@ https://arxiv.org/abs/2410.10594
 - Report bootstrap intervals and per-query gains/losses; do not claim a
   method is better from a same-set sweep alone.
 - Every new experiment must be a new script and a new output directory.
+
+## Current merged-benchmark handoff (2026-09-29)
+
+The 302-query French Physics/V-SPLADE protocol described above is historical
+for the current work. The active benchmark is now the merged 220-query set:
+80 Physics, 75 Industrial and 65 OHR-Bench queries over 103 files and 5,091
+pages. The authoritative current results, qrel composition, parser audits and
+oracle QA findings are maintained in the repository-level `../AGENTS.md`, in
+the section **Oracle QA with all gold pages (2026-09-29)** and the preceding
+merged-benchmark handoff. Read that section before starting a new experiment.
+
+In particular, the oracle QA arm uses qrels to provide all gold-page KDL text
+to the generator and is an answer-quality upper bound, not a retrieval score.
+Its runner is `research/experiments/evaluate_merged_oracle_kdl_qa.py`; do not
+mix its outputs with ordinary light-retrieval or accurate-retrieval metrics.
