@@ -184,14 +184,33 @@ class VisualBranch:
     name = "visual"
 
     def __init__(self, argument=None, scorer="colvec", parser="kdl", refine_k="fixed:10", **context):
-        scorer_spec, _, parser_spec = (argument or scorer).partition("+")
+        scorer_spec, _, rest = (argument or scorer).partition("+")
+        parser_spec, _, stop_spec = rest.partition("+")
         self.scorer = build("scorer", scorer_spec, **context)
         self.parser = build("parser", parser_spec or parser, **context)
         self.refine_k = build("k", refine_k, **context)
+        self.stop = int(stop_spec.partition(":")[2]) if stop_spec else 0
+
+    def stop_early(self, subdata, warn):
+        light = subdata.top()
+        docs = {p.split("#page=")[0] for p in light[:10]}
+        order = [p for p in light if p.split("#page=")[0] in docs] + [p for p in light if p.split("#page=")[0] not in docs]
+        scores, streak = {}, 0
+        for page in order:
+            best = sorted(scores.values(), reverse=True)
+            s = self.scorer.score(subdata.qid, [page], subdata=subdata, warn=warn)[page]
+            streak = 0 if len(best) < 10 or s > best[9] else streak + 1
+            scores[page] = s
+            if streak >= self.stop:
+                break
+        return list(scores), scores
 
     def rank(self, subdata, warn=True):
-        candidates = subdata.top()
-        scores = self.scorer.score(subdata.qid, candidates, subdata=subdata, warn=warn)
+        if self.stop:
+            candidates, scores = self.stop_early(subdata, warn)
+        else:
+            candidates = subdata.top()
+            scores = self.scorer.score(subdata.qid, candidates, subdata=subdata, warn=warn)
         ranked = sorted(candidates, key=lambda p: (-scores.get(p, 0.0), p))
         refined = subdata.__class__(subdata.qid, subdata.query, ranked, scores, len(ranked), source="visual")
         return candidates, scores, ranked[:self.refine_k.choose(refined)]
@@ -218,4 +237,5 @@ class VisualBranch:
                                    "scores": {p: round(scores.get(p, 0.0), 6) for p in keep}, **notes})
 
     def describe(self):
-        return f"visual:{self.scorer.describe()}+{self.parser.describe()}"
+        stop = f"+stop:{self.stop}" if self.stop else ""
+        return f"visual:{self.scorer.describe()}+{self.parser.describe()}{stop}"
