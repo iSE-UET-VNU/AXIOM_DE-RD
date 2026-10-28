@@ -71,10 +71,18 @@ class CachedEVIE:
     name = "evie"
 
     def __init__(self, argument=None, bench=BENCH, **_):
+        if argument not in ("", None, "skip_blank"):
+            raise SystemExit(f"unknown evie_cached variant {argument!r}; available: skip_blank")
         keys = work("colvec", bench=bench)
-        folder = work("routing_axes", "k3", "k3_out_shard0", bench=bench)
-        self.meta = json.loads((folder / "meta.json").read_text())
-        self.matrix = np.load(folder / "evie_scores_2048.npy")
+        self.variant = argument or "full"
+        if self.variant == "skip_blank":
+            folder = work("routing_axes", "k13", bench=bench)
+            self.meta = json.loads((folder / "meta_v2_all.json").read_text())["k13_meta"]
+            self.matrix = np.load(folder / "scores_v2_all.npy")
+        else:
+            folder = work("routing_axes", "k3", "k3_out_shard0", bench=bench)
+            self.meta = json.loads((folder / "meta.json").read_text())
+            self.matrix = np.load(folder / "evie_scores_2048.npy")
         self.col = {k: i for i, k in enumerate(json.loads((keys / "colvec_keys.json").read_text()))}
         self.row = {q: i for i, q in enumerate(json.loads((keys / "colvec_qids.json").read_text()))}
 
@@ -93,7 +101,8 @@ class CachedEVIE:
         return 0.0
 
     def describe(self):
-        return f"evie:cached:{self.meta['evie_commit'][:8]}"
+        suffix = "" if self.variant == "full" else f":{self.variant}"
+        return f"evie:cached:{self.meta['evie_commit'][:8]}{suffix}"
 
 
 class KDLParser:
