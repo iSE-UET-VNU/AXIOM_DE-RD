@@ -103,6 +103,8 @@ data/benchmark/
 # Adaptive LLM run outputs (per-query QA/judge caches, traces and reports).
 # Keep the research scripts and the tracked results README visible to Git.
 /research/adaptive/llm/results/
+# Query-preparation experiment outputs (rebuilt screens, LLM caches, reports).
+/research/query_preparation/results/
 
 # Retrieval artifacts are build output, keyed by config_hash and rebuilt from the
 # chunk manifest. The BM25 index over a full corpus is large and derived.

@@ -33,6 +33,9 @@ sparse retriever over rendered page images.
   ingestion and downstream QA.
 - `research/experiments/`: benchmark runners and analysis scripts still cited
   in this file (one-off scripts were moved to `archive/`).
+- `research/query_preparation/`: query-side processing (keyword extraction,
+  decomposition), its driver, the query review UI and git-ignored `results/`.
+  Active research direction as of 2026-11-10; see its `README.md`.
 - `research/baselines/hierarchical_light/`: the hierarchical light BM25
   baseline and the `ondemand` package (`enfr`, `PageBM25`) imported by the
   query-preparation and adaptive-K code (formerly `_repro_retrieval_baseline/`).
@@ -1199,3 +1202,171 @@ cache entries, but that is not the incremental price of this comparison.
    signals; source ID and qrels must remain unavailable at inference time.
 5. Report strict Correct, Correct+Partial, prefix recall and EVIE Recall@10
    together. A cheaper policy should not be called better solely from QA credit.
+
+## Query preparation / pain-point decomposition screen (2026-11-10)
+
+The recent query-preparation experiments focus on Industrial queries with long
+or noisy wording. The goal is to preserve discriminative entities and answer
+facets while reducing broad lexical matches. These are exploratory retrieval
+screens on the existing PP-OCRv5 page corpus; they do not change the canonical
+retrieval pipeline or benchmark artifacts.
+
+### Artifacts and reproducibility status
+
+Outputs are under `data/work/query_preparation/`:
+
+- `industrial_all_keyword_fusion/`: full 75-query keyword extraction and
+  retrieval comparison. Read `report.md`; `keyword_queries.jsonl` stores the
+  generated pain-point phrases and `per_query.jsonl` stores per-query ranks and
+  metrics. `metrics.json` has aggregate metrics. The `extractor_cache/` holds
+  cached LLM extraction responses. A looser first-prompt pilot is preserved in
+  `loose_extraction_pilot/`; use the parent report/final artifacts for the
+  strict experiment.
+- `industrial_192_painpoint_fusion/`: focused analysis for
+  `vidore_industrial::192`, with `report.md`, `experiment.json` and a compact
+  embedding cache.
+- `industrial_low_recall_decomposition/strict_prompt_v2/`: the final
+  low-recall decomposition screen. Read `report.md`; `decompositions.jsonl`
+  records each keep/decompose decision and subqueries, `per_query.jsonl`
+  records retrieval/reranking details, `metrics.json` has aggregates, and
+  `decision_cache/` preserves LLM responses. The earlier, weaker prompt is
+  retained in `initial_prompt_v1/` for audit; do not treat it as the final
+  decomposition result.
+
+The original one-off drivers were lost; they were rebuilt on 2026-11-10 as
+`research/query_preparation/query_preparation_screen.py` with subcommands
+`keywords`, `decompose`, `focus` and `verify`. In the default
+`--llm-mode replay`, the saved LLM outputs (`keyword_queries.jsonl`,
+`decompositions.jsonl`) are reused, with no API calls. The rebuild reproduces
+all five original artifacts exactly (every per-query top-20/EVIE top-10, gold
+rank and macro metric): strict keywords, loose pilot, q192 focus, decomposition
+v1 and strict v2. Rebuilt outputs are under `research/query_preparation/results/rebuild/`.
+Details that had to be recovered empirically:
+BM25 and chunking use `real_text()` (strips `[Image: ...]`); dense uses
+**cosine** (not raw dot) max-pooled per chunk; the saved hybrid is
+`light_run_top100` in `gate_ppocrv5_ungated.json`; EVIE indices come from
+`colvec_qids.json`/`colvec_keys.json`. The original prompts were not preserved:
+`--llm-mode live` uses reconstructed prompts (`reconstructed_*_v1`) and must
+write to a new output directory and be labelled as a new prompt version. The
+original strict-v2 `metrics.json` has a literal trailing `\n` after the JSON
+object; `verify` reads it leniently. `tmp/query_review/update_query_metrics.mjs`
+is a workbook updater, not an experiment driver. No production code was changed.
+
+Reproduce and check:
+
+```powershell
+python research/query_preparation/query_preparation_screen.py keywords
+python research/query_preparation/query_preparation_screen.py decompose
+python research/query_preparation/query_preparation_screen.py focus --qid vidore_industrial::192
+python research/query_preparation/query_preparation_screen.py verify `
+  --original data/work/query_preparation/industrial_low_recall_decomposition/strict_prompt_v2 `
+  --rebuilt research/query_preparation/results/rebuild/decompose
+```
+
+### Full Industrial keyword screen
+
+- 75 Industrial questions; 5,091 PP-OCRv5 pages.
+- GPT-4o-mini selected pain-point phrases from query text only; qrels and
+  reference answers were not sent to the extractor. Extracted phrases were
+  validated against terms in the original question.
+- BM25 used the frozen `enfr` analyzer and PageBM25 implementation.
+- The exploratory fusion combines compact-query BM25 with cached
+  `text-embedding-3-small` vectors for the original full query: fixed weights
+  0.30/0.70, per-signal min-max normalization over each signal's top 100,
+  dense chunk scores max-pooled by page. This page-level arm omits the saved
+  hierarchical baseline's parent/file boost.
+
+| Arm | Recall@10 | Recall@50 | Recall@100 |
+|---|---:|---:|---:|
+| BM25, full query | 46.14% | 64.21% | 69.88% |
+| BM25, extracted pain-point phrases | 45.20% | 63.76% | 70.90% |
+| Pain-point BM25 + original-query embedding | 46.94% | 67.64% | 78.45% |
+| Saved original hierarchical hybrid | 48.53% | 69.11% | 79.20% |
+
+At Recall@100, keyword BM25 beats/ties/loses to full-query BM25 on 7/64/4
+queries. Adding original-query embeddings to keyword BM25 beats/ties/loses on
+21/49/5. Initial signal: compact lexical terms help reduce noise at deeper
+recall when combined with semantics, but the exploratory fusion has not beaten
+the saved hierarchical hybrid and is not an apples-to-apples replacement.
+
+### Focused Industrial query 192
+
+Query: “Describe the key safety steps and servicing procedures for concurrent
+servicing of the R-12 HSV as per the USAF technical manuals and orders.” The
+two annotated gold pages were the table-of-contents page (zero-based page 4)
+and the concurrent-operations procedure page (zero-based page 77).
+
+| Arm | Gold ranks (TOC, procedure) | Recall@10 | Recall@50 | Recall@100 |
+|---|---|---:|---:|---:|
+| BM25, full query | 99, >100 | 0% | 0% | 50% |
+| BM25, pain-point terms | 20, 24 | 0% | 100% | 100% |
+| Saved original hybrid | >100, 13 | 0% | 50% | 50% |
+| Pain BM25 + full-query embedding | 60, 6 | 50% | 50% | 100% |
+| Pain BM25 + compact-sentence embedding | 62, 8 | 50% | 50% | 100% |
+
+Pain-point terms were `safety servicing procedures concurrent servicing R-12
+HSV`; the compact semantic query was “Safety and servicing procedures for
+concurrent servicing of the R-12 HSV.” The two new fusion rows are page-level
+and omit the hierarchical file-parent boost. Treat this as a single-query
+diagnostic, not an aggregate result. The surrounding ranks also suggest some
+qrel incompleteness: a neighboring page titled “Concurrent Servicing Operations
+Procedures” is relevant-looking but is not one of the annotated gold pages.
+
+### Low-recall decomposition screen
+
+- Selected 18 of the 75 Industrial questions whose saved original-hybrid
+  Discovery Recall@100 was below 0.60. This is a qrel-selected exploratory
+  subset; its metrics are not an unbiased estimate for all queries.
+- GPT-4o-mini made the keep/decompose decision using only query text, with 18
+  concurrent requests and the strict facet prompt v2. It decomposed 12 queries
+  and kept 6 as one concise query. Subquery counts were: 1: 6, 2: 1, 3: 9,
+  4: 2.
+- Each subquery used frozen `enfr` BM25 over the same 5,091 pages. Results were
+  deduplicated by page ID. Candidate-page and gold-file recall are measured
+  before reranking. EVIE Recall@10 uses cached EVIE-4.5B scores for the original
+  query over each candidate pool; no new EVIE inference was run and the
+  reranker was not made subquery-aware.
+
+| Arm | Mean candidates | Candidate page recall | Gold-file recall | EVIE Recall@10 |
+|---|---:|---:|---:|---:|
+| Saved hybrid top-100 | 100.0 | 31.56% | 91.67% | 9.49% |
+| BM25 full query top-100 | 100.0 | 25.07% | 88.89% | 5.10% |
+| BM25 pain-point query top-100 | 100.0 | 26.87% | 88.89% | 8.07% |
+| Subquery BM25 union, top-5 each | 11.3 | 5.88% | 63.89% | 4.49% |
+| Subquery BM25 union, top-10 each | 22.6 | 6.71% | 72.22% | 5.32% |
+| Subquery BM25 union, top-20 each | 44.0 | 13.38% | 80.56% | 8.61% |
+
+The practical candidate-augmentation comparison preserves saved hybrid top-20
+and adds subquery BM25 results before reranking:
+
+| Arm | Mean candidates | Candidate page recall | Gold-file recall | EVIE Recall@10 |
+|---|---:|---:|---:|---:|
+| Saved hybrid top-20 | 20.0 | 10.08% | 86.11% | 8.01% |
+| Hybrid top-20 + subquery top-5 each | 27.3 | 12.13% | 86.11% | 8.03% |
+| Hybrid top-20 + subquery top-10 each | 36.3 | 12.32% | 88.89% | 7.63% |
+| Hybrid top-20 + subquery top-20 each | 53.9 | 15.61% | 88.89% | 7.63% |
+
+Interpretation: subquery-only retrieval is a weak candidate generator here. A
+small top-5-per-subquery union modestly increases candidate page recall while
+keeping EVIE Recall@10 effectively flat. Top-10 finds more gold files but
+slightly lowers EVIE Recall@10; top-20 expands the pool without improving
+gold-file recall or final EVIE Recall@10. This does not establish that
+decomposition improves final ranking. A subquery/facet-aware reranker and a
+non-qrel-selected evaluation are needed before making that claim.
+
+### Recommended follow-up
+
+1. Preserve the original full-query retrieval as a safety branch; only enable
+   decomposition when the query has distinct answer facets or a diagnosed
+   low-recall/noisy-match signal.
+2. Test a small per-subquery candidate budget (top-5) unioned with the original
+   hybrid top-20, then compare against the exact same baseline on a held-out or
+   cross-validated split.
+3. Make reranking facet-aware: check whether candidates cover the distinct
+   required facets instead of reranking every page only against the full
+   question. Keep original-query scoring as a control.
+4. Inspect query-by-query wins/losses and possible qrel omissions, especially
+   where a relevant-looking page is adjacent to an annotated page.
+5. Report candidate page recall, gold-file recall and post-rerank EVIE
+   Recall@10 separately. Do not describe candidate-pool gains as answer or
+   final-ranking gains.
