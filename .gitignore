@@ -6,8 +6,17 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+.venv-*/
 .env
 .streamlit/
+
+# Local archive of finished/one-off research scripts and results (never pushed).
+# See archive/MANIFEST.json for original paths.
+/archive/
+
+# Local Codex spreadsheet-plugin scratch directories.
+/.codex_spreadsheet_runtime/
+/.codex_spreadsheet_inspect_output/
 
 # Local deployment files and SSH key.
 /deploy/
@@ -83,6 +92,17 @@ data/subset/
 # challenge's gold answers.
 # ---------------------------------------------------------------------------
 data/benchmark/
+
+# Root-level experiment outputs and one-off run logs. The experiment scripts
+# may read these caches locally, but generated results are not source files.
+/outputs/
+/output/
+/events.jsonl
+/--psm.tsv
+
+# Adaptive LLM run outputs (per-query QA/judge caches, traces and reports).
+# Keep the research scripts and the tracked results README visible to Git.
+/research/adaptive/llm/results/
 
 # Retrieval artifacts are build output, keyed by config_hash and rebuilt from the
 # chunk manifest. The BM25 index over a full corpus is large and derived.

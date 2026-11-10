@@ -31,7 +31,14 @@ sparse retriever over rendered page images.
 - `research/data_discovery/`: experimental on-demand discovery pipeline.
   It starts with cheap page extraction/BM25 and can optionally perform accurate
   ingestion and downstream QA.
-- `research/experiments/`: one-off benchmark runners and analysis scripts.
+- `research/experiments/`: benchmark runners and analysis scripts still cited
+  in this file (one-off scripts were moved to `archive/`).
+- `research/baselines/hierarchical_light/`: the hierarchical light BM25
+  baseline and the `ondemand` package (`enfr`, `PageBM25`) imported by the
+  query-preparation and adaptive-K code (formerly `_repro_retrieval_baseline/`).
+- Convention: new research outputs go to `research/<topic>/results/`
+  (git-ignored); large shared caches stay in `data/work/` and must not be moved,
+  because many scripts reference them by fixed path.
 - `configs/`: pipeline and ViDoRe/Physics settings. Relevant files include
   `pipeline.data-discovery.yaml`, `pipeline.vidore-v3-physics-discovery-pages-global-two-phase.yaml`,
   `pipeline.vidore-v3-physics-kdl-pdf-inspector.yaml`, and `pipeline.yaml`.
@@ -42,6 +49,12 @@ sparse retriever over rendered page images.
   are generally not committed.
 - `experiments/`: cloned external experiments, including the V-SPLADE and
   ParseBench material.
+- `archive/` (git-ignored, local only): 327 finished/one-off research scripts
+  and dashboards moved out on 2026-11-10, mirroring their original paths
+  (e.g. `archive/research/experiments/<name>.py`). If a script named in this
+  file is missing from `research/`, look there first; `archive/MANIFEST.json`
+  lists original paths and `archive/classification.csv` the reason. Scripts run
+  from inside `archive/` need `Path(__file__).parents[N+1]` for the repo root.
 
 Read the more detailed local docs when working in a subsystem:
 
@@ -890,3 +903,299 @@ For V4.1 replace the generator id and output directory with
 `e2e_oracle_kdl_gold_v2048`. Do not mix output directories or compare an
 oracle row with a light-retrieval/accurate-retrieval row without labeling the
 qrel leakage.
+
+## Adaptive retrieval and reranking handoff (2026-11-02)
+
+This section records the latest merged-benchmark adaptive-K and reranking
+results for the next research session. It supplements the data-discovery
+handoff above; it does not replace the Physics/V-SPLADE protocols.
+
+### Shared benchmark and QA contract
+
+- Merged benchmark: 220 queries (OHR-Bench 65, Industrial 75, Physics 80),
+  5,091 pages, 103 files. Keep this composition explicit; these are not the
+  older 220-query MPDocVQA results.
+- Adaptive/router candidate pipeline freezes up to 100 discovery-ranked pages
+  per query. Adaptive K is learned on nested, source-stratified 5-fold OOF
+  splits; qrels for an outer test fold must not affect its model/calibration.
+- For the adaptive accurate-QA runs, EVIE reorders only the chosen prefix and
+  sends up to 10 accurately ranked pages to QA. Context is the first 512 words
+  of each KDL page; there is no chunk-embedding retrieval after those pages.
+  Qrels are evaluation-only. Reference answers are given only to the judge.
+- Distinguish candidate-prefix recall (gold coverage in first K) from accurate
+  Recall@10 and nDCG@10 after EVIE. QA Correct is strict answer/reference
+  agreement; Correct+Partial is reported separately. High page recall does not
+  guarantee higher QA accuracy, and the judge does not check grounding.
+
+### Adaptive K: score-only XGBoost
+
+The current score-only baseline is a continuous-K XGBoost regressor over the
+retrieval score-curve features. It predicts K from 1 to 100; it does not use
+source ID or neighbor gold-page IDs. At nested-OOF calibration budget 60:
+
+| Policy / evaluation | Mean K | Prefix recall | Precision | F1 | nDCG | EVIE Recall@10 | EVIE nDCG@10 | QA Correct | QA Correct+Partial |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Score-only XGB, budget 60 | 57.70 | 86.92% | 9.19% | 14.43% | 66.78 | 71.64% | 68.97 | 48.18% | 88.18% |
+
+The QA row uses DeepSeek V4 Flash and GPT-4o-mini, with one first-512-word
+excerpt per EVIE-ranked page. There were 220 queries, no final answer/judge
+failures, and reported spend was $0.1670 (failed token-limited attempts from
+the earlier retries were not retained in that figure). The earlier Qwen3-VL QA
+run with the same XGB policy scored 52.27% Correct / 88.18% Correct+Partial;
+do not mix its generator result with the DeepSeek row.
+
+Primary artifacts:
+
+- OOF predictions/features and calibration: `research/adaptive/llm/results/xgb_llm_features_nested_oof_20261021/`
+  and `research/adaptive/llm/results/adaptive_accurate_top10_qa_xgb_only_budget60_evie_deepseek_v4_flash_20261029/`.
+- The 220-query retrieval/QA handoff bundle: `data/work/adaptive_xgb_evie_qa_handoff_20261029/`.
+- Runner: `research/adaptive/llm/scripts/run_adaptive_accurate_qa.py`.
+
+### XGBoost with LLM trajectory features
+
+This is distinct from using an LLM answer as a feature. An iterative LLM stop
+run produces per-query trajectory signals; these are added to XGBoost inputs,
+and XGBoost still predicts the deployed K. The nested-OOF budget-50 result is:
+
+| Policy | Mean K | Prefix recall | EVIE Recall@10 | EVIE nDCG@10 | QA Correct | QA Correct+Partial |
+|---|---:|---:|---:|---:|---:|---:|
+| XGB + LLM trajectory features, budget 50 | 48.28 | 85.65% | 71.22% | 68.72 | 48.18% | 87.27% |
+
+This QA evaluation used Qwen3-VL and GPT-4o-mini. At nearly the same Mean K as
+score-only budget 50 (48.51), it raised prefix recall from 83.82% to 85.65%;
+the EVIE Recall@10 gain was smaller (+1.20 pp), and strict QA Correct did not
+improve. The score-only and trajectory-feature QA comparison is in
+`research/adaptive/llm/results/adaptive_accurate_top10_qa_xgb_only_20261023/comparison_with_xgb_llm.md`;
+OOF feature results are in `research/adaptive/llm/results/xgb_llm_features_nested_oof_20261021/report.md`.
+
+Direct LLM STOP with XGB fallback is a separate policy, not the trajectory-
+feature model. In the evaluated b1/cap20 version, it scored Mean K 39.86,
+prefix recall 75.91%, EVIE Recall@10 63.02%, EVIE nDCG@10 62.47, QA Correct
+45.45% and Correct+Partial 85.45% with Qwen3-VL. Lower page budget did reduce
+coverage, so this policy should not be described as outperforming score-only
+XGBoost on QA or recall. Details are in
+`research/adaptive/llm/results/adaptive_accurate_top10_qa_20261021/report.md`.
+
+### Reranking before adaptive K
+
+For the reranker experiments, all systems rerank the frozen top-100 discovery
+candidates. A separate XGBoost K model is trained for each reranked ordering;
+feeding changed reranker scores to the original score-only model would be
+out-of-distribution. EVIE then reorders only the predicted prefix and its top
+10 KDL excerpts go to QA.
+
+| Top-100 reranker -> XGB K -> EVIE top-10 | Mean K | Prefix recall | EVIE Recall@10 | EVIE nDCG@10 | QA Correct* | QA Correct+Partial* |
+|---|---:|---:|---:|---:|---:|---:|
+| Original discovery scores | 55.96 | 85.94% | 70.77% | 68.19 | 50.91% | 87.73% |
+| Cohere Rerank 4 Pro | 58.05 | 88.37% | 71.64% | 68.90 | 52.73% | 88.64% |
+| Qwen3 Reranker 8B | 57.06 | 88.27% | 71.83% | 69.03 | 51.82% | 87.73% |
+| BGE-reranker-v2-m3 | 57.03 | 85.83% | 70.40% | 67.90 | 52.27% | 87.73% |
+
+`*` These original reranker QA figures used Qwen3-VL as answer generator and
+GPT-4o-mini as judge. They are not DeepSeek QA metrics. Cohere and Qwen are
+API rerankers; BGE-M3 is an open model run locally. Cohere/Qwen improved
+candidate-prefix coverage, but that gain narrowed after EVIE top-10; QA gains
+were small and not a reliable consequence of the retrieval gain.
+
+The exact Qwen3-reranker arm was subsequently re-run with DeepSeek V4 Flash
+and GPT-4o-mini on all 220 queries, holding the ranking, adaptive K, EVIE top
+10, and 512-word/page QA context fixed:
+
+| Mean K | Prefix recall | EVIE Recall@10 | EVIE nDCG@10 | DeepSeek QA Correct | Correct+Partial | API cost |
+|---:|---:|---:|---:|---:|---:|---:|
+| 57.06 | 88.27% | 71.83% | 69.03 | 50.45% | 86.36% | $0.1251 |
+
+All 220 answers and judgments completed. This is the preferred same-generator
+comparison to the DeepSeek score-only baseline above; do not substitute the
+older Qwen-generator QA scores. The run and script are
+`data/work/reranker_adaptive_k_qwen3_deepseek_qa_20261030/` and
+`research/experiments/evaluate_qwen3_reranker_adaptive_qa_deepseek_20261030.py`.
+
+The full 2026-10-26 reranker report includes fixed-50 arms, per-query
+bootstrap and timing/cost notes:
+`data/work/reranker_adaptive_k_20261026/report.md`.
+Top-100 rerank latency recorded there is Cohere 2.22 s/query ($1.035 total),
+Qwen3 10.37 s/query ($1.938 total; 28 HTTP 503 failures at 32 workers, then
+retried at 8), and local BGE-M3 3.04 s/query ($0 API). XGBoost K inference
+was 0.55 ms/query. These exclude EVIE score inference because only its cached
+matrix was available; the reported local EVIE re-sort time is not cold model
+latency.
+
+### MetaRank-style learning-to-rank experiments
+
+There are two related but distinct result sets; neither has end-to-end QA yet.
+
+- Non-reranker feature ablation uses no Cohere/Qwen/BGE scores. The strongest
+  shown set, `discovery_plus_dense_lexical`, gives Recall@20 76.38% and
+  Recall@50 83.35%; adding page-shape gives 76.00% and 83.69%. This is the
+  feature-ablation report at
+  `data/work/metarank_nonreranker_feature_families_20261028/report.md`.
+- MetaRank-style pairwise LTR plus adaptive K, nested source-stratified OOF,
+  budget below mean K 58: `score_rank` reached Mean K 57.71, prefix recall
+  88.52%, precision 7.61%, F1 13.04%, nDCG 74.34. The report is
+  `data/work/metarank_adaptive_k_nested_20261027/report.md`.
+- A paired EVIE comparison at a stricter budget 54 gives MetaRank LTR + K
+  Mean K 51.88, prefix recall 88.12%, EVIE Recall@10 71.62%, nDCG@10 68.87.
+  Against Cohere-score XGB at the same budget it uses 2.86 fewer pages on
+  average while retrieval metrics are nearly equal. No QA experiment has
+  validated whether this translates into better answers. See
+  `data/work/metarank_adaptive_k_nested_20261027/budget_54/comparison_to_xgb_policies/report.md`.
+
+Feature-ablation candidates and pairwise smoke scripts are under
+`research/experiments/`; the MetaRank-specific reports and implementations
+are listed above. Do not interpret the LTR nDCG values as the EVIE top-10
+nDCG scale unless the report explicitly names EVIE nDCG@10.
+
+### Next-session checklist for this work
+
+1. Use the 220-query 65/75/80 merged composition and 5,091-page corpus; verify
+   qid count and reranker cache before running.
+2. Keep XGB score-only, XGB+LLM trajectory, reranker-conditioned XGB, and
+   MetaRank LTR as separate policies. Keep their generator/judge pair and
+   retrieval ranker visible in every comparison.
+3. Reuse cached rankings, EVIE scores, OOF predictions and QA responses. Do
+   not rerun paid calls just to recover already reported metrics.
+4. Treat benchmark-wide OOF and feature selection results as exploratory on
+   this dataset, even with nested folds. Report paired per-query uncertainty
+   for future promotions.
+5. Separate three questions: did gold pages survive the adaptive prefix, did
+   EVIE rank them in the top 10, and did the generator answer correctly?
+
+## Top-3 LLM stopping and QA handoff (2026-11-09)
+
+This is the latest adaptive-retrieval result and should be read before
+continuing the LLM stopping work. It evaluates a one-shot evidence-sufficiency
+check over the first three discovery-ranked pages, followed by the frozen
+nested-OOF XGBoost K when the LLM does not accept STOP.
+
+### Policy and implementation
+
+- Discovery ranking: `adaptive_retrieval_20261020_router_te3s_top100`, using
+  `openai/text-embedding-3-small`, with at most 100 pages per query.
+- Controller: `deepseek/deepseek-v4-flash`. One request receives the query and
+  the first three PP-OCRv5 page texts. It does not receive qrels, reference
+  answers or the XGBoost prediction.
+- Accept STOP at K=3 only when the response says `STOP`, confidence is at least
+  0.85, the provisional answer is non-empty, at least one cited page is in the
+  three pages shown, and `missing_information` is empty. Invalid responses or
+  rejected STOPs fall back to the query's nested-OOF calibrated XGBoost K.
+- After choosing K, cached EVIE scores rerank only that prefix. Up to ten pages,
+  represented by the first 512 KDL words per page, go to
+  `deepseek/deepseek-v4-flash`; `openai/gpt-4o-mini` judges the answer against
+  the reference. The judge does not verify whether individual answer claims
+  are supported by the supplied pages.
+
+The controller runner is
+`research/adaptive/llm/scripts/run_ohr_top3_pagewise_vs_oneshot.py` and the QA
+runner is `research/adaptive/llm/scripts/run_adaptive_accurate_qa.py`. The
+controller runner now supports `--sources`, `--arms` and `--oneshot-k`; the QA
+runner supports `llm_top3_xgb_fallback` and `fixed_k100` policies.
+
+### Full 220-query comparison
+
+All three rows below use the same cached EVIE ranker, DeepSeek V4 Flash answer
+generator and GPT-4o-mini judge. `Prefix recall` is gold-page recall within the
+chosen discovery prefix; `EVIE Recall@10` is recall after accurate reranking.
+
+| Policy | Mean K | Prefix recall | EVIE Recall@10 | EVIE nDCG@10 | QA Correct | QA Correct+Partial | Pages sent to QA |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| No adaptive, fixed K=100 | 100.00 | 89.13% | 71.72% | 68.93 | 42.73% | 85.91% | 10.00 |
+| Nested-OOF score-only XGBoost | 57.70 | 86.92% | 71.64% | 68.97 | 48.18% | 88.18% | 9.65 |
+| Top-3 LLM STOP, otherwise XGBoost | 44.98 | 80.86% | 66.89% | 65.81 | 46.82% | 87.27% | 7.47 |
+
+The Top-3 policy saves 12.72 pages/query relative to XGBoost, but loses 6.06
+points of prefix recall, 4.75 points of EVIE Recall@10 and 1.36 points of
+strict QA Correct. Its Correct+Partial score is only 0.91 points lower. It is
+therefore a useful cost/coverage point, not a retrieval-quality replacement
+for XGBoost.
+
+Per-source results are:
+
+| Dataset | Policy | Mean K | Prefix recall | EVIE Recall@10 | EVIE nDCG@10 | QA Correct | Correct+Partial |
+|---|---|---:|---:|---:|---:|---:|---:|
+| OHR (65) | XGBoost | 22.46 | 100.00% | 100.00% | 100.00 | 63.08% | 72.31% |
+| OHR (65) | Top-3 LLM + fallback | 11.22 | 100.00% | 100.00% | 100.00 | 61.54% | 70.77% |
+| Physics (80) | XGBoost | 64.94 | 84.35% | 60.55% | 55.80 | 51.25% | 98.75% |
+| Physics (80) | Top-3 LLM + fallback | 56.50 | 74.85% | 53.01% | 50.59 | 48.75% | 98.75% |
+| Industrial (75) | XGBoost | 80.52 | 78.33% | 58.89% | 56.12 | 32.00% | 90.67% |
+| Industrial (75) | Top-3 LLM + fallback | 61.95 | 70.67% | 52.98% | 52.40 | 32.00% | 89.33% |
+
+The OHR reduction is safe with respect to the available qrels: all 40 accepted
+OHR STOPs retained all annotated gold pages. Physics/Industrial are different:
+36 queries were stopped, but only 13 were safe relative to XGBoost and 23 cut
+at least one annotated gold page. The one-shot controller is consequently
+overconfident outside OHR under the current prompt and threshold.
+
+### Do all annotated gold pages need to survive?
+
+The LLM accepted STOP for 76/220 queries. On those same 76 queries:
+
+| Context policy | Correct | Partial | Incorrect | Correct+Partial |
+|---|---:|---:|---:|---:|
+| Top-3 context | 53 (69.74%) | 15 | 8 | 68/76 (89.47%) |
+| XGBoost context | 56 (73.68%) | 14 | 6 | 70/76 (92.11%) |
+
+The most important diagnostic subset is the 23 `qrel-unsafe` STOPs: K=3 cut
+one or more gold pages that XGBoost would have retained. Top-3 QA produced 14
+Correct, 8 Partial and 1 Incorrect, or 22/23 (95.65%) credited. XGBoost on the
+same 23 produced 15 Correct, 7 Partial and 1 Incorrect, also 22/23 credited.
+Thus removing annotated gold changed one strict Correct answer to Partial but
+did not add another fully Incorrect answer in this small exploratory subset.
+
+This supports the hypothesis that full annotated-gold recall is often not
+necessary to answer the benchmark question. It does not prove that the answer
+was grounded in the top-three pages: an alternative relevant page may be
+unannotated, DeepSeek may use parametric knowledge, and GPT-4o-mini currently
+checks answer correctness rather than citation-level entailment. Five unsafe
+STOPs had zero annotated gold in the top three yet four were judged Correct,
+which makes a no-context/shuffled-context control and an evidence-aware judge
+the highest-priority follow-up.
+
+The only fully Incorrect unsafe STOP was `vidore_industrial::112`: the question
+asks for three reporting categories of corrosion. The reference is Uniform
+Surface, Galvanic and Pitting Corrosion; the generated answer was Light,
+Moderate and Severe Corrosion. Its gold ranks were 35, 38, 50 and 58, so the
+top-three prefix contained none of the annotated evidence.
+
+### Cost, logs and artifacts
+
+- OHR controller comparison (pagewise 1-to-3 and one-shot top-3):
+  `research/adaptive/llm/results/ohr_top3_pagewise_vs_oneshot_te3s_20261103/`.
+  One-shot top-3 made 65 calls, cost $0.019666 and averaged 2.51 s/request;
+  pagewise made 118 calls, cost $0.019766 and averaged 2.42 s/request.
+- Physics/Industrial one-shot top-3:
+  `research/adaptive/llm/results/top3_oneshot_physics_industrial_te3s_20261106/`.
+  It made 155 calls, cost $0.029082 and averaged 4.69 s/request. Per-query chat
+  histories, console output, request cache and trajectories are preserved.
+- Physics/Industrial one-shot top-1 diagnostic:
+  `research/adaptive/llm/results/top1_oneshot_physics_industrial_te3s_20261106/`.
+  It cost $0.020160 but had even lower safe-stop precision (30.30%); do not
+  promote it merely because it uses less context.
+- Full Top-3 fallback QA:
+  `research/adaptive/llm/results/top3_llm_xgb_evie_deepseek_qa_20261106/`.
+  Read `comparison_vs_xgb.md`, `comparison_with_fixed_k100.md`,
+  `stopped_and_qa_good.md`, `stopped_and_qa_good.csv` and `per_query.jsonl`.
+- Fixed-K=100 QA comparator:
+  `research/adaptive/llm/results/fixed_k100_evie_deepseek_qa_20261106/`.
+- Human-readable 220-query review workbook:
+  `archive/outputs/adaptive-llm-query-review-20261106/adaptive_llm_query_review_220.xlsx`
+  (the former top-level `outputs/` folder was moved to `archive/outputs/` on 2026-11-10).
+  The canonical query source is `data/raw/0.1. BENCHMARK/queries.jsonl`.
+
+The final QA validation reused cached prompts where possible: 144 answer
+prompts and 179 judge prompts came from the frozen XGBoost run. It required 76
+new generator calls and 41 new judge calls, with provider-reported incremental
+cost $0.018786. The full Top-3 QA artifact reports $0.133023 across its unique
+cache entries, but that is not the incremental price of this comparison.
+
+### Recommended next-session work
+
+1. Do not rerun the 220 controller or QA calls; reuse trajectories and caches.
+2. Audit the 23 qrel-unsafe STOPs first, especially the five with zero gold in
+   top three, using an evidence-entailment judge that sees the answer and pages.
+3. Add no-context and shuffled-page controls to estimate how much answer
+   correctness comes from model knowledge rather than retrieved evidence.
+4. Calibrate a source-agnostic safety gate on observable query/retrieval
+   signals; source ID and qrels must remain unavailable at inference time.
+5. Report strict Correct, Correct+Partial, prefix recall and EVIE Recall@10
+   together. A cheaper policy should not be called better solely from QA credit.

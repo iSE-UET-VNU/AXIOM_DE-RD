@@ -1,0 +1,31 @@
+{
+  "preparation": {
+    "run": true,
+    "reuse_existing": true,
+    "workers": 32,
+    "pages_source": "pages_ocr_sparse.jsonl",
+    "ppocr": {
+      "enabled": false,
+      "zip": "light_ocr_results_comparison_btw_ppocr.zip"
+    },
+    "ocr": {
+      "engine": "tesseract",
+      "language": "fra+eng",
+      "dpi": 200,
+      "psm": 3
+    }
+  },
+  "retrieval": {
+    "method": "hierarchical_bm25",
+    "file_k": 3,
+    "page_k": 20,
+    "metric_k": [10, 20],
+    "page_bm25_weight": 0.70,
+    "file_direct_weight": 0.50,
+    "parent_file_weight": 0.15
+  },
+  "run": {
+    "tag": "hierarchical_light_bm25",
+    "output_dir": "data/work/ondemand_v2"
+  }
+}

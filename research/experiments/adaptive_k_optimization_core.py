@@ -20,10 +20,10 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BASELINE_ROOT = ROOT / "_repro_retrieval_baseline"
-BENCHMARK_ROOT = BASELINE_ROOT / "0.1. BENCHMARK"
-PREP_ROOT = BASELINE_ROOT / "data/work/ondemand_v2/ef7f11811803/light_prep"
-VECTOR_ROOT = BASELINE_ROOT / "data/work/ondemand_v2/ef7f11811803/light_v2"
+BASELINE_ROOT = ROOT / "research/baselines/hierarchical_light"  # provides the `ondemand` package
+BENCHMARK_ROOT = ROOT / "data/raw/0.1. BENCHMARK"
+PREP_ROOT = ROOT / "data/work/ondemand_v2/ef7f11811803/light_prep"
+VECTOR_ROOT = ROOT / "data/work/ondemand_v2/ef7f11811803/light_v2"
 CAP = 200
 SEED = 42
 POINT_RANKS = (1, 2, 5, 10, 20, 50, 100, 150)
