@@ -92,3 +92,10 @@ data/cache/
 
 # 267 MB benchmark bundle: data, not code
 0.1. BENCHMARK/
+0.2. V3_ROUTER_TRAIN/
+
+# local experiment outputs and GPU input copies
+outputs/
+ocr_input/
+k19_input/
+
