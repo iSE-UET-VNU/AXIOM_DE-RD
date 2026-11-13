@@ -13,6 +13,9 @@ from .chunks import page_chunks
 from .openrouter import chat
 
 GENERATOR = "deepseek/deepseek-v4-flash"
+GENERATOR_PROVIDER = {"order": ["relace/fp4"], "allow_fallbacks": False, "require_parameters": True}
+GENERATOR_REASONING = {"effort": "high"}
+GENERATOR_MAX_TOKENS = 8192
 JUDGE = "openai/gpt-4o-mini"
 TOP_K = 10
 MAX_TOKENS = 512
@@ -109,15 +112,17 @@ def settings_key(model):
     return f"{model}|t={TEMPERATURE}|seed={SEED}|max_tokens={MAX_TOKENS}\n"
 
 
+def generator_key():
+    return f"{GENERATOR}|t={TEMPERATURE}|provider=relace/fp4|reasoning=high|max_tokens={GENERATOR_MAX_TOKENS}\n"
+
+
 def generate(prompt):
     started = perf_counter()
-    budget = MAX_TOKENS
-    try:
-        answer = chat(GENERATOR, prompt, max_tokens=MAX_TOKENS, temperature=TEMPERATURE, seed=SEED).strip()
-    except RuntimeError:
-        budget = MAX_TOKENS_RETRY
-        answer = chat(GENERATOR, prompt, max_tokens=MAX_TOKENS_RETRY, temperature=TEMPERATURE, seed=SEED).strip()
-    return {"answer": answer, "gen_seconds": perf_counter() - started, "max_tokens_used": budget}
+    payload = chat(GENERATOR, prompt, max_tokens=GENERATOR_MAX_TOKENS, temperature=TEMPERATURE,
+                   provider=GENERATOR_PROVIDER, reasoning=GENERATOR_REASONING, full=True)
+    return {"answer": payload["choices"][0]["message"]["content"].strip(), "gen_seconds": perf_counter() - started,
+            "max_tokens_used": GENERATOR_MAX_TOKENS, "served_model": payload.get("model"),
+            "served_provider": payload.get("provider"), "usage": payload.get("usage")}
 
 
 def judge(query, answers, answer):
@@ -153,7 +158,7 @@ def run(tag, arm, bench=BENCH):
         chunks, used = context(ranked, kdl)
         prompt = ANSWER_PROMPT.format(documents="\n\n".join(f"[{i + 1}] {c}" for i, c in enumerate(chunks)), query=rec["query"])
         try:
-            gen = cached(work("qa_cache", "answers"), settings_key(GENERATOR) + prompt, lambda: generate(prompt))
+            gen = cached(work("qa_cache", "answers"), generator_key() + prompt, lambda: generate(prompt))
             label = judge(rec["query"], rec["answers"] or [""], gen["answer"])
         except Exception as error:
             return {"qid": rec["query_id"], "answer": "", "label": None, "error": str(error)[:300],
@@ -168,9 +173,10 @@ def run(tag, arm, bench=BENCH):
     by = defaultdict(list)
     for rec in recs:
         by[group_of(rec["query_id"], queries[rec["query_id"]])].append(rows[rec["query_id"]])
-    summary = {"arm": arm, "generator": GENERATOR, "judge": JUDGE, "top_k": TOP_K, "context_text": "kdl",
-               "temperature": TEMPERATURE, "seed": SEED, "max_tokens": MAX_TOKENS,
-               "max_tokens_retry_on_empty": MAX_TOKENS_RETRY,
+    summary = {"arm": arm, "generator": GENERATOR, "generator_provider": GENERATOR_PROVIDER,
+               "generator_reasoning": GENERATOR_REASONING, "generator_max_tokens": GENERATOR_MAX_TOKENS,
+               "generator_seed": None, "judge": JUDGE, "top_k": TOP_K, "context_text": "kdl",
+               "temperature": TEMPERATURE, "judge_seed": SEED,
                "chunker": "fixed_overlap n_words=512 overlap=128",
                "n": len(recs), "judged": len(ok), "failed": len(recs) - len(ok),
                "correct_only": round(100 * sum(r["correct"] for r in ok) / len(recs), 2),

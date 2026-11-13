@@ -3,12 +3,14 @@ import hashlib
 import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy as np
 
 from ..bench import BENCH, group_of, load_jsonl, queries as load_queries, work, write_jsonl
-from ..qa import (ANSWER_PROMPT, GENERATOR, JUDGE, JUDGE_PROMPT, MAX_TOKENS, MAX_TOKENS_RETRY, SEED, TEMPERATURE,
-                  WORKERS, format_gold, generate, judge_detail, settings_key)
+from ..qa import (ANSWER_PROMPT, GENERATOR, GENERATOR_MAX_TOKENS, GENERATOR_PROVIDER, GENERATOR_REASONING, JUDGE,
+                  JUDGE_PROMPT, SEED, TEMPERATURE, WORKERS, format_gold, generate, generator_key, judge_detail,
+                  settings_key)
 
 
 def cache_path(folder, key):
@@ -35,37 +37,44 @@ def judge_guarded(query, answers, answer, allow_api, bench):
     return judge_detail(query, answers, answer)
 
 
-def run(tag, bench=BENCH, allow_api=False):
-    folder = work("results", tag, bench=bench)
+def outputs_name(reader, judge):
+    return f"{reader}__{judge}".replace(":", "-").replace("/", "-")
+
+
+def run(tag, bench=BENCH, allow_api=False, reader="qwen3_vl_32b", judge="gpt4o_mini_structured", modes=None,
+        out_dir=None):
+    from . import qa_judge, qa_reader  # noqa: F401
+    from .registry import build
+    folder = Path(out_dir) if out_dir else work("results", tag, bench=bench)
     records = load_jsonl(folder / "per_query.jsonl")
     queries = load_queries(bench)
+    read_online = modes.online("qa_reader") if modes else allow_api
+    judge_online = modes.online("qa_judge") if modes else allow_api
+    reader_obj, judge_obj = build("qa_reader", reader, bench=bench), build("qa_judge", judge, bench=bench)
+    name = outputs_name(reader, judge)
 
     def one(record):
         chunks = [c["text"] for c in record["chunks"]]
-        prompt = ANSWER_PROMPT.format(
-            documents="\n\n".join(f"[{i + 1}] {c}" for i, c in enumerate(chunks)), query=record["query"])
         try:
-            answer = cached_or_refuse(work("qa_cache", "answers", bench=bench), settings_key(GENERATOR) + prompt,
-                                      lambda: generate(prompt), allow_api, "the answer for this query")
-            verdict = judge_guarded(record["query"], record["answers"] or [""], answer["answer"], allow_api, bench)
+            answer = reader_obj.read(record["query"], chunks, read_online)
+            verdict = judge_obj.judge(record["query"], record["answers"] or [""], answer["answer"], judge_online)
             label = verdict["judgment"]
-        except Exception as error:
+        except (Exception, SystemExit) as error:
             return {"qid": record["query_id"], "answer": "", "label": None, "error": str(error)[:300],
                     "n_chunks": len(chunks)}
         return {"qid": record["query_id"], "answer": answer["answer"], "label": label, "error": None,
-                "explanation": verdict["explanation"],
-                "gen_seconds": answer["gen_seconds"], "n_chunks": len(chunks),
+                "explanation": verdict.get("explanation"), "verdict": verdict,
+                "gen_seconds": answer.get("gen_seconds", 0.0), "n_chunks": len(chunks),
                 "correct": label == "Correct", "credited": label in ("Correct", "Partially Correct")}
 
-    print(f"[qa] evaluating {len(records)} queries with {WORKERS} workers...")
+    print(f"[qa] {len(records)} queries, reader {reader} ({'online' if read_online else 'offline'}), "
+          f"judge {judge} ({'online' if judge_online else 'offline'}), {WORKERS} workers")
     rows = {}
     with ThreadPoolExecutor(WORKERS) as pool:
         futures = [pool.submit(one, r) for r in records]
-        done = 0
-        for f in as_completed(futures):
+        for done, f in enumerate(as_completed(futures), 1):
             r = f.result()
             rows[r["qid"]] = r
-            done += 1
             if done % 10 == 0 or done == len(records):
                 print(f"\r[qa] evaluated {done}/{len(records)} queries...", end="", flush=True)
     print("\r" + " " * 50 + "\r", end="", flush=True)
@@ -74,11 +83,12 @@ def run(tag, bench=BENCH, allow_api=False):
     by = defaultdict(list)
     for record in records:
         by[group_of(record["query_id"], queries[record["query_id"]])].append(rows[record["query_id"]])
-    summary = {"generator": GENERATOR, "judge": JUDGE, "temperature": TEMPERATURE, "seed": SEED,
-               "max_tokens": MAX_TOKENS, "max_tokens_retry_on_empty": MAX_TOKENS_RETRY,
+    summary = {"reader": reader_obj.settings(), "judge": judge_obj.settings(),
+               "modes": {"qa_reader": "online" if read_online else "offline",
+                         "qa_judge": "online" if judge_online else "offline"},
                "n": len(records), "judged": len(ok), "failed": len(records) - len(ok),
-               "correct_only": round(100 * sum(r["correct"] for r in ok) / len(records), 2),
-               "correct_plus_partial": round(100 * sum(r["credited"] for r in ok) / len(records), 2),
+               "correct_only": round(100 * sum(r["correct"] for r in ok) / len(records), 2) if records else None,
+               "correct_plus_partial": round(100 * sum(r["credited"] for r in ok) / len(records), 2) if records else None,
                "infer_seconds_per_query": round(float(np.mean([r["gen_seconds"] for r in ok])), 2) if ok else None,
                "per_group": {g: {"n": len(v),
                                  "correct_only": round(100 * float(np.mean([bool(x.get("correct")) for x in v])), 1),
@@ -91,12 +101,12 @@ def run(tag, bench=BENCH, allow_api=False):
                  "branch": by_qid[r["qid"]]["branch"], "k": by_qid[r["qid"]]["k"],
                  "query": by_qid[r["qid"]]["query"], "gold_answers": by_qid[r["qid"]]["answers"],
                  "generated_answer": r["answer"], "judgment": r["label"], "judge_explanation": r.get("explanation"),
-                 "correct": bool(r.get("correct")), "credited": bool(r.get("credited")),
+                 "verdict": r.get("verdict"), "correct": bool(r.get("correct")), "credited": bool(r.get("credited")),
                  "n_chunks": r["n_chunks"], "gen_seconds": round(r.get("gen_seconds", 0.0), 3),
                  "error": r["error"]} for r in ordered]
-    (folder / "qa_summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
-    write_jsonl(folder / "qa.jsonl", readable)
-    with (folder / "qa.csv").open("w", newline="", encoding="utf-8") as sink:
+    (folder / f"qa_summary_{name}.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
+    write_jsonl(folder / f"qa_{name}.jsonl", readable)
+    with (folder / f"qa_{name}.csv").open("w", newline="", encoding="utf-8") as sink:
         writer = csv.writer(sink)
         writer.writerow(["query_id", "group", "branch", "k", "judgment", "correct", "credited", "n_chunks",
                          "gen_seconds", "query", "gold_answers", "generated_answer", "error"])

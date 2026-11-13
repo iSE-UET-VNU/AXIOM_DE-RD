@@ -72,9 +72,11 @@ def embed(texts, model, cache_dir, batch=32):
 
 
 def chat(model, content, max_tokens=512, temperature=0.0, seed=None, provider=None, logprobs=None,
-         response_format=None, full=False):
+         response_format=None, full=False, reasoning=None, top_p=None):
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": content}]}
+    if top_p is not None:
+        body["top_p"] = top_p
     if seed is not None:
         body["seed"] = seed
     if provider is not None:
@@ -84,6 +86,8 @@ def chat(model, content, max_tokens=512, temperature=0.0, seed=None, provider=No
         body["top_logprobs"] = logprobs
     if response_format is not None:
         body["response_format"] = response_format
+    if reasoning is not None:
+        body["reasoning"] = reasoning
     for attempt in range(3):
         if attempt:
             time.sleep(2 ** attempt)
