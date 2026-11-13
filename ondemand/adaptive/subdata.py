@@ -9,6 +9,7 @@ class SubData:
     scores: dict
     k: int
     source: str = "light"
+    raw: str = None
 
     def top(self, k=None):
         return self.pages[:k if k is not None else self.k]

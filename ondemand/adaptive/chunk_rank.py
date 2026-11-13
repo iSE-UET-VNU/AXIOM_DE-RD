@@ -95,19 +95,50 @@ class HybridRanker(Ranker):
         return f"hybrid:{self.alpha}"
 
 
+def shingles(text, n=3):
+    words = real_text(text or "").lower().split()
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def dedupe(items, text_of, threshold, limit):
+    kept, sets, replaced, skipped = [], [], 0, 0
+    for item in items:
+        if len(kept) >= limit:
+            break
+        s = shingles(text_of(item))
+        twin = next((j for j, t in enumerate(sets)
+                     if s and t and len(s & t) >= threshold * min(len(s), len(t))), None)
+        if twin is None:
+            kept.append(item)
+            sets.append(s)
+        elif len(s) > len(sets[twin]):
+            kept[twin], sets[twin] = item, s
+            replaced += 1
+        else:
+            skipped += 1
+    return kept, {"dedupe_threshold": threshold, "dedupe_skipped": skipped, "dedupe_replaced": replaced}
+
+
 def reading_order(chunk):
     doc, _, page = chunk.page_id.partition("#page=")
     return doc, int(page) if page.isdigit() else 0, chunk.position
 
 
 class ChunkRank:
-    def __init__(self, chunker, ranker, top_chunks=10):
-        self.chunker, self.ranker, self.top_chunks = chunker, ranker, top_chunks
+    def __init__(self, chunker, ranker, top_chunks=10, dedupe=0.0):
+        self.chunker, self.ranker, self.top_chunks, self.dedupe = chunker, ranker, top_chunks, dedupe
 
     def run(self, query, passages):
         started = perf_counter()
         chunks = self.chunker(passages)
-        top, notes = self.ranker.rank(query, chunks, self.top_chunks)
+        if self.dedupe:
+            ranked, notes = self.ranker.rank(query, chunks, len(chunks))
+            scores = notes.pop("scores", [None] * len(ranked))
+            pairs, info = dedupe(list(zip(ranked, scores)), lambda pair: pair[0].text, self.dedupe, self.top_chunks)
+            top = [c for c, _ in pairs]
+            notes.update(info, scores=[s for _, s in pairs])
+        else:
+            top, notes = self.ranker.rank(query, chunks, self.top_chunks)
         top = sorted(top, key=reading_order)
         return top, {"seconds": perf_counter() - started, "chunker": self.chunker.describe(),
                      "ranker": self.ranker.describe(), "order": "reading", **notes}

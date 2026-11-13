@@ -1,4 +1,5 @@
 import json
+from time import perf_counter
 
 from ..bench import BENCH, work
 from ..openrouter import decide
@@ -26,7 +27,12 @@ def jev_check(query, chunks, allow_api, bench=BENCH):
     state = {"question": query, "excerpts": excerpts(chunks)}
     key = f"{JEV}|{json.dumps(JEV_QUESTIONS, sort_keys=True)}\n{json.dumps(state, ensure_ascii=False, sort_keys=True)}"
     folder = work("qa_cache", "jev", bench=bench)
-    return cached_or_refuse(folder, key, lambda: decide(JEV, state, JEV_QUESTIONS), allow_api, "the Jev escalation check")
+    def timed():
+        started = perf_counter()
+        verdict = decide(JEV, state, JEV_QUESTIONS)
+        return {**verdict, "seconds": round(perf_counter() - started, 3)}
+
+    return cached_or_refuse(folder, key, timed, allow_api, "the Jev escalation check")
 
 
 def route_action(verdict):

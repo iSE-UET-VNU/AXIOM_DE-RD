@@ -10,7 +10,7 @@ from ..bench import BENCH, ROOT, fingerprint, work
 load_dotenv(ROOT / ".env")
 
 COLVEC_MODEL = "webAI-Official/webAI-ColVec1.1-8b"
-MODES = {"colvec": ("cached", "local", "endpoint"), "kdl": ("cached", "vllm"),
+MODES = {"colvec": ("cached", "local", "endpoint"), "evie": ("cached", "local"), "kdl": ("cached", "vllm"),
          "chandra": ("cached", "vllm", "local"), "ppocr": ("cached", "local", "endpoint")}
 
 
@@ -25,6 +25,8 @@ class AdaptiveConfig:
     colvec_endpoint: Optional[str] = None
     colvec_api_key: str = ""
     colvec_8bit: bool = False
+
+    evie_mode: str = "cached"
 
     kdl_mode: str = "cached"
     kdl_endpoint: Optional[str] = None
@@ -193,6 +195,7 @@ def doctor(bench=BENCH, verbose=True) -> Dict[str, Any]:
     if not verbose:
         return report
     need = {"colvec": {"local": ("transformers", 20 if "8b" in cfg.colvec_model else 10)},
+            "evie": {"local": ("transformers", 12)},
             "kdl": {"vllm": ("vllm", 20)}, "chandra": {"vllm": ("vllm", 16), "local": ("transformers", 16)},
             "ppocr": {"local": ("paddleocr", 0)}}
     print("=" * 72)

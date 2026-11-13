@@ -8,8 +8,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from importlib import import_module
 from time import perf_counter
 
-import fitz
-
 from .bench import BENCH, documents, load_jsonl, unit_id, work, write_jsonl
 from .text import is_uninformative, mostly_image, real_text
 from .timing import Timings
@@ -18,6 +16,7 @@ OCR_LANGUAGES, OCR_DPI, OCR_PSM = "fra+eng", 200, 3
 
 
 def inspect_pdf(path):
+    import fitz
     api = import_module("pdf_inspector")
     classification = api.classify_pdf(str(path))
     with fitz.open(str(path)) as pdf:
@@ -39,6 +38,7 @@ def inspect_pdf(path):
 
 
 def ocr_page(path, page0, language=OCR_LANGUAGES, dpi=OCR_DPI):
+    import fitz
     started = perf_counter()
     try:
         with fitz.open(str(path)) as pdf:

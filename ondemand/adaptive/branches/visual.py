@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import replace
 from time import perf_counter
@@ -6,6 +7,7 @@ import numpy as np
 
 from ...bench import BENCH, load_jsonl, work
 from .. import fallback, services
+from ..chunk_rank import dedupe
 from ..config import get_config
 from ..registry import build, register
 from ..subdata import BranchOutput, Passage
@@ -105,6 +107,40 @@ class CachedEVIE:
         return f"evie:cached:{self.meta['evie_commit'][:8]}{suffix}"
 
 
+@register("scorer", "evie")
+class EVIEScorer:
+    name = "evie"
+
+    def __init__(self, argument=None, bench=BENCH, modes=None, **_):
+        if argument not in ("", None, "skip_blank"):
+            raise SystemExit(f"unknown evie variant {argument!r}; available: skip_blank")
+        self.online = bool(modes and modes.online("visual_encoder"))
+        self.service = service_for("evie", "local" if self.online else "cached", bench)
+
+    def prepare(self, items):
+        pass
+
+    def key(self, subdata):
+        if subdata.raw is None or subdata.query == subdata.raw:
+            return subdata.qid
+        return f"{subdata.qid}#{hashlib.sha1(subdata.query.encode()).hexdigest()[:10]}"
+
+    def score(self, qid, pages, subdata=None, warn=True):
+        key = self.key(subdata) if subdata else qid
+        scores, missing = self.service.score(key, subdata.query if subdata else "", pages)
+        if missing:
+            raise SystemExit(f"visual_encoder is {'online' if self.online else 'offline'} and {len(missing)} of "
+                             f"{len(pages)} pages of {key} have no EVIE V2 score, e.g. {missing[:2]}; "
+                             f"run --stage-mode visual_encoder=online on a GPU")
+        return scores
+
+    def seconds(self, pages):
+        return self.service.page_seconds(pages)
+
+    def describe(self):
+        return f"evie:{self.service.mode}:{self.service.settings()['evie_commit'][:8]}:skip_blank"
+
+
 class KDLParser:
     name = "kdl"
     mode = None
@@ -190,6 +226,11 @@ class VisualBranch:
         self.parser = build("parser", parser_spec or parser, **context)
         self.refine_k = build("k", refine_k, **context)
         self.stop = int(stop_spec.partition(":")[2]) if stop_spec else 0
+        self.dedupe = float(context.get("dedupe") or 0.0)
+        self.text = {}
+        if self.dedupe:
+            source = work("light_prep", bench=context.get("bench", BENCH)) / context.get("pages_name", "pages_ppocrv5.jsonl")
+            self.text = {r["page_id"]: r.get("text") or "" for r in load_jsonl(source)}
 
     def stop_early(self, subdata, warn):
         light = subdata.top()
@@ -213,7 +254,10 @@ class VisualBranch:
             scores = self.scorer.score(subdata.qid, candidates, subdata=subdata, warn=warn)
         ranked = sorted(candidates, key=lambda p: (-scores.get(p, 0.0), p))
         refined = subdata.__class__(subdata.qid, subdata.query, ranked, scores, len(ranked), source="visual")
-        return candidates, scores, ranked[:self.refine_k.choose(refined)]
+        n = self.refine_k.choose(refined)
+        if self.dedupe:
+            return candidates, scores, dedupe(ranked, lambda p: self.text.get(p, ""), self.dedupe, n)[0]
+        return candidates, scores, ranked[:n]
 
     def prepare(self, subdatas):
         self.scorer.prepare([(s.qid, s.query, s.top()) for s in subdatas])

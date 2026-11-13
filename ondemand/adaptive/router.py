@@ -106,7 +106,8 @@ class CRCRouter(Router):
 
     def __init__(self, argument=None, bench=BENCH, pages_name="pages_ppocrv5.jsonl", model_path=None, **_):
         self.argument = argument or "stage0"
-        path = Path(model_path) if model_path else Path(__file__).with_name("crc_stage0.json")
+        named = Path(__file__).with_name(argument) if argument and argument.endswith(".json") else None
+        path = Path(model_path) if model_path else named or Path(__file__).with_name("crc_stage0.json")
         self.model = json.loads(path.read_text())
         source = work("light_prep", bench=bench) / pages_name
         self.pages = {r["page_id"]: r for r in load_jsonl(source)} if source.exists() else {}

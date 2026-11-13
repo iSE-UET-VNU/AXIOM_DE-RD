@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-from xgboost import XGBRegressor
 
 from .features import FEATURE_NAMES, extract_score_features
 
@@ -80,6 +79,8 @@ class AdaptiveKPredictor:
         if scaler_name:
             scaler_path = artifact_dir / scaler_name
             scaler = json.loads(scaler_path.read_text(encoding="utf-8"))
+        from xgboost import XGBRegressor
+
         model = XGBRegressor()
         model.load_model(model_path)
         return cls(model, policy, scaler)

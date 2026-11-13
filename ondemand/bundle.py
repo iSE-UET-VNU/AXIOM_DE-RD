@@ -6,11 +6,14 @@ import zipfile
 from .bench import BENCH, ROOT, documents, fingerprint, queries, work
 
 CODE = ("pyproject.toml", "ondemand")
-WORK = {"adaptive": ("light_prep/gate_ppocrv5_all.json", "light_prep/pages_ppocrv5.jsonl",
-                     "light_prep/pages_inspector.jsonl", "light_prep/qrels_page_level.jsonl",
-                     "embedding_cache/te3s_ppocr", "embeddings/kdl", "colvec/colvec_scores.npy",
-                     "colvec/colvec_keys.json", "colvec/colvec_qids.json", "colvec/colvec_meta.json",
-                     "colvec/query_embeddings.pt", "kdl/kdl_pages.jsonl", "kdl/kdl_meta.json", "qa_cache"),
+WORK = {"adaptive": ("light_prep/pages_ppocrv5.jsonl", "light_prep/pages_inspector.jsonl",
+                     "light_prep/qrels_page_level.jsonl", "light_prep/gate_ppocrv5_ungated_xgbK214.json",
+                     "light_v2/dense_qwen8b_nebius_bf16_pages_ppocrv5_pages.npy",
+                     "light_v2/dense_qwen8b_nebius_bf16_pages_ppocrv5_queries.npy",
+                     "light_v2/dense_qwen8b_nebius_bf16_pages_ppocrv5_meta.json", "adaptive_k",
+                     "routing_axes/k13/scores_v2_all.npy", "routing_axes/k13/meta_v2_all.json",
+                     "colvec/colvec_keys.json", "colvec/colvec_qids.json", "embedding_cache/te3s_ppocr",
+                     "embeddings/kdl", "qa_cache"),
         "handoff": ("light_prep", "colvec", "embedding_cache", "embeddings", "light_v2", "kdl", "qa_cache", "routing",
                     "results", "enrich", "logs")}
 BENCH_NAME = "0.1. BENCHMARK"

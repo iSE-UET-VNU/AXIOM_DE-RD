@@ -150,7 +150,7 @@ class Hierarchy:
         pooled = np.zeros(len(self.file_ids), dtype=np.float32)
         np.maximum.at(pooled, self.owner, dense if self.file_mode == "dense_pool" else base)
         pooled = normalise(pooled)
-        if self.file_mode == "dense_pool":
+        if self.file_mode in ("dense_pool", "blended_pool"):
             return pooled
         mask = self.policy(query_language, self.file_language)
         direct = normalise(self.file_bm25.scores(tokens))

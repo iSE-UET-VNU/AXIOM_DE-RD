@@ -7,6 +7,7 @@ from pathlib import Path
 from ..bench import queries as load_queries
 from . import pipeline, prep, services
 from .config import MODES, doctor, get_config
+from .modes import MODES as MODE_NAMES, STAGES, Modes, parse_overrides, seed_everything
 from .services.base import console
 
 
@@ -27,8 +28,31 @@ def add_service_args(p):
     g.add_argument("--ppocr-local", action="store_true", help=argparse.SUPPRESS)
 
 
+def add_mode_args(p):
+    g = p.add_argument_group("execution modes")
+    g.add_argument("--mode", choices=MODE_NAMES, default="offline",
+                   help="offline: read cached phase outputs, fail on a miss; online: run models/APIs and cache them")
+    g.add_argument("--stage-mode", action="append", default=[], metavar="STAGE=MODE",
+                   help=f"per-stage override; stages: {', '.join(STAGES)}")
+
+
+def add_stage_args(p):
+    g = p.add_argument_group("pipeline stages (registry specs)")
+    g.add_argument("--query-prep", default="none")
+    g.add_argument("--light", default="hier", help="hier, or gate:<gate json> for a precomputed legacy ranking")
+    g.add_argument("--embedder", default="qwen3_8b", help="qwen3_8b[:matrix stem] or te3s[:cache]")
+    g.add_argument("--signals", default="lang", help="lang: BM25 only when query and page languages match; all")
+    g.add_argument("--file-mode", default="blended_pool", choices=("blended_pool", "dense_pool", "bm25_blend"))
+    g.add_argument("--w-dense", type=float, default=0.70)
+    g.add_argument("--parent", type=float, default=0.15, help="file-score weight (1 - a)")
+    g.add_argument("--selector", default="oof_k",
+                   help="oof_k[:artifact] (benchmark, out-of-fold K), xgb_k[:artifact] (new queries), "
+                        "gate_k[:gate json], fixed:N, score_gap")
+    g.add_argument("--top3", default="none")
+
+
 def overrides(args):
-    keys = ["colvec_mode", "kdl_mode", "chandra_mode", "ppocr_mode", "colvec_model", "colvec_8bit", "colvec_endpoint",
+    keys = ["colvec_mode", "evie_mode", "kdl_mode", "chandra_mode", "ppocr_mode", "colvec_model", "colvec_8bit", "colvec_endpoint",
             "kdl_endpoint", "chandra_endpoint", "ppocr_endpoint", "ppocr_python", "all_local_gpu", "colvec_local",
             "chandra_local", "ppocr_local"]
     return {k: getattr(args, k) for k in keys if hasattr(args, k)}
@@ -66,28 +90,40 @@ def main():
     ap = argparse.ArgumentParser(prog="python -m ondemand.adaptive")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("run", help="gate -> k -> router -> per-model stages -> chunk&rank -> QA, resumable")
+    p = sub.add_parser("run", help="query prep -> light retrieval -> adaptive K -> visual -> chunk&rank -> QA, resumable")
     p.add_argument("--tag", required=True)
-    p.add_argument("--gate", default="gate_ppocrv5_ungated.json")
-    p.add_argument("--pages", default="pages_ppocrv5.jsonl")
-    p.add_argument("--k", default="fixed:20")
-    p.add_argument("--router", default="rule")
+    p.add_argument("--out-dir", help="write results here instead of results/<tag>")
+    add_mode_args(p)
+    add_stage_args(p)
+    p.add_argument("--router", default="fixed:visual")
     p.add_argument("--escalate", choices=("none", "jev"), default="none",
                    help="after light's chunks are ranked, ask Jev whether to re-route that query to visual")
     p.add_argument("--refine-k", default="fixed:10")
-    p.add_argument("--branch-arg", action="append", default=[], metavar="BRANCH=SPEC")
+    p.add_argument("--branch-arg", action="append", default=[], metavar="BRANCH=SPEC",
+                   help="default visual=visual:evie:skip_blank+ppocrv5+stop:10")
+    p.add_argument("--pages", default="pages_ppocrv5.jsonl")
     p.add_argument("--chunk", default="fixed:512:128")
     p.add_argument("--ranker", default="hybrid")
     p.add_argument("--top-chunks", type=int, default=10)
-    p.add_argument("--cache", default="te3s_ppocr")
+    p.add_argument("--dedupe", type=float, default=0.0,
+                   help="drop near-copy pages/chunks at this 3-word-shingle overlap, keeping the one that contains the other")
+    p.add_argument("--cache", default="te3s_ppocr", help="te3s chunk-embedding cache used by the hybrid chunk ranker")
     p.add_argument("--store", default="kdl")
     p.add_argument("--limit", type=int)
     p.add_argument("--qa", action="store_true")
-    p.add_argument("--allow-api", action="store_true")
+    p.add_argument("--reader", default="qwen3_vl_32b")
+    p.add_argument("--judge", default="gpt4o_mini_structured")
     p.add_argument("--exclude-flawed", action="store_true")
     p.add_argument("--resume", action="store_true", help="continue results/<tag>, skipping finished queries")
     p.add_argument("--keep-loaded", action="store_true", help="keep every model resident (only on large GPUs)")
     add_service_args(p)
+
+    p = sub.add_parser("qa", help="reader + judge over a finished run's per_query.jsonl")
+    p.add_argument("--tag", required=True)
+    p.add_argument("--out-dir", help="read and write here instead of results/<tag>")
+    p.add_argument("--reader", default="qwen3_vl_32b")
+    p.add_argument("--judge", default="gpt4o_mini_structured")
+    add_mode_args(p)
 
     p = sub.add_parser("query", help="one benchmark query id or free-text query")
     p.add_argument("query_text")
@@ -131,12 +167,21 @@ def main():
 
     args = ap.parse_args()
     if args.cmd == "run":
-        pipeline.run(args.tag, args.gate, k=args.k, router=args.router, escalate=args.escalate,
+        pipeline.run(args.tag, light=args.light, embedder=args.embedder, signals=args.signals,
+                     file_mode=args.file_mode, w_dense=args.w_dense, parent=args.parent, selector=args.selector,
+                     top3=args.top3, query_prep=args.query_prep, router=args.router, escalate=args.escalate,
                      branch_args=dict(item.split("=", 1) for item in args.branch_arg), refine_k=args.refine_k,
                      chunker=args.chunk, ranker=args.ranker, top_chunks=args.top_chunks, pages_name=args.pages,
-                     cache_name=args.cache, store=args.store, allow_api=args.allow_api, limit=args.limit,
-                     with_qa=args.qa, exclude_flawed=args.exclude_flawed, resume=args.resume,
-                     keep_loaded=args.keep_loaded, **overrides(args))
+                     cache_name=args.cache, store=args.store, mode=args.mode,
+                     stage_modes=parse_overrides(args.stage_mode), limit=args.limit, with_qa=args.qa,
+                     reader=args.reader, judge=args.judge, exclude_flawed=args.exclude_flawed, resume=args.resume,
+                     keep_loaded=args.keep_loaded, dedupe=args.dedupe, out_dir=args.out_dir, **overrides(args))
+    elif args.cmd == "qa":
+        from .qa import run as run_qa
+        console()
+        seed_everything()
+        run_qa(args.tag, reader=args.reader, judge=args.judge, out_dir=args.out_dir,
+               modes=Modes(args.mode, parse_overrides(args.stage_mode)))
     elif args.cmd == "query":
         pipe = pipeline.AdaptivePipeline(gate_name=args.gate, k=args.k, router=args.router, pages_name=args.pages,
                                          ranker=args.ranker, store=args.store, allow_api=args.allow_api,

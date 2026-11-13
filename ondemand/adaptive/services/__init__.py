@@ -2,10 +2,11 @@ from ...bench import BENCH
 from ..config import get_config
 from .chandra import Chandra
 from .colvec import ColVec
+from .evie import EVIE
 from .kdl import KDL
 from .ppocr import PPOCR
 
-SERVICES = {"colvec": ColVec, "kdl": KDL, "chandra": Chandra, "ppocr": PPOCR}
+SERVICES = {"colvec": ColVec, "evie": EVIE, "kdl": KDL, "chandra": Chandra, "ppocr": PPOCR}
 OPEN = {}
 KEEP_LOADED = {"value": False}
 
@@ -15,6 +16,8 @@ def create(name, cfg=None, bench=BENCH):
     if name == "colvec":
         return ColVec(cfg.colvec_mode, bench, model=cfg.colvec_model, endpoint=cfg.colvec_endpoint,
                       api_key=cfg.colvec_api_key, load_8bit=cfg.colvec_8bit)
+    if name == "evie":
+        return EVIE(cfg.evie_mode, bench)
     if name == "kdl":
         return KDL(cfg.kdl_mode, bench, endpoint=cfg.kdl_endpoint, provider=cfg.kdl_provider, port=cfg.kdl_port)
     if name == "chandra":
@@ -47,4 +50,4 @@ def close_all():
     OPEN.clear()
 
 
-__all__ = ["SERVICES", "ColVec", "KDL", "Chandra", "PPOCR", "create", "get", "release", "keep_loaded", "close_all"]
+__all__ = ["SERVICES", "ColVec", "EVIE", "KDL", "Chandra", "PPOCR", "create", "get", "release", "keep_loaded", "close_all"]

@@ -5,6 +5,7 @@ import os
 import subprocess
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
@@ -12,6 +13,7 @@ import numpy as np
 from ..bench import BENCH, FLAWED_QIDS, ROOT, fingerprint, gold as load_gold, load_jsonl, queries as load_queries, work
 from ..evaluate import evaluate, groups
 from . import chunk_rank as _chunk_rank, kpolicy as _kpolicy, router as _router  # noqa: F401
+from . import embedders, qa_judge, qa_reader, query_prep, retrievers, selector  # noqa: F401
 from .branches import enrich, light, visual  # noqa: F401
 from ..light_retrieval import LiveRetriever
 from .chunk_rank import ChunkRank
@@ -19,23 +21,15 @@ from .escalate import jev_check, route_action
 from . import fallback, services
 from .config import MODES, get_config
 from .embedding import Embedder
+from .modes import SEED, Modes, seed_everything
 from .registry import build, names
+from .retrievers import load_gate
 from .services.base import attach, console, detach, gpu_info
 from .subdata import SubData
 
 STAGE_ORDER = ("visual", "enrich", "light")
 LIVE_FALLBACKS = {f"{service}_{mode}" for service, modes in MODES.items() for mode in modes if mode != "cached"}
 log = logging.getLogger("ondemand.run")
-
-
-def load_gate(name, bench=BENCH):
-    path = work("light_prep", bench=bench) / name
-    if not path.exists():
-        raise SystemExit(f"{path} is missing; run `python -m ondemand.adaptive prep` first")
-    gate = json.loads(path.read_text())
-    if gate["bundle_fingerprint"] != fingerprint(bench):
-        raise SystemExit(f"{name} is from a different bundle")
-    return gate
 
 
 def append(path, row):
@@ -60,20 +54,31 @@ def subdata_for(gate, qid, query):
     return SubData(qid, query, gate.get("light_run_top100", {}).get(qid, pages), scores, len(pages))
 
 
-def run(tag, gate_name, k="fixed:20", router="fixed:visual", escalate="none", branch_args=None, refine_k="fixed:10",
-        chunker="fixed:512:128", ranker="hybrid", top_chunks=10, pages_name="pages_ppocrv5.jsonl",
-        cache_name="te3s_ppocr", store=None, allow_api=False, limit=None, bench=BENCH, with_qa=False,
-        exclude_flawed=False, resume=False, keep_loaded=False, **service_overrides):
-    out = work("results", tag, bench=bench)
+DEFAULT_VISUAL = "visual:evie:skip_blank+ppocrv5+stop:10"
+
+
+def run(tag, light="hier", embedder="qwen3_8b", signals="lang", file_mode="blended_pool", w_dense=0.70, parent=0.15,
+        selector="oof_k", top3="none", query_prep="none", router="fixed:visual", escalate="none", branch_args=None,
+        refine_k="fixed:10", chunker="fixed:512:128", ranker="hybrid", top_chunks=10,
+        pages_name="pages_ppocrv5.jsonl", cache_name="te3s_ppocr", store="kdl", mode="offline", stage_modes=None,
+        allow_api=False, limit=None, bench=BENCH, with_qa=False, reader="qwen3_vl_32b",
+        judge="gpt4o_mini_structured", exclude_flawed=False, resume=False, keep_loaded=False, dedupe=0.0,
+        out_dir=None, **service_overrides):
+    out = Path(out_dir) if out_dir else work("results", tag, bench=bench)
+    out.mkdir(parents=True, exist_ok=True)
     records_path = out / "per_query.jsonl"
     if records_path.exists() and not resume:
         raise SystemExit(f"{out} already holds results; pass --resume to continue it, or use a new --tag")
+    modes = Modes("online" if allow_api and mode == "offline" else mode, stage_modes)
+    stages = {"light": light, "embedder": embedder, "signals": signals, "file_mode": file_mode, "w_dense": w_dense,
+              "parent": parent, "selector": selector, "top3": top3, "query_prep": query_prep, "reader": reader,
+              "judge": judge}
     console()
     handler = attach(out / "run.log")
     try:
-        return _run(tag, out, records_path, gate_name, k, router, escalate, branch_args or {}, refine_k, chunker,
-                    ranker, top_chunks, pages_name, cache_name, store, allow_api, limit, bench, with_qa,
-                    exclude_flawed, keep_loaded, service_overrides)
+        return _run(tag, out, records_path, stages, modes, router, escalate, branch_args or {}, refine_k, chunker,
+                    ranker, top_chunks, pages_name, cache_name, store, limit, bench, with_qa, exclude_flawed,
+                    keep_loaded, dedupe, service_overrides)
     except BaseException as error:
         log.error("run %s stopped: %s: %s; rerun with --resume to continue", tag, type(error).__name__, error)
         raise
@@ -82,28 +87,53 @@ def run(tag, gate_name, k="fixed:20", router="fixed:visual", escalate="none", br
         detach(handler)
 
 
-def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, refine_k, chunker, ranker, top_chunks,
-         pages_name, cache_name, store, allow_api, limit, bench, with_qa, exclude_flawed, keep_loaded, overrides):
+def build_light(stages, modes, bench, pages_name):
+    if stages["light"].partition(":")[0] == "gate":
+        return build("light_retriever", stages["light"], bench=bench)
+    dense = build("embedder", stages["embedder"], bench=bench, online=modes.online("embedder"))
+    return build("light_retriever", stages["light"], bench=bench, pages_name=pages_name, embedder=dense,
+                 signals=stages["signals"], file_mode=stages["file_mode"], w_dense=stages["w_dense"],
+                 parent=stages["parent"])
+
+
+def _run(tag, out, records_path, stages, modes, router, escalate, branch_args, refine_k, chunker, ranker,
+         top_chunks, pages_name, cache_name, store, limit, bench, with_qa, exclude_flawed, keep_loaded, dedupe,
+         overrides):
+    seed_everything(SEED)
     fallback.reset()
     services.close_all()
     services.keep_loaded(keep_loaded)
     cfg = get_config().apply(**overrides)
-    live = [name for name, info in cfg.services().items() if info["mode"] != "cached" and name != "colvec"]
-    if live and ranker.startswith("hybrid") and not allow_api:
+    chunk_online = modes.online("chunk_rank")
+    live = [name for name, info in cfg.services().items() if info["mode"] != "cached" and name not in ("colvec", "evie")]
+    if live and ranker.startswith("hybrid") and not chunk_online:
         raise SystemExit(f"{', '.join(live)} will produce page text that has no cached embedding, and --ranker hybrid "
-                         f"embeds every chunk; pass --allow-api (te3-small) or use --ranker page_order")
-    gate = load_gate(gate_name, bench)
+                         f"embeds every chunk; run chunk_rank online (te3-small) or use --ranker page_order")
     gold, queries = load_gold(bench), load_queries(bench)
-    qids = sorted(gate["gate"])
+    qids = sorted(gold)
     if exclude_flawed:
         qids = [q for q in qids if q not in FLAWED_QIDS]
     if limit:
         qids = qids[:limit]
+    branch_args = {"visual": DEFAULT_VISUAL, **branch_args}
 
-    settings = {"gate": gate_name, "gate_variant": gate["variant"], "pages_source": pages_name, "k": k,
-                "router": router, "escalate": escalate, "branch_args": branch_args, "refine_k": refine_k,
-                "chunker": chunker, "ranker": ranker, "top_chunks": top_chunks, "embedding_cache": cache_name,
-                "embedding_store": store, "exclude_flawed": exclude_flawed, "limit": limit, "services": cfg.public()}
+    prep = build("query_prep", stages["query_prep"], bench=bench, online=modes.online("query_prep"))
+    light = build_light(stages, modes, bench, pages_name)
+    started = perf_counter()
+    light.prepare(qids)
+    log.info("light retriever ready in %.1fs: %s", perf_counter() - started, light.settings())
+    selector = build("adaptive_selector", stages["selector"], bench=bench)
+    selector.bind(light.settings())
+    top3 = build("top3_check", stages["top3"], bench=bench)
+
+    settings = {"query_prep": prep.settings(), "light": light.settings(), "selector": selector.settings(),
+                "top3_check": top3.settings(), "pages_source": pages_name, "router": router, "escalate": escalate,
+                "branch_args": branch_args, "refine_k": refine_k, "chunker": chunker, "ranker": ranker,
+                "top_chunks": top_chunks, "embedding_cache": cache_name, "embedding_store": store,
+                "exclude_flawed": exclude_flawed, "limit": limit, "modes": modes.public(), "seed": SEED,
+                "services": cfg.public()}
+    if dedupe:
+        settings["dedupe"] = dedupe
     manifest_path = out / "manifest.json"
     if manifest_path.exists():
         previous = json.loads(manifest_path.read_text())
@@ -119,16 +149,17 @@ def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, re
     for qid in degraded:
         del done[qid]
     todo = [q for q in qids if q not in done]
-    log.info("run %s: %d queries, %d already done, %d to go (%d retried after a live-model failure) | services %s",
-             tag, len(qids), len(done), len(todo), len(degraded), json.dumps(cfg.services()))
+    log.info("run %s: %d queries, %d already done, %d to go (%d retried after a live-model failure) | modes %s",
+             tag, len(qids), len(done), len(todo), len(degraded), json.dumps(modes.public()))
 
-    embedder = Embedder(bench=bench, cache_name=cache_name, allow_api=allow_api, store=store,
+    embedder = Embedder(bench=bench, cache_name=cache_name, allow_api=chunk_online, store=store,
                         query_ids={q["query"]: q["query_id"] for q in queries.values()})
+    gate = getattr(light, "gate", None)
     context = {"bench": bench, "pages_name": pages_name, "refine_k": refine_k, "embedder": embedder,
-               "cache_name": cache_name, "allow_api": allow_api, "gate": gate}
-    k_policy = build("k", k, **context)
+               "cache_name": cache_name, "allow_api": chunk_online, "gate": gate, "dedupe": dedupe, "modes": modes}
     route = build("router", router, **context)
-    chunk_rank = ChunkRank(build("chunker", chunker, **context), build("ranker", ranker, **context), top_chunks)
+    chunk_rank = ChunkRank(build("chunker", chunker, **context), build("ranker", ranker, **context), top_chunks,
+                           dedupe)
     built = {}
 
     def branch_of(name):
@@ -139,11 +170,21 @@ def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, re
     plan = []
     for qid in todo:
         started, before = perf_counter(), fallback.snapshot()
-        subdata = subdata_for(gate, qid, queries[qid]["query"])
-        subdata.k = k_policy.choose(subdata)
-        name, route_notes = route.route(subdata)
-        plan.append({"qid": qid, "subdata": subdata, "branch": name, "route": route_notes,
-                     "route_seconds": perf_counter() - started, "fallbacks": fallback.since(before)})
+        prepared = prep.prepare(queries[qid]["query"], {"qid": qid})
+        subdata, light_notes = light.retrieve(qid, prepared)
+        subdata.raw = prepared.raw
+        light_seconds = perf_counter() - started
+        subdata.k, selector_notes = selector.choose(subdata)
+        verdict = top3.check(prepared, subdata, modes.online("top3_check"))
+        if verdict["action"] == "stop":
+            subdata.k = min(3, len(subdata.pages))
+            name, route_notes = "light", {"reason": "top3_check stop"}
+        else:
+            name, route_notes = route.route(subdata)
+        plan.append({"qid": qid, "subdata": subdata, "branch": name, "route": route_notes, "prepared": prepared,
+                     "light_notes": light_notes, "selector_notes": selector_notes, "top3": verdict,
+                     "light_seconds": light_seconds, "route_seconds": perf_counter() - started,
+                     "fallbacks": fallback.since(before)})
     counts = Counter(p["branch"] for p in plan)
     log.info("routed %d queries: %s", len(plan), dict(counts))
 
@@ -164,9 +205,9 @@ def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, re
         top, chunk_notes = chunk_rank.run(query, output.passages)
         escalation = None
         if escalate == "jev" and name == "light":
-            verdict = jev_check(query, top, allow_api, bench=bench)
+            verdict = jev_check(query, top, modes.online("top3_check"), bench=bench)
             action = route_action(verdict)
-            escalation = {"checked": True, "action": action, "from": name}
+            escalation = {"checked": True, "action": action, "from": name, "jev_seconds": verdict.get("seconds")}
             if action != "complete":
                 visual = branch_of("visual")
                 if hasattr(visual, "prepare"):
@@ -178,13 +219,17 @@ def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, re
         used = fallback.since(before)
         for kind, n in item["fallbacks"].items():
             used[kind] = used.get(kind, 0) + n
-        cost = {**output.cost, "route_seconds": round(item["route_seconds"], 6),
+        cost = {**output.cost, "light_seconds": round(item["light_seconds"], 6),
+                "route_seconds": round(item["route_seconds"], 6),
                 "total_seconds": round(item["route_seconds"] + perf_counter() - started, 6),
                 "chunk_seconds": round(chunk_notes["seconds"], 6)}
         record = {
-            "query_id": qid, "source": queries[qid]["source"], "query": query, "answers": queries[qid]["answers"],
+            "query_id": qid, "source": queries[qid]["source"], "query": queries[qid]["query"],
+            "prepared_query": item["prepared"].public(), "answers": queries[qid]["answers"],
             "gold": [{"unit": u, "relevance": g} for u, g in gold[qid].items()],
-            "k": subdata.k, "branch": name, "route": item["route"], "escalation": escalation, "fallbacks": used,
+            "k": subdata.k, "branch": name, "route": item["route"], "light_notes": item["light_notes"],
+            "selector_notes": item["selector_notes"], "top3_check": item["top3"], "escalation": escalation,
+            "fallbacks": used,
             "subdata": [{"unit": u, "rank": r + 1} for r, u in enumerate(subdata.top())],
             "branch_pages": [{"unit": p.page_id, "rank": p.rank} for p in output.passages],
             "branch_notes": output.notes, "cost": cost,
@@ -204,13 +249,14 @@ def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, re
     tmp = records_path.with_suffix(".jsonl.tmp")
     tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
     tmp.replace(records_path)
-    summary = summarize(tag, gate, gate_name, pages_name, records, qids, queries, gold, settings, embedder, bench)
+    summary = summarize(tag, light.settings(), pages_name, records, qids, queries, gold, settings, embedder, bench)
     summary["services"] = {n: b.describe() for n, b in built.items()}
     (out / "metrics.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     if with_qa:
         from .qa import run as run_qa
         log.info("QA on %d queries", len(records))
-        summary["qa"] = run_qa(tag, bench=bench, allow_api=allow_api)
+        summary["qa"] = run_qa(tag, bench=bench, reader=stages["reader"], judge=stages["judge"], modes=modes,
+                               out_dir=out)
         (out / "metrics.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     for group, m in summary["metrics"].items():
         log.info("%-22s n=%3d ndcg@10 %6.2f r@10 %6.2f r@20 %6.2f chunk_page_hit %6.2f", group, m["n"],
@@ -226,7 +272,7 @@ def _run(tag, out, records_path, gate_name, k, router, escalate, branch_args, re
     return summary
 
 
-def summarize(tag, gate, gate_name, pages_name, records, qids, queries, gold, settings, embedder, bench):
+def summarize(tag, light, pages_name, records, qids, queries, gold, settings, embedder, bench):
     run_rows = {r["query_id"]: {p["unit"]: float(len(r["branch_pages"]) - i) for i, p in enumerate(r["branch_pages"])}
                 for r in records}
     by_qid = {r["query_id"]: r for r in records}
@@ -252,7 +298,7 @@ def summarize(tag, gate, gate_name, pages_name, records, qids, queries, gold, se
         costs[r["branch"]].append(r["cost"])
     model_keys = sorted({key for r in records for key in r["cost"] if key.endswith("_model_seconds")})
     return {
-        "tag": tag, "gate": gate_name, "gate_variant": gate["variant"], "pages_source": pages_name,
+        "tag": tag, "light": light, "pages_source": pages_name,
         "bundle_fingerprint": fingerprint(bench), "n_queries": len(records), "settings": settings,
         "fallbacks": {kind: {"queries": len(q), "calls": sum(q.values())} for kind, q in sorted(used.items())},
         "branch_counts": dict(Counter(r["branch"] for r in records)),
@@ -268,8 +314,9 @@ def summarize(tag, gate, gate_name, pages_name, records, qids, queries, gold, se
 
 
 def available():
-    return {kind: names(kind) for kind in ("k", "router", "branch", "scorer", "parser", "enricher",
-                                           "chunker", "ranker")}
+    return {kind: names(kind) for kind in ("query_prep", "embedder", "light_retriever", "adaptive_selector",
+                                           "top3_check", "k", "router", "branch", "scorer", "parser", "enricher",
+                                           "chunker", "ranker", "qa_reader", "qa_judge")}
 
 
 def artifacts(bench=BENCH, pages_name="pages_ppocrv5.jsonl"):
