@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": ["2670°C", "2690°C", "Fahrenheit"], "discard": ["Calculate the difference in", "between"], "answer_shape": "single_fact", "relations": [["difference", "in", "Fahrenheit", "between", "2670°C", "and", "2690°C"]]}

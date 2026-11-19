@@ -1,0 +1,1 @@
+{"scope": ["USAF TO 32-1-101"], "topic": ["section 36.2.1"], "anchor": ["tube cutters", "brass tubing"], "discard": ["Can", "cut", "as per"], "answer_shape": "single_fact", "relations": [["tube cutters", "cut", "brass tubing"]]}

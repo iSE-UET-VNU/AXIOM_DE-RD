@@ -1,0 +1,1 @@
+{"scope": ["Policy Number GL-414"], "topic": ["Accidental Death Benefit provision"], "anchor": ["Class 3", "protected person", "additional amount payable", "beneficiary"], "discard": ["What is", "under", "of"], "answer_shape": "single_fact", "relations": [["Accidental Death Benefit provision", "applies to", "Class 3"], ["additional amount payable", "to", "beneficiary"]]}

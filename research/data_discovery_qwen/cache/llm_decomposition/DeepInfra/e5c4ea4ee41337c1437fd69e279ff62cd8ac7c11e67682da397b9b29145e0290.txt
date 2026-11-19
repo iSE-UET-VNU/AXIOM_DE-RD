@@ -1,0 +1,1 @@
+{"scope": ["human energy consumption", "technological advancements", "global environmental consequences", "Paleolithic"], "topic": [], "anchor": [], "discard": ["Analyze the links between", "since"], "answer_shape": "document_summary", "relations": []}

@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["wave-particle duality"], "anchor": ["quantization of energy"], "discard": ["Explain", "and its role in"], "answer_shape": "single_fact", "relations": [["wave-particle duality", "role in", "quantization of energy"]]}

@@ -1,0 +1,1 @@
+{"scope": ["Planck units"], "topic": ["derived from"], "anchor": ["c", "G", "ℏ"], "discard": ["Are the", "from the constants"], "answer_shape": "single_fact", "relations": [["Planck units", "derived from", "c"], ["Planck units", "derived from", "G"], ["Planck units", "derived from", "ℏ"]]}

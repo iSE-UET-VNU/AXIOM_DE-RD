@@ -1,0 +1,1 @@
+{"scope": ["classical mechanics"], "topic": ["principle of least action", "physical trajectories"], "anchor": [], "discard": ["link between", "and"], "answer_shape": "document_summary", "relations": [["principle of least action", "and", "physical trajectories"]]}

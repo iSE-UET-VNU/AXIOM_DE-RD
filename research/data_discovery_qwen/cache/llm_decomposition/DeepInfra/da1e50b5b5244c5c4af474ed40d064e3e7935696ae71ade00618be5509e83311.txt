@@ -1,0 +1,1 @@
+{"scope": ["Summary of USAF Technical Manual Sections"], "topic": ["25mm gun safety pin"], "anchor": ["stored when not in use"], "discard": ["Where is", "per the"], "answer_shape": "single_fact", "relations": [["25mm gun safety pin", "stored when not in use"]]}

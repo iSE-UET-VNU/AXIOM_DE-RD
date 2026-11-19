@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["relativity", "space-time", "gravity"], "anchor": [], "discard": ["Compare the three forms of", "by analyzing their respective conceptions of", "their implications for the understanding of"], "answer_shape": "document_summary", "relations": []}

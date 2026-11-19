@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["gap in years"], "anchor": ["Dirac", "theoretical prediction of antimatter", "experimental confirmation"], "discard": ["What is the", "between", "and"], "answer_shape": "single_fact", "relations": [["Dirac", "theoretical prediction of antimatter", "gap in years"], ["theoretical prediction of antimatter", "and", "experimental confirmation"]]}

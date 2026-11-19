@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["screwdriver sides"], "anchor": ["parallel", "screwdriver becomes damaged"], "discard": ["Why must", "when"], "answer_shape": "single_fact", "relations": [["screwdriver sides", "be", "parallel"], ["screwdriver", "becomes", "damaged"]]}

@@ -1,0 +1,1 @@
+{"scope": ["TO 00-25-172"], "topic": ["grounding and static discharge"], "anchor": ["HSV operations"], "discard": ["Is", "used for guidance on", "during"], "answer_shape": "single_fact", "relations": [["grounding and static discharge", "during", "HSV operations"]]}

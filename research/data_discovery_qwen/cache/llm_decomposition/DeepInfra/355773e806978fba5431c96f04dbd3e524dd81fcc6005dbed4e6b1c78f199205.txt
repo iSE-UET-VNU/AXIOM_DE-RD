@@ -1,0 +1,1 @@
+{"scope": ["military aircraft models"], "topic": ["specialized defueling procedures"], "anchor": ["hydrant servicing equipment"], "discard": ["Which", "necessitate", "when using"], "answer_shape": "every_instance", "relations": [["defueling procedures", "for", "military aircraft models"], ["using", "hydrant servicing equipment"]]}

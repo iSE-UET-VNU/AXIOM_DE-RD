@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["wing tip separation distance"], "anchor": ["minimum", "rapid defueling", "fire truck presence"], "discard": ["minimum", "during", "with"], "answer_shape": "single_fact", "relations": [["wing tip separation distance", "during", "rapid defueling"], ["wing tip separation distance", "with", "fire truck presence"]]}

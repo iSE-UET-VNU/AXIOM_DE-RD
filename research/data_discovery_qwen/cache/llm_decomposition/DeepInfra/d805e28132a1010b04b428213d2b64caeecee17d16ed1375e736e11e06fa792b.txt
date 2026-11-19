@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["maintaining operational readiness", "aircraft fuel servicing operations"], "anchor": [], "discard": ["Explain the key factors that contribute to", "including both procedural and equipment-related considerations"], "answer_shape": "document_summary", "relations": []}

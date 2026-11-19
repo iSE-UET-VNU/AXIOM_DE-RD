@@ -1,0 +1,1 @@
+{"scope": ["SCR"], "topic": ["establish a liaison", "concurrent servicing operations"], "anchor": ["before beginning"], "discard": ["With whom shall", "as per the USAF technical manuals and orders"], "answer_shape": "single_fact", "relations": [["establish a liaison", "before", "beginning concurrent servicing operations"], ["SCR", "establish a liaison", "before beginning"]]}

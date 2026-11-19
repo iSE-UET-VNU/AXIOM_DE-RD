@@ -1,0 +1,1 @@
+{"scope": ["Klein-Gordon and Dirac equations"], "topic": ["modeling gravitational interactions"], "anchor": ["speeds close to the speed of light"], "discard": ["Do", "allow", "at"], "answer_shape": "single_fact", "relations": [["gravitational interactions", "at", "speeds close to the speed of light"]]}

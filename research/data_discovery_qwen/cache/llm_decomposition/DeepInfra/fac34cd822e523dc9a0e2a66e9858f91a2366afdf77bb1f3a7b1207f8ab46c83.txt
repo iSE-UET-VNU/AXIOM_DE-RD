@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["energy transfer", "conduction", "convection"], "anchor": [], "discard": ["Compare"], "answer_shape": "document_summary", "relations": []}

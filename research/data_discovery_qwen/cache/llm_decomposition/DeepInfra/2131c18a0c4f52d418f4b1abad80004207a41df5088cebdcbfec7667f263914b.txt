@@ -1,0 +1,1 @@
+{"scope": ["quantum particle"], "topic": [], "anchor": ["exact position", "before a measurement", "complete wave function"], "discard": ["Is it possible to predict with certainty the", "if one knows"], "answer_shape": "single_fact", "relations": [["quantum particle", "exact position", "before a measurement"], ["exact position", "if one knows", "complete wave function"]]}

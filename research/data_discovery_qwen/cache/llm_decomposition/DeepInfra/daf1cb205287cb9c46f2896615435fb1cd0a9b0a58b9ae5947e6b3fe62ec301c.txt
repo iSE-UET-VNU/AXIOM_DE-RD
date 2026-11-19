@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["collective properties"], "anchor": ["physical systems", "interactions", "individual components"], "discard": ["Explain how", "emerge", "from"], "answer_shape": "single_fact", "relations": [["collective properties", "emerge in", "physical systems"], ["collective properties", "from", "interactions"], ["interactions", "between", "individual components"]]}

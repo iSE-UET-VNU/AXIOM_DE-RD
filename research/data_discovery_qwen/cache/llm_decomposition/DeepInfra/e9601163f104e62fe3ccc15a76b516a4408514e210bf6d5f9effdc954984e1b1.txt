@@ -1,0 +1,1 @@
+{"scope": ["quantum mechanics"], "topic": ["spin", "integration into the standard model"], "anchor": [], "discard": ["Classical vs", "key concepts"], "answer_shape": "document_summary", "relations": []}

@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["emergency shutdown"], "anchor": ["aircraft fuel servicing"], "discard": ["Explain the sequence of actions required to"], "answer_shape": "single_fact", "relations": [["emergency shutdown", "during", "aircraft fuel servicing"]]}

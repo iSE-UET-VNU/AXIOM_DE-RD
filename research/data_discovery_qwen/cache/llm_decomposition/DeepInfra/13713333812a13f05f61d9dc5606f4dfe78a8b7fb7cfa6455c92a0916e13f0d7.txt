@@ -1,0 +1,1 @@
+{"scope": ["Lower Cambrian rocks of Shropshire"], "topic": ["'Olenellus' fauna"], "anchor": ["geologist", "discovered", "Olenellus"], "discard": ["Which", "discovered the", "in the", "of Shropshire"], "answer_shape": "single_fact", "relations": [["geologist", "discovered", "Olenellus fauna"], ["Olenellus fauna", "in", "Lower Cambrian rocks"]]}

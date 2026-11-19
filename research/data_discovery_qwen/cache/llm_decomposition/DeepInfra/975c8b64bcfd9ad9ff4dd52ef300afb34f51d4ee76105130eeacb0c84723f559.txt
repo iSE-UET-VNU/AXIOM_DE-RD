@@ -1,0 +1,1 @@
+{"scope": ["emergency showers"], "topic": [], "anchor": ["hazard mitigation"], "discard": ["Do the USAF technical manuals include", "as part of"], "answer_shape": "document_summary", "relations": [["emergency showers", "as part of", "hazard mitigation"]]}

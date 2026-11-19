@@ -1,0 +1,1 @@
+{"scope": ["Chor Nar Ng's property"], "topic": ["EARNED PRNetLiab"], "anchor": ["percentage increase", "09/30/2013", "09/30/2014"], "discard": ["What is the", "for", "from the policy term starting on", "to the policy term starting on"], "answer_shape": "single_fact", "relations": [["EARNED PRNetLiab", "from", "09/30/2013", "to", "09/30/2014", "percentage increase in"]] }

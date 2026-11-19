@@ -1,0 +1,1 @@
+{"scope": ["Texas Pregnancy Care Network", "TPCN 1-1 Project Work Plan"], "topic": ["SP Services to Clients"], "anchor": ["start and end date"], "discard": ["What is the", "in the"], "answer_shape": "single_fact", "relations": [["SP Services to Clients", "has", "start and end date"]]}

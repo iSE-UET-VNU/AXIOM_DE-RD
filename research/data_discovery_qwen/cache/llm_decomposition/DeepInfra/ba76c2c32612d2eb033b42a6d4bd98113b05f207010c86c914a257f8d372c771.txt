@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": [], "discard": ["State the type of protection required to wear when using", "as per USAF technical manuals and orders"], "answer_shape": "single_fact", "relations": []}

@@ -1,0 +1,1 @@
+{"scope": ["USDA Club", "Dallas Chapter"], "topic": ["Board of Directors"], "anchor": ["Roy W. Everett, Jr.", "alternate", "1952"], "discard": ["Who was", "on the", "in"], "answer_shape": "single_fact", "relations": [["Roy W. Everett, Jr.", "alternate", "Board of Directors"]]}

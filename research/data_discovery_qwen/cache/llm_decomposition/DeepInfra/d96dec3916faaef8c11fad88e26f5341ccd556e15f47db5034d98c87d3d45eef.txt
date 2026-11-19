@@ -1,0 +1,1 @@
+{"scope": ["Boltzmann entropy"], "topic": ["microscopic configurations"], "anchor": ["Number"], "discard": ["Number of", "entropy"], "answer_shape": "single_fact", "relations": [["Number", "of", "microscopic configurations"]]}

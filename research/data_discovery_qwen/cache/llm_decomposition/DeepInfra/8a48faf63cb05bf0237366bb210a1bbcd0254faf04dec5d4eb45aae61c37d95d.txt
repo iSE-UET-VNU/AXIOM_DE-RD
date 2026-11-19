@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["voids"], "anchor": ["greater than 20% of the encapsulation thickness"], "discard": ["Are", "a defect?"], "answer_shape": "single_fact", "relations": [["voids", "greater than", "20% of the encapsulation thickness"]]}

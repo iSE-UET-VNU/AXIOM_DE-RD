@@ -1,0 +1,1 @@
+{"scope": ["Mattocks"], "topic": ["Operations"], "anchor": [], "discard": ["that ... are designed for"], "answer_shape": "document_summary", "relations": [["Mattocks", "designed for", "Operations"]]}

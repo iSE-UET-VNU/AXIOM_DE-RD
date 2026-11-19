@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": ["Duncan Jeffs", "Richmond Hill Presbyterian Church", "Canada"], "discard": ["Is", "associated with", "in"], "answer_shape": "single_fact", "relations": [["Duncan Jeffs", "associated with", "Richmond Hill Presbyterian Church"]] }

@@ -1,0 +1,1 @@
+{"scope": ["HP NewWave"], "topic": ["run Microsoft Windows 2.0 applications"], "anchor": ["PageMaker"], "discard": ["Which", "allows users to", "like"], "answer_shape": "single_fact", "relations": [["run", "Microsoft Windows 2.0 applications", "PageMaker"]]}

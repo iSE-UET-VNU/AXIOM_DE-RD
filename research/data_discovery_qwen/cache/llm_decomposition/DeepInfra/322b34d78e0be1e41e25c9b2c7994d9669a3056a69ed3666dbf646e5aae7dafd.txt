@@ -1,0 +1,1 @@
+{"scope": ["JP-4", "Jet B", "aircraft equipment servicing manual"], "topic": ["fuel risks"], "anchor": [], "discard": ["Identify similarities between", "according to the USAF"], "answer_shape": "document_summary", "relations": [["JP-4", "similarities with", "Jet B"]]}

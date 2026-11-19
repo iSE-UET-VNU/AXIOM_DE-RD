@@ -1,0 +1,1 @@
+{"scope": ["Astronautics Section of the V. P. Chkalov Central Aeroclub of the USSR"], "topic": [], "anchor": ["1954", "primary objective"], "discard": ["What was", "of the", "when it was organized"], "answer_shape": "single_fact", "relations": [["Astronautics Section", "organized in", "1954"]]}

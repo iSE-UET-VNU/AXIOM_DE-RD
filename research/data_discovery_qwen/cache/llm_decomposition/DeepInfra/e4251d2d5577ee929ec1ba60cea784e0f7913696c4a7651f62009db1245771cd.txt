@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["domains of modern physics"], "anchor": ["scales of size and speed"], "discard": ["Describe the role of", "in structuring"], "answer_shape": "document_summary", "relations": [["scales of size and speed", "in", "domains of modern physics"]]}

@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["nonlinear dynamical systems"], "anchor": ["small variations in initial conditions", "unpredictable behavior"], "discard": ["Explain how", "can lead to"], "answer_shape": "single_fact", "relations": [["small variations in initial conditions", "lead to", "unpredictable behavior"], ["unpredictable behavior", "in", "nonlinear dynamical systems"]]}

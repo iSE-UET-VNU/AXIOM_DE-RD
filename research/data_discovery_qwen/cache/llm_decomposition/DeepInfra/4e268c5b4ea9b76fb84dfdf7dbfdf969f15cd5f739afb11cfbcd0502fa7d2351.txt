@@ -1,0 +1,1 @@
+{"scope": ["Projection Drawing"], "topic": [], "anchor": ["position", "form", "magnitude", "geometrical quantities", "space"], "discard": ["What method is used in", "to represent all facts of"], "answer_shape": "single_fact", "relations": [["geometrical quantities", "in", "space"]]}

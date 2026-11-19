@@ -1,0 +1,1 @@
+{"scope": ["aircraft fueling operations"], "topic": ["fire extinguisher"], "anchor": ["visible to aircrew"], "discard": ["What type of", "is required to be"], "answer_shape": "single_fact", "relations": [["fire extinguisher", "visible to", "aircrew"]]}

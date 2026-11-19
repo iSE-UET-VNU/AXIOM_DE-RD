@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["space-time", "symmetries", "fundamental interactions"], "anchor": [], "discard": ["How do the concepts of", "jointly contribute to our current understanding of the universe"], "answer_shape": "document_summary", "relations": [["space-time", "and", "symmetries"], ["symmetries", "and", "fundamental interactions"]]}

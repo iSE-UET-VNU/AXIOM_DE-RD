@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["second principle of thermodynamics"], "anchor": ["entropy of a system", "environment"], "discard": ["What are the consequences of", "on"], "answer_shape": "document_summary", "relations": [["second principle of thermodynamics", "on", "entropy of a system"], ["second principle of thermodynamics", "on", "environment"]]}

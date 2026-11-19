@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["selling stocks"], "anchor": ["stop limit threshold time"], "discard": ["What is", "in the described process"], "answer_shape": "single_fact", "relations": [["stop limit threshold time", "for", "selling stocks"]]}

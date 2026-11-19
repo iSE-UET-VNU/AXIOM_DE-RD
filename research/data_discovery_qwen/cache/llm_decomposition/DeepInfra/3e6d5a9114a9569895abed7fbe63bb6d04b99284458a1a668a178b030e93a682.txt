@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["Superconductivity"], "anchor": ["zero resistance", "critical temperature", "microscopic explanation"], "discard": ["the", "and"], "answer_shape": "single_fact", "relations": [["Superconductivity", "includes", "zero resistance"], ["Superconductivity", "includes", "critical temperature"], ["Superconductivity", "includes", "microscopic explanation"]]}

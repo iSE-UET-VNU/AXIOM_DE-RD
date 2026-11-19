@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": [], "discard": ["Explain the key factors that contribute to", "contamination control", "aerospace manufacturing settings"], "answer_shape": "document_summary", "relations": []}

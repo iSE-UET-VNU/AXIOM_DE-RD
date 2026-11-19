@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["CGS vs MKS base units evolution"], "anchor": ["measurement system"], "discard": ["CGS vs MKS base units evolution measurement system"], "answer_shape": "document_summary", "relations": [["CGS vs MKS base units evolution", "of", "measurement system"]]}

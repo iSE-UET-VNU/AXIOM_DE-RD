@@ -1,0 +1,1 @@
+{"scope": ["reamer"], "topic": ["three parts"], "anchor": [], "discard": ["What are", "as per the USAF technical manuals and orders"], "answer_shape": "every_instance", "relations": []}

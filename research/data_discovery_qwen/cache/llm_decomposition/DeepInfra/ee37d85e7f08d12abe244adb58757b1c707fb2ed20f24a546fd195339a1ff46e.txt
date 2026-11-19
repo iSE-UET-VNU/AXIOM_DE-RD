@@ -1,0 +1,1 @@
+{"scope": ["quantum mechanics"], "topic": ["foundations"], "anchor": ["geometric analogies"], "discard": ["What are the", "explained through"], "answer_shape": "document_summary", "relations": [["foundations", "explained through", "geometric analogies"]]}

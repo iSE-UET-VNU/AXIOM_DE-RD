@@ -1,0 +1,1 @@
+{"scope": ["classical observables", "quantum operators"], "topic": [], "anchor": [], "discard": ["correspondence between"], "answer_shape": "document_summary", "relations": []}

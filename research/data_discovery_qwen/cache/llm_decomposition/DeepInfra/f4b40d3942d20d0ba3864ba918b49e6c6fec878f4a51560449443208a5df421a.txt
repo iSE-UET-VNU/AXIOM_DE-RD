@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["metals and non-metals"], "anchor": ["reactivity", "electronic configuration"], "discard": ["Differences between", "and"], "answer_shape": "document_summary", "relations": [["metals and non-metals", "differences in", "reactivity"], ["metals and non-metals", "differences in", "electronic configuration"]]}

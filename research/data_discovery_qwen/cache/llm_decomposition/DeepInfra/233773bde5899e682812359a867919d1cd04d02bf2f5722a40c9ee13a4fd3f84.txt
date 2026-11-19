@@ -1,0 +1,1 @@
+{"scope": ["globe valve"], "topic": [], "anchor": ["inside the tank", "rapidly opened"], "discard": ["What may happen", "as per United States Air Force (USAF) technical manuals and orders"], "answer_shape": "single_fact", "relations": [["globe valve", "rapidly opened", "inside the tank"]]}

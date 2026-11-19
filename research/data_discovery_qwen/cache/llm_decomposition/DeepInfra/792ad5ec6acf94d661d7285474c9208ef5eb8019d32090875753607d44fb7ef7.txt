@@ -1,0 +1,1 @@
+{"scope": ["Mutual of Omaha plan", "GEHA Present Plan"], "topic": [], "anchor": ["increased benefits", "effective"], "discard": ["When did", "become effective", "designated as"], "answer_shape": "single_fact", "relations": [["increased benefits", "become effective", "Mutual of Omaha plan"]]}

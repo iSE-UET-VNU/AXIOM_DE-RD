@@ -1,0 +1,1 @@
+{"scope": ["Android runtime environment"], "topic": ["bytecode"], "anchor": ["Android"], "discard": ["What type of", "is used in the", "environment"], "answer_shape": "single_fact", "relations": [["bytecode", "used in", "Android runtime environment"]]}

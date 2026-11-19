@@ -1,0 +1,328 @@
+{
+ "light_retrieval": {
+  "chosen: BM25 concepts + dense full question + file score + top-5 files": {
+   "all": {
+    "R@10": 67.36,
+    "nDCG@10": 62.82,
+    "R@20": 78.11,
+    "nDCG@20": 66.28,
+    "R@100": 93.16,
+    "nDCG@100": 71.57,
+    "file_recall@5": 97.66
+   },
+   "vidore_physics": {
+    "R@10": 59.91,
+    "nDCG@10": 55.84,
+    "R@20": 77.27,
+    "nDCG@20": 61.89,
+    "R@100": 97.76,
+    "nDCG@100": 69.11,
+    "file_recall@5": 100.0
+   },
+   "vidore_industrial": {
+    "R@10": 50.44,
+    "nDCG@10": 48.27,
+    "R@20": 61.5,
+    "nDCG@20": 51.4,
+    "R@100": 82.85,
+    "nDCG@100": 58.89,
+    "file_recall@5": 93.33
+   },
+   "ohrbench": {
+    "R@10": 98.33,
+    "nDCG@10": 90.2,
+    "R@20": 100.0,
+    "nDCG@20": 90.65,
+    "R@100": 100.0,
+    "nDCG@100": 90.65,
+    "file_recall@5": 100.0
+   }
+  },
+  "ablation: BM25 full question, whole corpus": {
+   "all": {
+    "R@10": 66.73,
+    "nDCG@10": 62.06,
+    "R@20": 77.26,
+    "nDCG@20": 65.46,
+    "R@100": 92.64,
+    "nDCG@100": 70.79
+   },
+   "vidore_physics": {
+    "R@10": 60.88,
+    "nDCG@10": 56.3,
+    "R@20": 77.45,
+    "nDCG@20": 61.99,
+    "R@100": 97.23,
+    "nDCG@100": 68.92
+   },
+   "vidore_industrial": {
+    "R@10": 48.94,
+    "nDCG@10": 45.86,
+    "R@20": 58.87,
+    "nDCG@20": 48.83,
+    "R@100": 81.91,
+    "nDCG@100": 56.75
+   },
+   "ohrbench": {
+    "R@10": 96.67,
+    "nDCG@10": 89.89,
+    "R@20": 100.0,
+    "nDCG@20": 90.81,
+    "R@100": 100.0,
+    "nDCG@100": 90.81
+   }
+  },
+  "ablation: BM25 concepts, whole corpus": {
+   "all": {
+    "R@10": 67.34,
+    "nDCG@10": 62.78,
+    "R@20": 78.11,
+    "nDCG@20": 66.26,
+    "R@100": 93.39,
+    "nDCG@100": 71.55
+   },
+   "vidore_physics": {
+    "R@10": 59.91,
+    "nDCG@10": 55.84,
+    "R@20": 77.27,
+    "nDCG@20": 61.89,
+    "R@100": 97.28,
+    "nDCG@100": 68.93
+   },
+   "vidore_industrial": {
+    "R@10": 50.37,
+    "nDCG@10": 48.17,
+    "R@20": 61.5,
+    "nDCG@20": 51.36,
+    "R@100": 84.0,
+    "nDCG@100": 59.04
+   },
+   "ohrbench": {
+    "R@10": 98.33,
+    "nDCG@10": 90.17,
+    "R@20": 100.0,
+    "nDCG@20": 90.62,
+    "R@100": 100.0,
+    "nDCG@100": 90.62
+   }
+  },
+  "ablation: BM25 full question, top-5 files": {
+   "all": {
+    "R@10": 66.8,
+    "nDCG@10": 62.13,
+    "R@20": 77.32,
+    "nDCG@20": 65.52,
+    "R@100": 92.54,
+    "nDCG@100": 70.88
+   },
+   "vidore_physics": {
+    "R@10": 60.88,
+    "nDCG@10": 56.3,
+    "R@20": 77.45,
+    "nDCG@20": 61.99,
+    "R@100": 97.81,
+    "nDCG@100": 69.14
+   },
+   "vidore_industrial": {
+    "R@10": 49.13,
+    "nDCG@10": 46.05,
+    "R@20": 59.03,
+    "nDCG@20": 48.98,
+    "R@100": 81.03,
+    "nDCG@100": 56.75
+   },
+   "ohrbench": {
+    "R@10": 96.67,
+    "nDCG@10": 89.92,
+    "R@20": 100.0,
+    "nDCG@20": 90.83,
+    "R@100": 100.0,
+    "nDCG@100": 90.83
+   }
+  }
+ },
+ "adaptive_retrieval": {
+  "adaptive K (nested OOF)": {
+   "all": {
+    "mean_k": 58.86,
+    "median_k": 57.0,
+    "p90_k": 100.0,
+    "prefix_recall": 90.82,
+    "prefix_precision": 6.79,
+    "prefix_f1": 11.82,
+    "prefix_ndcg": 71.03
+   },
+   "vidore_physics": {
+    "mean_k": 62.01,
+    "median_k": 62.0,
+    "p90_k": 87.0,
+    "prefix_recall": 92.49,
+    "prefix_precision": 10.5,
+    "prefix_f1": 17.63,
+    "prefix_ndcg": 68.11
+   },
+   "vidore_industrial": {
+    "mean_k": 77.03,
+    "median_k": 84.0,
+    "p90_k": 100.0,
+    "prefix_recall": 81.71,
+    "prefix_precision": 5.55,
+    "prefix_f1": 9.83,
+    "prefix_ndcg": 58.42
+   },
+   "ohrbench": {
+    "mean_k": 31.98,
+    "median_k": 29.5,
+    "p90_k": 45.1,
+    "prefix_recall": 100.0,
+    "prefix_precision": 3.46,
+    "prefix_f1": 6.67,
+    "prefix_ndcg": 90.65
+   }
+  },
+  "fixed K=50": {
+   "all": {
+    "mean_k": 49.34,
+    "median_k": 50.0,
+    "p90_k": 50.0,
+    "prefix_recall": 87.37,
+    "prefix_precision": 7.41,
+    "prefix_f1": 12.47,
+    "prefix_ndcg": 69.78
+   },
+   "vidore_physics": {
+    "mean_k": 50.0,
+    "median_k": 50.0,
+    "p90_k": 50.0,
+    "prefix_recall": 89.02,
+    "prefix_precision": 11.67,
+    "prefix_f1": 19.15,
+    "prefix_ndcg": 66.73
+   },
+   "vidore_industrial": {
+    "mean_k": 50.0,
+    "median_k": 50.0,
+    "p90_k": 50.0,
+    "prefix_recall": 75.53,
+    "prefix_precision": 7.09,
+    "prefix_f1": 11.98,
+    "prefix_ndcg": 56.3
+   },
+   "ohrbench": {
+    "mean_k": 47.65,
+    "median_k": 50.0,
+    "p90_k": 50.0,
+    "prefix_recall": 100.0,
+    "prefix_precision": 2.2,
+    "prefix_f1": 4.29,
+    "prefix_ndcg": 90.65
+   }
+  },
+  "fixed K=100": {
+   "all": {
+    "mean_k": 96.2,
+    "median_k": 100.0,
+    "p90_k": 100.0,
+    "prefix_recall": 93.16,
+    "prefix_precision": 4.41,
+    "prefix_f1": 7.99,
+    "prefix_ndcg": 71.81
+   },
+   "vidore_physics": {
+    "mean_k": 100.0,
+    "median_k": 100.0,
+    "p90_k": 100.0,
+    "prefix_recall": 97.76,
+    "prefix_precision": 6.77,
+    "prefix_f1": 12.13,
+    "prefix_ndcg": 69.8
+   },
+   "vidore_industrial": {
+    "mean_k": 100.0,
+    "median_k": 100.0,
+    "p90_k": 100.0,
+    "prefix_recall": 82.85,
+    "prefix_precision": 4.32,
+    "prefix_f1": 7.83,
+    "prefix_ndcg": 58.87
+   },
+   "ohrbench": {
+    "mean_k": 86.43,
+    "median_k": 100.0,
+    "p90_k": 100.0,
+    "prefix_recall": 100.0,
+    "prefix_precision": 1.4,
+    "prefix_f1": 2.74,
+    "prefix_ndcg": 90.65
+   }
+  }
+ },
+ "query_preparation": {
+  "questions": 214,
+  "excluded": [
+   "ohrbench::803adf07-c9f4-4910-8c12-277ff7aaac7e",
+   "ohrbench::85bb98a2-00c5-4c67-9343-4e3c70487b7c",
+   "ohrbench::88e9648f-a993-4d8a-8f68-49ad9ce6c492",
+   "ohrbench::9291d162-10f7-44da-97ea-36b87ab53a1f",
+   "ohrbench::a4f8b342-072c-411b-bf4c-89fc7c926c46",
+   "vidore_physics::326"
+  ],
+  "bm25_fallback_to_question": 4,
+  "llm_failed": 0,
+  "with_scope": 107,
+  "with_topic": 176,
+  "with_anchor": 170
+ },
+ "reproduction_check": {
+  "light_retrieval R@10": {
+   "got": 67.36,
+   "expected": 67.36,
+   "ok": true
+  },
+  "light_retrieval R@20": {
+   "got": 78.11,
+   "expected": 78.11,
+   "ok": true
+  },
+  "light_retrieval R@100": {
+   "got": 93.16,
+   "expected": 93.16,
+   "ok": true
+  },
+  "light_retrieval nDCG@10": {
+   "got": 62.82,
+   "expected": 62.82,
+   "ok": true
+  },
+  "light_retrieval nDCG@20": {
+   "got": 66.28,
+   "expected": 66.28,
+   "ok": true
+  },
+  "light_retrieval file_recall@5": {
+   "got": 97.66,
+   "expected": 97.66,
+   "ok": true
+  },
+  "adaptive mean_k": {
+   "got": 58.86,
+   "expected": 58.86,
+   "ok": true
+  },
+  "adaptive prefix_recall": {
+   "got": 90.82,
+   "expected": 90.82,
+   "ok": true
+  },
+  "adaptive prefix_precision": {
+   "got": 6.79,
+   "expected": 6.79,
+   "ok": true
+  },
+  "adaptive prefix_ndcg": {
+   "got": 71.03,
+   "expected": 71.03,
+   "ok": true
+  }
+ }
+}

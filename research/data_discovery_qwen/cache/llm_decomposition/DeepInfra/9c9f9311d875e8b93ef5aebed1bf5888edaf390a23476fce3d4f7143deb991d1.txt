@@ -1,0 +1,1 @@
+{"scope": ["aircraft fire training facilities"], "topic": ["design modifications"], "anchor": ["1991", "2013"], "discard": ["What factors influenced", "between"], "answer_shape": "document_summary", "relations": [["design modifications", "of", "aircraft fire training facilities"], ["between", "1991", "2013"]]}

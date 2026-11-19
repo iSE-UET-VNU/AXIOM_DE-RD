@@ -1,0 +1,1 @@
+{"scope": ["Pat Roberts (R-KS)", "Richard Durbin (D-IL)"], "topic": ["total number of transactions"], "anchor": ["1991 to 1996"], "discard": ["What was", "and how does it compare to", "during the same period"], "answer_shape": "single_fact", "relations": [["total number of transactions", "from", "1991 to 1996"]]}

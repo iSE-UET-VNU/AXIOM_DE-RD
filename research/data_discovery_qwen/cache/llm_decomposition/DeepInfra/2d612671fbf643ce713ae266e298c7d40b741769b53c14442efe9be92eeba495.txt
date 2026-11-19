@@ -1,0 +1,1 @@
+{"scope": ["Quantum entanglement", "decoherence", "EPR", "Schrödinger", "Haroche"], "topic": ["implications", "technologies"], "anchor": [], "discard": ["Quantum entanglement and decoherence", "EPR Schrödinger Haroche implications technologies"], "answer_shape": "document_summary", "relations": []}

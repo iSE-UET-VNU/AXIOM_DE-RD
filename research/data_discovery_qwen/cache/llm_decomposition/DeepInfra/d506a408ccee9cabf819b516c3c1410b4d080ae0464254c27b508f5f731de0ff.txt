@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["view the IP address"], "anchor": ["command prompt", "remote computer"], "discard": ["What command would you type", "to"], "answer_shape": "single_fact", "relations": [["view", "IP address", "remote computer"], ["command prompt", "to", "view"]]}

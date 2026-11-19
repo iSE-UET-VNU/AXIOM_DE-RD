@@ -1,0 +1,1 @@
+{"scope": ["Wave-particle duality", "Young's experiment"], "topic": [], "anchor": [], "discard": ["implications for the classical wave/particle distinction"], "answer_shape": "document_summary", "relations": []}

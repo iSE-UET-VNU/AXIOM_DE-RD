@@ -1,0 +1,1 @@
+{"scope": ["Comprehensive Project"], "topic": ["Figure 1"], "anchor": [], "discard": ["What are the elements listed in", "of a"], "answer_shape": "single_fact", "relations": [["Figure 1", "of", "Comprehensive Project"]]}

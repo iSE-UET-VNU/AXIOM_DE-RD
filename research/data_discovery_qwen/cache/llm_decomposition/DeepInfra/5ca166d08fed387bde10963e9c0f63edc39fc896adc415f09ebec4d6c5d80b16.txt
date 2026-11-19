@@ -1,0 +1,1 @@
+{"scope": ["fermions and bosons"], "topic": ["schematic organization"], "anchor": ["by generation"], "discard": ["What is the", "schematic organization of"], "answer_shape": "document_summary", "relations": [["fermions and bosons", "by", "generation"]]}

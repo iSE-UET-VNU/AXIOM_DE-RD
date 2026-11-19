@@ -1,0 +1,1 @@
+{"scope": ["photo"], "topic": [], "anchor": ["Liam", "planets and stars", "January 13, 2021"], "discard": ["What did", "say when looking at", "on"], "answer_shape": "single_fact", "relations": [["Liam", "looking at", "planets and stars"], ["planets and stars", "on", "photo"], ["photo", "on", "January 13, 2021"]]}

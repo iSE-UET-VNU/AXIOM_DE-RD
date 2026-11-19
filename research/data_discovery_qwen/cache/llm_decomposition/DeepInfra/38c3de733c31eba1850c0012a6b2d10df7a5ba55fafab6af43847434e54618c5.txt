@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["wave function", "evolution of dynamic variables"], "anchor": [], "discard": ["How does", "control"], "answer_shape": "single_fact", "relations": [["wave function", "control", "evolution of dynamic variables"]]}

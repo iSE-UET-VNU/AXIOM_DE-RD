@@ -1,0 +1,1 @@
+{"scope": ["Tier 3", "Stock Trading Restrictions"], "topic": ["trading restriction"], "anchor": ["duration", "prior to the effective date"], "discard": ["For a stock classified as", "what is", "under the", "the"], "answer_shape": "single_fact", "relations": [["trading restriction", "duration", "prior to the effective date"]]}

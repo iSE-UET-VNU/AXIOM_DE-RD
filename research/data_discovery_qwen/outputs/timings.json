@@ -1,0 +1,48 @@
+{
+ "environment": {
+  "python": "3.13.5",
+  "machine": "AMD64",
+  "mode": "replay"
+ },
+ "1a_data_preparation": {
+  "load_pages_s": 0.076,
+  "bm25_build_s": 1.237,
+  "page_vectors_cache_s": 0.075,
+  "language_detection_s": 0.847,
+  "wall_s": 2.239
+ },
+ "1b_query_preparation": {
+  "decomposition_wall_s": 0.074,
+  "decomposition_workers": 16,
+  "decomposition_cache_hits": 220,
+  "decomposition_live_calls": 0,
+  "query_vectors_cache_s": 0.006,
+  "decomposition_provider": "DeepInfra",
+  "decomposition_latency_from": "cached original calls",
+  "decomposition_latency_median_s": 1.88,
+  "decomposition_latency_mean_s": 2.044,
+  "decomposition_latency_p90_s": 2.821,
+  "decomposition_latency_max_s": 5.19,
+  "decomposition_cost_usd": 0.02219,
+  "decomposition_providers_seen": [
+   "DeepInfra"
+  ],
+  "decomposition_reasoning_tokens_total": 0,
+  "wall_s": 0.083
+ },
+ "2_light_retrieval": {
+  "retrieval_wall_s_all_questions": 1.062,
+  "retrieval_ms_per_query": 4.96,
+  "mean_candidates": 96.2,
+  "lists_shorter_than_100": 19,
+  "wall_s_including_ablations": 4.138
+ },
+ "3_adaptive_retrieval": {
+  "features_ms_per_query": 0.132,
+  "nested_oof_train_s": 2.713,
+  "final_model_fit_s": 0.07,
+  "predict_ms_per_query": 0.004,
+  "wall_s": 2.827
+ },
+ "total_wall_s": 9.31
+}

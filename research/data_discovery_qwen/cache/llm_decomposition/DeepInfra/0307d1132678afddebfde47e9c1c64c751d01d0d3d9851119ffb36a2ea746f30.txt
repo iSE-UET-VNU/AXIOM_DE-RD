@@ -1,0 +1,1 @@
+{"scope": ["Oke Amromanog"], "topic": ["programming languages"], "anchor": [], "discard": ["What", "does", "specialize in"], "answer_shape": "single_fact", "relations": []}

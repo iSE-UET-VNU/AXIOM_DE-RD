@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["waves that propagate without displacing matter"], "anchor": [], "discard": ["What are the main types of", "and how does their propagation differ depending on the medium"], "answer_shape": "document_summary", "relations": []}

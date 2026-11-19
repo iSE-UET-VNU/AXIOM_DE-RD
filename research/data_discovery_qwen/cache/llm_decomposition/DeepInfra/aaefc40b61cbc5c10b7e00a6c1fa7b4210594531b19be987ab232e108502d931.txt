@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["nozzle pressure"], "anchor": ["type I hydrant system", "psi"], "discard": ["maximum allowed"], "answer_shape": "single_fact", "relations": [["nozzle pressure", "of", "type I hydrant system"], ["nozzle pressure", "in", "psi"]]}

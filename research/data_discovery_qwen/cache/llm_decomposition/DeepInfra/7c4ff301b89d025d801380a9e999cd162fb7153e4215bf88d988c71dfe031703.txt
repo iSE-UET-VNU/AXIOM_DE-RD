@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["drill point gage"], "anchor": ["use case"], "discard": ["Identify the"], "answer_shape": "single_fact", "relations": [["drill point gage", "use case", ""]]}

@@ -1,0 +1,19 @@
+{
+ "note": "Questions excluded from evaluation at the user's request (2026-11-14). Their rows stay in every output (flag 'excluded': true in data_discovery_output.jsonl); metrics.json reports both the 220-question and the 214-question numbers. The reason for excluding them was not stated in this bundle.",
+ "qids": [
+  "ohrbench::9291d162-10f7-44da-97ea-36b87ab53a1f",
+  "ohrbench::88e9648f-a993-4d8a-8f68-49ad9ce6c492",
+  "ohrbench::85bb98a2-00c5-4c67-9343-4e3c70487b7c",
+  "ohrbench::803adf07-c9f4-4910-8c12-277ff7aaac7e",
+  "ohrbench::a4f8b342-072c-411b-bf4c-89fc7c926c46",
+  "vidore_physics::326"
+ ],
+ "questions": {
+  "ohrbench::9291d162-10f7-44da-97ea-36b87ab53a1f": "CHAMPLAIN TOWERS SOUTH unpaid assessments (gold ohrbench::file_e54928bfc8eda25e#page=0)",
+  "ohrbench::88e9648f-a993-4d8a-8f68-49ad9ce6c492": "GENOA TECHNOLOGIES international application number (gold ohrbench::file_6982c4751be76370#page=0)",
+  "ohrbench::85bb98a2-00c5-4c67-9343-4e3c70487b7c": "NV-T60 tape SP record/playback time (gold ohrbench::file_65c13bc2ecc7d7ea#page=4)",
+  "ohrbench::803adf07-c9f4-4910-8c12-277ff7aaac7e": "S-1313 HOG SHELTER number of pieces (gold ohrbench::file_ce1d4cef3196514b#page=18)",
+  "ohrbench::a4f8b342-072c-411b-bf4c-89fc7c926c46": "EARNED PRNetLiab percentage increase (gold ohrbench::file_b32c9c3ed294b6fd#page=0)",
+  "vidore_physics::326": "Dirac antimatter prediction vs confirmation gap (gold vidore_physics::file_164a25ea621a6d78#page=16, #page=6, #page=9)"
+ }
+}

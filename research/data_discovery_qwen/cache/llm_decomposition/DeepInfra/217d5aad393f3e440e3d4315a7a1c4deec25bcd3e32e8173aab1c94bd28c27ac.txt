@@ -1,0 +1,1 @@
+{"scope": ["Vrahman caste record", "V. S. 1567", "A. D. 1510"], "topic": [], "anchor": ["inscription number", "condition of the inscription"], "discard": ["What is", "and what is", "of the"], "answer_shape": "single_fact", "relations": [["Vrahman caste record", "from", "V. S. 1567"], ["Vrahman caste record", "from", "A. D. 1510"]]}

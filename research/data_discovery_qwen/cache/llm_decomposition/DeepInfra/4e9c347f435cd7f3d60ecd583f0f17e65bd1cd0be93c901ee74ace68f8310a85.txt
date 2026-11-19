@@ -1,0 +1,1 @@
+{"scope": ["Ingle Auditorium"], "topic": ["screening of 'The Wizard of Oz'"], "anchor": ["February 19", "price"], "discard": ["What is the", "for attending the", "on"], "answer_shape": "single_fact", "relations": [["screening of 'The Wizard of Oz'", "at", "Ingle Auditorium", "on", "February 19"]]}

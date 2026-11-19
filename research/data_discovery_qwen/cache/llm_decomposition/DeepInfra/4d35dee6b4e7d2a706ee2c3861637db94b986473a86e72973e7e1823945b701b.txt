@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["TC device"], "anchor": [], "discard": ["State the purpose of", "how it is constructed", "as per the USAF technical manuals and orders"], "answer_shape": "document_summary", "relations": []}

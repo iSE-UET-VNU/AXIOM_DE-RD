@@ -1,0 +1,1 @@
+{"scope": ["fluid system component specifications"], "topic": ["stainless steel grade"], "anchor": ["corrosive environments"], "discard": ["Identify the", "specifically designated for"], "answer_shape": "single_fact", "relations": [["stainless steel grade", "for", "corrosive environments"]]}

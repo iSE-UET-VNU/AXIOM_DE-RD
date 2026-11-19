@@ -1,0 +1,8 @@
+# tested with Python 3.13 (miniconda): numpy 2.2.5, scipy 1.16.3, scikit-learn 1.7.2, xgboost 3.4.1, requests 2.32.4
+numpy>=2.0
+scipy>=1.11
+scikit-learn>=1.4
+xgboost>=2.0
+PyStemmer>=2.2
+requests>=2.31
+tiktoken>=0.7   # only for --live re-embedding of pages

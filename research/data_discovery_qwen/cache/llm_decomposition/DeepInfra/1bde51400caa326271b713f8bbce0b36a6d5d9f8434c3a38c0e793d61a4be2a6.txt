@@ -1,0 +1,1 @@
+{"scope": ["session on 15/04/18"], "topic": [], "anchor": ["Aiden", "questions", "15/04/18"], "discard": ["How many", "did Aiden aim to answer during the session on"], "answer_shape": "single_fact", "relations": [["Aiden", "aim to answer", "questions"]]}

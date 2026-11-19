@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["force", "energy"], "anchor": ["MLT⁻²", "ML²T⁻²"], "discard": ["In what way do the dimensional expressions of", "differ, and what does this reveal about their physical relationship"], "answer_shape": "single_fact", "relations": [["force", "expressed as", "MLT⁻²"], ["energy", "expressed as", "ML²T⁻²"]]}

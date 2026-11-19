@@ -1,0 +1,1 @@
+{"scope": ["fire extinguishers", "fuel vent outlets"], "topic": ["minimum required distance"], "anchor": [], "discard": ["What is the", "during fuel servicing operations", "as per the USAF technical manuals and orders"], "answer_shape": "single_fact", "relations": [["fire extinguishers", "distance between", "fuel vent outlets"]]}

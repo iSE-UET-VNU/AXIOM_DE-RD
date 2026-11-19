@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["optimization method"], "anchor": ["physical processes of cooling", "solving complex problems"], "discard": ["Which", "inspired by", "is mentioned in the context of"], "answer_shape": "single_fact", "relations": [["optimization method", "inspired by", "physical processes of cooling", "for", "solving complex problems"]]}

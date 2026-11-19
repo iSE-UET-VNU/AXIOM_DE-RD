@@ -1,0 +1,1 @@
+{"scope": ["AFTF technical manual"], "topic": ["emergency shutdown", "post-shutdown procedures"], "anchor": [], "discard": ["What is the difference between", "as per the", "and"], "answer_shape": "document_summary", "relations": [["emergency shutdown", "and", "post-shutdown procedures"]]}

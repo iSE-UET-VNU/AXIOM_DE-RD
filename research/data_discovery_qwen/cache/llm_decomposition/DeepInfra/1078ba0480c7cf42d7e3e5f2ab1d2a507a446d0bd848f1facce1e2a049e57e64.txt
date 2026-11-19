@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["fundamental properties", "spin", "collective behavior"], "anchor": ["fermions", "bosons"], "discard": ["Compare", "in terms of", "and"], "answer_shape": "document_summary", "relations": [["fermions", "and", "bosons"], ["fundamental properties", "of", "fermions"], ["fundamental properties", "of", "bosons"]]}

@@ -1,0 +1,1 @@
+{"scope": ["Mooring AMARG storage aircraft wire rope attached augers"], "topic": [], "anchor": ["USAF manual"], "discard": ["Question"], "answer_shape": "single_fact", "relations": [["Mooring AMARG storage aircraft wire rope", "attached", "augers"]]}

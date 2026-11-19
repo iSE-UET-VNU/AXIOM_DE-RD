@@ -1,0 +1,1 @@
+{"scope": ["Realism and Naturalism movements"], "topic": [], "anchor": ["two authors"], "discard": ["Which", "are associated with", "that sought to portray life faithfully and accurately"], "answer_shape": "single_fact", "relations": [["Realism and Naturalism movements", "associated with", "two authors"]]}

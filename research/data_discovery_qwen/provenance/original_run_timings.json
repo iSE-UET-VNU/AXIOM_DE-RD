@@ -1,0 +1,43 @@
+{
+ "note": "Timings of the original API runs that filled cache/ (2026-11-14). Replaying from cache does not repeat them. Per-call decomposition timings: cache/llm_decomposition/DeepInfra/*.meta.json.",
+ "data_preparation": {
+  "pdf_inspector": {
+   "pages": 5091,
+   "seconds": 27.43,
+   "ms_per_page": 5.4
+  },
+  "ppocrv5": {
+   "pages_with_ppocrv5_text": 881,
+   "seconds_per_page_render_plus_ocr": 0.93,
+   "measured_on_pages": 297,
+   "note": "per-page CPU time from the PP-OCRv5 diagnosis run; workers ran in parallel"
+  },
+  "page_embedding_qwen3_embedding_8b": {
+   "pages_embedded": 4937,
+   "zero_vector_empty_pages": 154,
+   "total_seconds": 1198.9,
+   "batch": 32,
+   "via": "OpenRouter"
+  }
+ },
+ "online_per_question_estimate_s": {
+  "decomposition_deepinfra_median": 1.88,
+  "query_embedding": 0.19,
+  "light_retrieval": 0.005,
+  "adaptive_k_single_question": 0.0003,
+  "total": 2.08
+ },
+ "query_preparation": {
+  "calls": 220,
+  "workers": 16,
+  "wall_seconds_220_questions": 29.6,
+  "latency_median_s": 1.88,
+  "latency_mean_s": 2.04,
+  "latency_p90_s": 2.82,
+  "latency_max_s": 5.19,
+  "cost_usd": 0.0222,
+  "reasoning_tokens": 0,
+  "provider": "DeepInfra (pinned, no fallback)",
+  "query_embedding_qwen3_embedding_8b_s_per_question": 0.195
+ }
+}

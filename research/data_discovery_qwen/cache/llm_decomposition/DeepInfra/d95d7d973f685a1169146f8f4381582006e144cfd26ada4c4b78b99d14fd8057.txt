@@ -1,0 +1,1 @@
+{"scope": ["PAIN ITCH SCAR OINTMENT NEOSPORIN"], "topic": [], "anchor": ["Pramoxine"], "discard": ["Does", "contain"], "answer_shape": "single_fact", "relations": [["PAIN ITCH SCAR OINTMENT NEOSPORIN", "contain", "Pramoxine"]]}

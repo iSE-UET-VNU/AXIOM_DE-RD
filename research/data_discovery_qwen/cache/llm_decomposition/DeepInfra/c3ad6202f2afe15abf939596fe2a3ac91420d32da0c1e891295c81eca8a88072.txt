@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["visual indicators", "technical diagrams"], "anchor": ["revision updates"], "discard": ["How do", "according to the manual's documentation standards"], "answer_shape": "single_fact", "relations": [["visual indicators", "in", "technical diagrams"], ["visual indicators", "communicate", "revision updates"]]}

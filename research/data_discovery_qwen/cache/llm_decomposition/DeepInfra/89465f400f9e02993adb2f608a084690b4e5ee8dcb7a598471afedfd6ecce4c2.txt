@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["divergence of trajectories", "graphical representation"], "anchor": ["variations in initial conditions", "chaotic systems"], "discard": ["Explain how", "using"], "answer_shape": "single_fact", "relations": [["divergence of trajectories", "in", "chaotic systems"], ["variations in initial conditions", "influence", "divergence of trajectories"]]}

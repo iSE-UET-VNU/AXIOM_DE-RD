@@ -1,0 +1,1 @@
+{"scope": ["hydrant servicing vehicles"], "topic": ["emergency shutdown protocols"], "anchor": ["hazardous situations"], "discard": ["What are the potential consequences of failing to follow"], "answer_shape": "document_summary", "relations": [["emergency shutdown protocols", "in", "hazardous situations"]]}

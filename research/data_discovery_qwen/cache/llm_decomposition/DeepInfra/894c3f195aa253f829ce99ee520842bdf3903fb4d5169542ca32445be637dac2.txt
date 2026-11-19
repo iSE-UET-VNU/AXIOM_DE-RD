@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["interaction between the spin of particles and the magnetic field"], "anchor": [], "discard": ["What", "enables medical imaging"], "answer_shape": "single_fact", "relations": [["interaction", "between", "spin of particles", "and", "magnetic field"]] }

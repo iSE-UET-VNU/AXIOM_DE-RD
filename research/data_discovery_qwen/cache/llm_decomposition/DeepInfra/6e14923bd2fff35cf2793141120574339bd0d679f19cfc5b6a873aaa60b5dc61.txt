@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["life and reproductive cycles", "artificial biological structures"], "anchor": ["dynamic attractors"], "discard": ["Explain the role of", "in modeling"], "answer_shape": "single_fact", "relations": [["dynamic attractors", "in modeling", "life and reproductive cycles"], ["life and reproductive cycles", "of", "artificial biological structures"]]}

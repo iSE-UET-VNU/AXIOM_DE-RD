@@ -1,0 +1,1 @@
+{"scope": ["US Air Force contamination control standard for aerospace facilities"], "topic": [], "anchor": [], "discard": ["Discuss the cleanliness level class range required by"], "answer_shape": "document_summary", "relations": []}

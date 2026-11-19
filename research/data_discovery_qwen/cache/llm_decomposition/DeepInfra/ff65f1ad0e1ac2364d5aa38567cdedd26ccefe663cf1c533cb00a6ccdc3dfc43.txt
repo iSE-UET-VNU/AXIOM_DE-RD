@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["variables", "motion", "simple pendulum", "elastic double pendulum"], "anchor": ["number of variables"], "discard": ["Indicate the", "needed to describe the motion of", "and that of"], "answer_shape": "single_fact", "relations": [["variables", "describe", "motion"], ["motion", "of", "simple pendulum"], ["motion", "of", "elastic double pendulum"]]}

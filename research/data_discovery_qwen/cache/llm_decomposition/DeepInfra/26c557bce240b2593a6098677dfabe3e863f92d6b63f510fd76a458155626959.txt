@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": ["Jagger Lane"], "discard": ["What does the name", "in the district signify"], "answer_shape": "single_fact", "relations": [["Jagger Lane", "in", "the district"]]}

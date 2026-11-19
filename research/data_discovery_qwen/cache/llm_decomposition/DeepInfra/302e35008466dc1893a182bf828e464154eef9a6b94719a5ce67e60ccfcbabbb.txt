@@ -1,0 +1,1 @@
+{"scope": ["NAVAIR 01-1A-23"], "topic": ["Motor Driven Handpieces", "Microminiature Specific"], "anchor": ["03-4.6.1.5", "03-4.61.6"], "discard": ["vs", "and pieces in"], "answer_shape": "single_fact", "relations": [["Motor Driven Handpieces", "vs", "Microminiature Specific"], ["03-4.6.1.5", "in", "NAVAIR 01-1A-23"], ["03-4.61.6", "in", "NAVAIR 01-1A-23"]]}

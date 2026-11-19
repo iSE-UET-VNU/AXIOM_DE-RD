@@ -1,0 +1,1 @@
+{"scope": ["SCI Interiors Ltd"], "topic": [], "anchor": ["phone number", "88/89 Furze Rd", "Sandyford Ind. Est."], "discard": ["What is", "located at"], "answer_shape": "single_fact", "relations": [["SCI Interiors Ltd", "located at", "88/89 Furze Rd, Sandyford Ind. Est."], ["phone number", "for", "SCI Interiors Ltd"]]}

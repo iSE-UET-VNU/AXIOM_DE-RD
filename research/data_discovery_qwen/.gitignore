@@ -1,0 +1,4 @@
+# Written by run_all.py --live; never commit
+cache/page_vectors_qwen3-embedding-8b.npy
+.env
+__pycache__/

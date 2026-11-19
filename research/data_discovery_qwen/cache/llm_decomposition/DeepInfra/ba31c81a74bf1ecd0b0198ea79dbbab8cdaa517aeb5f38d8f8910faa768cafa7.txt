@@ -1,0 +1,1 @@
+{"scope": ["GEHL Company manual"], "topic": [], "anchor": ["Flanged Lock Nut (Hexagon)"], "discard": ["What is the abbreviation for", "in the", ""], "answer_shape": "single_fact", "relations": [["abbreviation", "for", "Flanged Lock Nut (Hexagon)"]]}

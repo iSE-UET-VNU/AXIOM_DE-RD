@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["amount charged"], "anchor": ["cab ride", "2743 Victoria Plc Av", "airport", "06-04-2018"], "discard": ["What is", "for the", "to the", "on"], "answer_shape": "single_fact", "relations": [["cab ride", "from", "2743 Victoria Plc Av"], ["cab ride", "to", "airport"], ["cab ride", "on", "06-04-2018"]]}

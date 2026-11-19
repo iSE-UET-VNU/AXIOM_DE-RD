@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["environmental safeguards"], "anchor": ["groundwater contamination", "live-fire training"], "discard": ["list the two", "for preventing", "during"], "answer_shape": "every_instance", "relations": [["environmental safeguards", "for preventing", "groundwater contamination"], ["groundwater contamination", "during", "live-fire training"]]}

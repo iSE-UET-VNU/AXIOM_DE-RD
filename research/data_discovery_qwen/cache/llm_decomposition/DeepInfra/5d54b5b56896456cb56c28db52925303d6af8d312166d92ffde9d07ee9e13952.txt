@@ -1,0 +1,1 @@
+{"scope": ["50% emulsion insecticide"], "topic": ["gallons of concentrate"], "anchor": ["0.5 percent strength", "100 gallons of finished spray"], "discard": ["For", "how many", "to make", "are needed"], "answer_shape": "single_fact", "relations": [["gallons of concentrate", "to make", "0.5 percent strength"], ["0.5 percent strength", "in", "100 gallons of finished spray"]]}

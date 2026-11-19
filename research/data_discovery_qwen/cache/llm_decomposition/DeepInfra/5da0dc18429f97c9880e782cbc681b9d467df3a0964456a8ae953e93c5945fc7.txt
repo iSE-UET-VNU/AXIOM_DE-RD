@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["particle size measurement methods", "cleaning technology selection"], "anchor": [], "discard": ["Explain relationship between"], "answer_shape": "document_summary", "relations": [["particle size measurement methods", "and", "cleaning technology selection"]]}

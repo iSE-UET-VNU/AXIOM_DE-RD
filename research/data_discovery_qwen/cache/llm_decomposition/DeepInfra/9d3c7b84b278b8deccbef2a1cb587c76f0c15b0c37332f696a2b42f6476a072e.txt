@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": [], "discard": ["factors affecting", "aircraft servicing safety zones"], "answer_shape": "document_summary", "relations": []}

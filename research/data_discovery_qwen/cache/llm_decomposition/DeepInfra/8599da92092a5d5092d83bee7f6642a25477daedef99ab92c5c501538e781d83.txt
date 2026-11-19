@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["industrial corrosion prevention"], "anchor": ["solvent selection", "factors influencing"], "discard": ["factors influencing", "for"], "answer_shape": "document_summary", "relations": [["factors influencing", "solvent selection", "industrial corrosion prevention"]] }

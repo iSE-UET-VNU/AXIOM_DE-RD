@@ -1,0 +1,1 @@
+{"scope": ["martensitic stainless steel components"], "topic": [], "anchor": ["maximum tensile strength"], "discard": ["What is", "achievable", "according to the material specifications"], "answer_shape": "single_fact", "relations": [["martensitic stainless steel components", "maximum tensile strength", "achievable"]]}

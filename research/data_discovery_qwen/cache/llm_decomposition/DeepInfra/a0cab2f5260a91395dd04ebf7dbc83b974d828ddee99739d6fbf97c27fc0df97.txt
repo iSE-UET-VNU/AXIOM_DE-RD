@@ -1,0 +1,1 @@
+{"scope": ["Co-operative Federation of Victoria Ltd"], "topic": ["Retained Surplus"], "anchor": ["beginning of the Financial Year", "2004"], "discard": ["What was", "at the beginning of the Financial Year for", "in"], "answer_shape": "single_fact", "relations": [["Retained Surplus", "at the beginning of", "Financial Year"], ["Retained Surplus", "in", "2004"]]}

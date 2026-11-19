@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["organized life"], "anchor": ["environment", "gains in order"], "discard": ["What does", "when", "undergo"], "answer_shape": "single_fact", "relations": [["environment", "undergo", "gains in order"]]}

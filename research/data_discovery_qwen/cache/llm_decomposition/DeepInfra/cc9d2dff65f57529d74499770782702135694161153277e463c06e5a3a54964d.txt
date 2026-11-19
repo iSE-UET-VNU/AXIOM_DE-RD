@@ -1,0 +1,1 @@
+{"scope": ["technical manuals"], "topic": ["proper igniter installation procedures"], "anchor": ["visual guidance elements"], "discard": ["What", "might be included in", "for"], "answer_shape": "single_fact", "relations": [["visual guidance elements", "included in", "proper igniter installation procedures"]]}

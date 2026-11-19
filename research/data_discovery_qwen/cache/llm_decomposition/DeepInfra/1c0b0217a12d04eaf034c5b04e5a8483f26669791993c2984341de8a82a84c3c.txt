@@ -1,0 +1,1 @@
+{"scope": ["University Presbyterian"], "topic": ["full address"], "anchor": ["Rev. Thomas Kim"], "discard": ["What is the", "of", "at"], "answer_shape": "single_fact", "relations": [["Rev. Thomas Kim", "at", "University Presbyterian"]]}

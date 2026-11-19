@@ -1,0 +1,1 @@
+{"scope": ["Warden Birchmont"], "topic": [], "anchor": ["20 Carabob Court", "phone number"], "discard": ["What is the", "associated with the address"], "answer_shape": "single_fact", "relations": [["phone number", "associated with", "20 Carabob Court"]]}

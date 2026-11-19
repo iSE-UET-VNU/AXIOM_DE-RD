@@ -1,0 +1,1 @@
+{"scope": ["ROTC marching unit at Arlington State College"], "topic": [], "anchor": ["Mickey Carson", "reenactment"], "discard": ["What is the name of the", "that includes ..."], "answer_shape": "single_fact", "relations": [["Mickey Carson", "member of", "reenactment"]]}

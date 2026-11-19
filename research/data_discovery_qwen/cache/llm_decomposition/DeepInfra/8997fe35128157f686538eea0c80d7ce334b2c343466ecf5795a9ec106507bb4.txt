@@ -1,0 +1,1 @@
+{"scope": ["Microsoft Access"], "topic": ["Fees field"], "anchor": ["data type"], "discard": ["What is the", "for the", "'", "'"], "answer_shape": "single_fact", "relations": [["Fees field", "has", "data type"]]}

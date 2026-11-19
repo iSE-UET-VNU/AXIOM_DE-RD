@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["activities"], "anchor": ["CSO", "CSS"], "discard": ["Define", "and list down the", "performed in the presence of"], "answer_shape": "document_summary", "relations": [["activities", "performed in the presence of", "CSS"]]}

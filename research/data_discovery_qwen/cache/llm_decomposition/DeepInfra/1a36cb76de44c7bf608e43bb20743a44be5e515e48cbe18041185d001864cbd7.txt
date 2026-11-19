@@ -1,0 +1,1 @@
+{"scope": ["song 'Dugout'", "album 'Partisans of Vilna'"], "topic": ["musical instrument"], "anchor": ["Michael Alpert's singing", "Dugout", "Partisans of Vilna"], "discard": ["What ... accompanies", "in the", "from the"], "answer_shape": "single_fact", "relations": [["musical instrument", "accompanies", "Michael Alpert's singing"]]}

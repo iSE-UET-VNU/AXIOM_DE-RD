@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["waves and particles", "gravity", "electromagnetism"], "anchor": [], "discard": ["Properties and differences of", "as well as their fundamental interactions and effects in"], "answer_shape": "document_summary", "relations": []}

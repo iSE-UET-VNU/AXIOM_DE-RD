@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["recommended action"], "anchor": ["documents", "used repeatedly"], "discard": ["What is", "for"], "answer_shape": "single_fact", "relations": [["recommended action", "for", "documents used repeatedly"]]}

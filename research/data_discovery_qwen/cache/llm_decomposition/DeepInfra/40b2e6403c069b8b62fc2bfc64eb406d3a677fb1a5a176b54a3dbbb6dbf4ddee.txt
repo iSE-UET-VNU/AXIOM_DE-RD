@@ -1,0 +1,1 @@
+{"scope": ["AFTF technical manual"], "topic": ["vapor pressure"], "anchor": ["100°F"], "discard": ["What is", "as mentioned in"], "answer_shape": "single_fact", "relations": [["vapor pressure", "at", "100°F"]]}

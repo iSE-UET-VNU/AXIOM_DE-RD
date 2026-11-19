@@ -1,0 +1,1 @@
+{"scope": ["quantum field theory"], "topic": ["harmonic oscillator"], "anchor": ["Dirac equation", "antimatter", "Feynman diagrams"], "discard": ["Role of the", "in", ":"], "answer_shape": "single_fact", "relations": [["harmonic oscillator", "in", "quantum field theory"], ["Dirac equation", "related to", "antimatter"], ["Feynman diagrams", "related to", "quantum field theory"]]}

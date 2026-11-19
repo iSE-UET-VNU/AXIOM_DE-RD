@@ -1,0 +1,1 @@
+{"scope": ["Equipment Painting"], "topic": ["processes", "precautions"], "anchor": [], "discard": ["List the", "to be considered during surface painting"], "answer_shape": "every_instance", "relations": [["processes", "in", "Equipment Painting"], ["precautions", "during", "surface painting"]]}

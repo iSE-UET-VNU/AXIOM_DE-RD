@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["main sources of entropy", "respective values"], "anchor": ["visible universe"], "discard": ["What are", "in the", "and what are their"], "answer_shape": "document_summary", "relations": [["main sources of entropy", "in", "visible universe"]]}

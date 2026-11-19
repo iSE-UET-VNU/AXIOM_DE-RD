@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": ["Shedrick J. Bowes", "June 7, 1999"], "discard": ["What specific offense did", "commit", "and under which Illinois statute was this offense classified"], "answer_shape": "single_fact", "relations": [["Shedrick J. Bowes", "on", "June 7, 1999"]]}

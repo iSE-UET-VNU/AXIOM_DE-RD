@@ -1,0 +1,1 @@
+{"scope": ["HMM Training 1"], "topic": ["Initialization process"], "anchor": ["first step"], "discard": ["What is the", "in the", "process?"], "answer_shape": "single_fact", "relations": [["Initialization process", "has", "first step"]]}

@@ -1,0 +1,1 @@
+{"scope": ["Table II"], "topic": [], "anchor": ["temperature", "April 1872", "600 feet", "bottom of the shaft"], "discard": ["In the", "what was the", "observed", "at a depth of", "from"], "answer_shape": "single_fact", "relations": [["temperature", "observed in", "April 1872"], ["temperature", "at a depth of", "600 feet"], ["temperature", "from", "bottom of the shaft"]]}

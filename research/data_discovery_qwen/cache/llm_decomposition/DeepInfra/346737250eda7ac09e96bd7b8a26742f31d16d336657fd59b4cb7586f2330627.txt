@@ -1,0 +1,1 @@
+{"scope": ["banking-book exposures"], "topic": ["IRB approach"], "anchor": ["banks", "must do"], "discard": ["What must", "under", "regarding", "do"], "answer_shape": "single_fact", "relations": [["banks", "under", "IRB approach"]]}

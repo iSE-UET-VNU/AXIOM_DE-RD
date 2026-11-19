@@ -1,0 +1,1 @@
+{"scope": ["R-12 HSV"], "topic": ["concurrent servicing"], "anchor": ["key safety steps", "servicing procedures"], "discard": ["Describe the", "as per the USAF technical manuals and orders"], "answer_shape": "single_fact", "relations": [["concurrent servicing", "of", "R-12 HSV"], ["key safety steps", "and", "servicing procedures"]]}

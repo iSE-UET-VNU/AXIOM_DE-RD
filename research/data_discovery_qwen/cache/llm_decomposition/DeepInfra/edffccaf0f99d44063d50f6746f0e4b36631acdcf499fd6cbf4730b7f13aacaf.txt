@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["Acid Test ratio"], "anchor": ["January 18", "(Current Assets - Inventory) / Current Liabilities"], "discard": ["What is", "calculated as"], "answer_shape": "single_fact", "relations": [["Acid Test ratio", "calculated as", "(Current Assets - Inventory) / Current Liabilities"]] }

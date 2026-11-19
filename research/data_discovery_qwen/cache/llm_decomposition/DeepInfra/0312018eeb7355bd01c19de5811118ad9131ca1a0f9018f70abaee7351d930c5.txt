@@ -1,0 +1,1 @@
+{"scope": ["S-1313 HOG SHELTER"], "topic": ["construction"], "anchor": ["total number of pieces", "Roof Sheathing (R/L)", "Ext. Plywood"], "discard": ["What is", "required for", "excluding"], "answer_shape": "single_fact", "relations": [["total number of pieces", "excluding", "Roof Sheathing (R/L)"], ["total number of pieces", "excluding", "Ext. Plywood"]]}

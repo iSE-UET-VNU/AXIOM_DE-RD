@@ -1,0 +1,1 @@
+{"scope": ["desert storage protocols"], "topic": [], "anchor": [], "discard": ["Which USAF technical document"], "answer_shape": "single_fact", "relations": []}

@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["handling of ESDS items"], "anchor": ["technical order number"], "discard": ["List the", "that governs", "in the document"], "answer_shape": "single_fact", "relations": [["handling of ESDS items", "governed by", "technical order number"]]}

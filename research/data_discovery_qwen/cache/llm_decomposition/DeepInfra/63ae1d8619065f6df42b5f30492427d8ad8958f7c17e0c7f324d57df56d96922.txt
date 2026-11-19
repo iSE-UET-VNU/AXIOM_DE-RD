@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["refueling zones"], "anchor": ["aircraft", "50 feet"], "discard": ["Do", "need to stop", "from"], "answer_shape": "single_fact", "relations": [["aircraft", "stop", "50 feet from refueling zones"]]}

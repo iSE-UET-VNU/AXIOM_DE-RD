@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["tunnel effect"], "anchor": ["particle", "energy barrier"], "discard": ["Explain", "how it differs from the behavior predicted by classical mechanics for a particle crossing"], "answer_shape": "single_fact", "relations": [["particle", "crossing", "energy barrier"], ["tunnel effect", "differs from", "classical mechanics"]]}

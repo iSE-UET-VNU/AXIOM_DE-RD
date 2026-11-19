@@ -1,0 +1,1 @@
+{"scope": ["A. C. Lawrence Leather Company"], "topic": ["net earnings"], "anchor": ["fiscal year ended October 26, 1946", "after all costs and expenses"], "discard": ["What was", "for the", "as stated in its"], "answer_shape": "single_fact", "relations": [["net earnings", "for the fiscal year ended", "October 26, 1946"], ["net earnings", "after", "all costs and expenses"]]}

@@ -1,0 +1,1 @@
+{"scope": ["HSV"], "topic": ["pre-operation checks"], "anchor": [], "discard": ["What are all of the", "required to use"], "answer_shape": "every_instance", "relations": [["pre-operation checks", "required to use", "HSV"]]}

@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": ["PayPal account profit name", "company account", "bank account"], "discard": ["Is it required for", "to be the same"], "answer_shape": "single_fact", "relations": [["PayPal account profit name", "same as", "company account"], ["company account", "same as", "bank account"]]}

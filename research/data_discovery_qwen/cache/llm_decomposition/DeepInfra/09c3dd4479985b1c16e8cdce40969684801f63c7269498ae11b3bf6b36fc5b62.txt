@@ -1,0 +1,1 @@
+{"scope": ["R-11 vehicle"], "topic": ["preparations", "pre-operation checks"], "anchor": ["hot refueling"], "discard": ["What are the", "per the USAF technical manuals"], "answer_shape": "single_fact", "relations": [["pre-operation checks", "for", "R-11 vehicle"], ["preparations", "for", "R-11 vehicle"]]}

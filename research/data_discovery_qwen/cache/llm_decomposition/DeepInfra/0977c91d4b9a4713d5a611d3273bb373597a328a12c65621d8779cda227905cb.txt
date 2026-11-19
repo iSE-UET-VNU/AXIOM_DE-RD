@@ -1,0 +1,1 @@
+{"scope": ["MCS 51 Family microcontroller"], "topic": ["accesses to external Data Memory"], "anchor": ["Port 2", "16-bit addresses"], "discard": ["specifically responsible for what function during"], "answer_shape": "single_fact", "relations": [["Port 2", "responsible for", "accesses to external Data Memory"], ["accesses to external Data Memory", "use", "16-bit addresses"]]}

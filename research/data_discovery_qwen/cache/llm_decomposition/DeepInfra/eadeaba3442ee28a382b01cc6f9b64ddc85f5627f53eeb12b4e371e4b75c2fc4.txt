@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["Chronological Resume"], "anchor": ["main characteristic"], "discard": ["What is", "of a"], "answer_shape": "single_fact", "relations": [["main characteristic", "of", "Chronological Resume"]]}

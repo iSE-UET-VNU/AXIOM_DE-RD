@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["main functional parts"], "anchor": ["hand drill"], "discard": ["State the"], "answer_shape": "document_summary", "relations": [["main functional parts", "of", "hand drill"]]}

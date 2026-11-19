@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": [], "discard": ["Compare how", "accountability", "standardization", "each cover", "safety protocols", "for fuel servicing operations"], "answer_shape": "document_summary", "relations": []}

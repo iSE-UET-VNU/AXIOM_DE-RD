@@ -1,0 +1,1 @@
+{"scope": ["CPT symmetry", "fundamental particles"], "topic": [], "anchor": ["CPT symmetry", "fundamental particles"], "discard": ["What is", "about", "and"], "answer_shape": "document_summary", "relations": [["CPT symmetry", "and", "fundamental particles"]]}

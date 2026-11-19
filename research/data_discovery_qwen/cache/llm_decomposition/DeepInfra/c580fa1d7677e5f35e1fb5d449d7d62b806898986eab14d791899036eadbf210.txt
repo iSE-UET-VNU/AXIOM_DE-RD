@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["conservation laws"], "anchor": ["composite objects"], "discard": ["Quantities explicitly related to"], "answer_shape": "single_fact", "relations": [["conservation laws", "related to", "composite objects"]]}

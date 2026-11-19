@@ -1,0 +1,1 @@
+{"scope": ["Office of Management and Enterprise Services (OMES)", "62 O.S. § 34.45"], "topic": ["maximum amount of public funds", "transition expenses"], "anchor": ["Governor-elect"], "discard": ["What is", "can allocate", "under"], "answer_shape": "single_fact", "relations": [["Office of Management and Enterprise Services (OMES)", "allocate", "transition expenses"]]}

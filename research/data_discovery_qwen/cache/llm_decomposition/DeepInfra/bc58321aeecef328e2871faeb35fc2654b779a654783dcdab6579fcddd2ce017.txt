@@ -1,0 +1,1 @@
+{"scope": ["TME Taiwan"], "topic": ["debtor's account"], "anchor": ["amount", "DR"], "discard": ["What is the", "for"], "answer_shape": "single_fact", "relations": [["debtor's account", "amount", "DR"]]}

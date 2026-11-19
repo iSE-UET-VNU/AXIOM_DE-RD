@@ -1,0 +1,1 @@
+{"scope": ["EAD Balance of Guarantor"], "topic": ["PD & LGD"], "anchor": [], "discard": ["What is", "in the context of"], "answer_shape": "single_fact", "relations": []}

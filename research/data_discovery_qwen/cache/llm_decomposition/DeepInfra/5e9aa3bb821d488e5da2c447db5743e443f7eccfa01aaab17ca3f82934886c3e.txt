@@ -1,0 +1,1 @@
+{"scope": ["France", "2050"], "topic": ["reduction of greenhouse gas emissions"], "anchor": [], "discard": ["Reduction of greenhouse gas emissions"], "answer_shape": "document_summary", "relations": []}

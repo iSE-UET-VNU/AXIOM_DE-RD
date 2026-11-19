@@ -1,0 +1,1 @@
+{"scope": ["US Air Force servicing operations"], "topic": ["SCR personnel"], "anchor": ["stationed"], "discard": ["Where are"], "answer_shape": "single_fact", "relations": [["SCR personnel", "stationed", "in"]]}

@@ -1,0 +1,71 @@
+{
+ "features": [
+  "score_mean_top_1",
+  "score_mean_top_5",
+  "score_mean_top_10",
+  "score_mean_top_20",
+  "score_mean_top_50",
+  "score_mean_top_100",
+  "score_mean_tail",
+  "score_std",
+  "score_range",
+  "gap_at_1",
+  "gap_at_5",
+  "gap_at_10",
+  "gap_at_20",
+  "gap_at_50",
+  "max_gap",
+  "max_gap_rank",
+  "slope_top_10",
+  "slope_top_20",
+  "slope_top_50",
+  "slope_top_100",
+  "softmax_entropy"
+ ],
+ "params": {
+  "n_estimators": 193,
+  "max_depth": 2,
+  "learning_rate": 0.03,
+  "min_child_weight": 5,
+  "subsample": 0.85,
+  "colsample_bytree": 0.85,
+  "reg_lambda": 5.0,
+  "objective": "reg:squarederror",
+  "eval_metric": "rmse",
+  "tree_method": "hist",
+  "n_jobs": 4,
+  "verbosity": 0
+ },
+ "scale": 1.5,
+ "margin": 15.0,
+ "cap": 100,
+ "budget_mean_k_lt": 60.0,
+ "oof_fold_calibration": [
+  {
+   "fold": 1,
+   "scale": 1.35,
+   "margin": 20.0
+  },
+  {
+   "fold": 2,
+   "scale": 1.3,
+   "margin": 20.0
+  },
+  {
+   "fold": 3,
+   "scale": 1.35,
+   "margin": 20.0
+  },
+  {
+   "fold": 4,
+   "scale": 1.15,
+   "margin": 25.0
+  },
+  {
+   "fold": 5,
+   "scale": 1.15,
+   "margin": 25.0
+  }
+ ],
+ "note": "K = min(clip(round(pred*scale+margin), 1, 100), list length)"
+}

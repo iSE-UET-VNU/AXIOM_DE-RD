@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["machinery maintenance"], "anchor": ["traceable and auditable records"], "discard": ["What are all the USAF documents that", "relies on", "for"], "answer_shape": "every_instance", "relations": [["machinery maintenance", "relies on", "traceable and auditable records"]]}

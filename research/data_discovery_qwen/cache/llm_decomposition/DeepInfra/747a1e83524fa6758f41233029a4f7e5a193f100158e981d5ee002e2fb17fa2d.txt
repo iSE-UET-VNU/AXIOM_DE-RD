@@ -1,0 +1,1 @@
+{"scope": ["quantum mechanics"], "topic": ["wave function", "wave-particle duality", "interferences", "measurement"], "anchor": [], "discard": ["Wave function and wave-particle duality in", "interferences and measurement"], "answer_shape": "document_summary", "relations": []}

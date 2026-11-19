@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["Schrödinger vs Dirac equations", "relativity", "spin"], "anchor": [], "discard": ["Schrödinger vs Dirac equations, relativity and spin"], "answer_shape": "document_summary", "relations": []}

@@ -1,0 +1,1 @@
+{"scope": ["Repaired Conductor Encapsulation Procedure"], "topic": ["conductor delamination repair procedure"], "anchor": ["middle", "Repaired Conductor Encapsulation Procedure"], "discard": ["When should", "be applied in", "the"], "answer_shape": "single_fact", "relations": [["Repaired Conductor Encapsulation Procedure", "applied in", "middle"]]}

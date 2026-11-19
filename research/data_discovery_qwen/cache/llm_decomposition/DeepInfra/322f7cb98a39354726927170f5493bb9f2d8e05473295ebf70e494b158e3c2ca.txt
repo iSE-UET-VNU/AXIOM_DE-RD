@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["characteristics of the wisdom that comes from heaven"], "anchor": ["James 3:17"], "discard": ["How many", "are listed in"], "answer_shape": "single_fact", "relations": [["characteristics of the wisdom that comes from heaven", "in", "James 3:17"]]}

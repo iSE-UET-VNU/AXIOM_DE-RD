@@ -1,0 +1,1 @@
+{"scope": [], "topic": [], "anchor": ["MARY OBAJE", "waist measurement"], "discard": ["What is the", "for"], "answer_shape": "single_fact", "relations": [["waist measurement", "for", "MARY OBAJE"]]}

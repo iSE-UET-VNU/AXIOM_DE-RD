@@ -1,0 +1,1 @@
+{"scope": ["experiment on Kissinger"], "topic": ["moral courage"], "anchor": ["Major Reed", "young men"], "discard": ["What did", "state about the", "exhibited by"], "answer_shape": "single_fact", "relations": [["moral courage", "exhibited by", "young men"], ["Major Reed", "state about", "moral courage"]]}

@@ -1,0 +1,1 @@
+{"scope": ["United States Air Force"], "topic": ["environmental changes"], "anchor": [], "discard": ["Effects of", "on"], "answer_shape": "document_summary", "relations": [["environmental changes", "on", "United States Air Force"]]}

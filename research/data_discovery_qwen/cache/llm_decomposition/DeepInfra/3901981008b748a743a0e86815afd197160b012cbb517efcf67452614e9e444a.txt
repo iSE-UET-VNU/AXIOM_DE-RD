@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["speed of light"], "anchor": ["meters per second", "defined today"], "discard": ["Extract the exact value of", "as defined today", "in"], "answer_shape": "single_fact", "relations": [["speed of light", "in", "meters per second"]]}

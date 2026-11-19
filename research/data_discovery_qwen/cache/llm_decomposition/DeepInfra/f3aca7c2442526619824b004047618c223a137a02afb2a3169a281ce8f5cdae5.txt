@@ -1,0 +1,1 @@
+{"scope": ["Sample II"], "topic": ["regression coefficient"], "anchor": ["Do you smoke more than 20 cigarettes a day?"], "discard": ["What is", "in"], "answer_shape": "single_fact", "relations": [["regression coefficient", "for", "Do you smoke more than 20 cigarettes a day?"]]}

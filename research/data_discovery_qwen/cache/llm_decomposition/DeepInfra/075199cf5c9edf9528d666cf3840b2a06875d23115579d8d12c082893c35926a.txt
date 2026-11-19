@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["sound waves"], "anchor": ["compression waves", "speed", "rigidity of the medium"], "discard": ["Are", "described as", "whose", "depends on"], "answer_shape": "single_fact", "relations": [["sound waves", "described as", "compression waves"], ["speed", "depends on", "rigidity of the medium"]]}

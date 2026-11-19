@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["Klein-Gordon equation", "Dirac equation"], "anchor": ["special relativity"], "discard": ["What are the main differences between", "and", "in their treatment of"], "answer_shape": "document_summary", "relations": [["Klein-Gordon equation", "and", "Dirac equation"], ["treatment of", "special relativity"]]}

@@ -1,0 +1,1 @@
+{"scope": ["razor-edge door"], "topic": ["coating"], "anchor": ["lip"], "discard": ["What", "is applied to"], "answer_shape": "single_fact", "relations": [["coating", "applied to", "lip"]]}

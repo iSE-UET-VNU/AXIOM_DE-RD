@@ -1,0 +1,1 @@
+{"scope": ["hand signal system"], "topic": ["design principles", "functional purposes"], "anchor": ["aircraft refueling operations"], "discard": ["Explain", "communication during"], "answer_shape": "document_summary", "relations": [["hand signal system", "for communication during", "aircraft refueling operations"]]}

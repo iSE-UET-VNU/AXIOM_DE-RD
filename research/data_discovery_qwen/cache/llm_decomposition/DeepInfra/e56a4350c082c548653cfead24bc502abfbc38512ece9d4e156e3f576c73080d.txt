@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["corrosion"], "anchor": ["three categories", "reporting"], "discard": ["Determine", "can be used for"], "answer_shape": "single_fact", "relations": [["corrosion", "used for", "reporting"], ["three categories", "of", "corrosion"]] }

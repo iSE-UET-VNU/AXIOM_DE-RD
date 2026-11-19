@@ -1,0 +1,1 @@
+{"scope": ["conservation of energy", "conservation of angular momentum"], "topic": [], "anchor": ["symmetry principles", "identical role"], "discard": ["Does the document indicate that", "in the"], "answer_shape": "single_fact", "relations": [["symmetry principles", "play an identical role in", "conservation of energy", "and", "conservation of angular momentum"]]}

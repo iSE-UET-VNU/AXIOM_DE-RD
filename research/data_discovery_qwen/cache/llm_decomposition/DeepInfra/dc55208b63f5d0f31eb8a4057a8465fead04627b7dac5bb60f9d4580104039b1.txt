@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["pre-exercise checks"], "anchor": ["critical systems", "specific criteria"], "discard": ["What are", "inspected during", "and what", "must each meet to ensure compliance"], "answer_shape": "every_instance", "relations": [["critical systems", "inspected during", "pre-exercise checks"], ["each", "must meet", "specific criteria"]]}

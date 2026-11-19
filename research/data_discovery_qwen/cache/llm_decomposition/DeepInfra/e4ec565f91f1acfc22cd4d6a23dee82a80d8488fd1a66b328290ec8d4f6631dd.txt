@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["encapsulation"], "anchor": ["air bubbles"], "discard": ["Identify the acceptable volume of"], "answer_shape": "single_fact", "relations": [["air bubbles", "in", "encapsulation"]]}

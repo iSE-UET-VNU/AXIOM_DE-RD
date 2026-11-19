@@ -1,0 +1,1 @@
+{"scope": ["U.S. Air Force"], "topic": ["role of the Crew Station Supervisor"], "anchor": ["Crew Station Supervisor"], "discard": ["What is the role of", "in"], "answer_shape": "single_fact", "relations": [["role of", "Crew Station Supervisor"]]}

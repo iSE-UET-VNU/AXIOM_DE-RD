@@ -1,0 +1,1 @@
+{"scope": ["NV-T60 tape"], "topic": ["maximum record/playback time", "video cassette", "SP (Standard Play) mode"], "anchor": [], "discard": ["What is", "when using"], "answer_shape": "single_fact", "relations": [["video cassette", "in", "SP (Standard Play) mode"], ["maximum record/playback time", "for", "video cassette"]]}

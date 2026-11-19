@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["high-voltage ignition cables", "propane gas delivery systems"], "anchor": ["materials", "safety mechanisms"], "discard": ["Compare", "versus"], "answer_shape": "document_summary", "relations": [["high-voltage ignition cables", "versus", "propane gas delivery systems"]]}

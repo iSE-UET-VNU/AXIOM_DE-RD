@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["statistical physics", "entropy", "complex systems", "human societies"], "anchor": [], "discard": ["How does", "explain", "emergence of", "concept", "shed light on", "such as"], "answer_shape": "document_summary", "relations": []}

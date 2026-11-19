@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["curvature", "flat geometry"], "anchor": ["Ω"], "discard": ["Numerical value of"], "answer_shape": "single_fact", "relations": [["curvature", "for", "flat geometry"], ["curvature", "Ω"]]}

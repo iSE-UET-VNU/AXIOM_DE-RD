@@ -1,0 +1,1 @@
+{"scope": ["NAVAIR manual"], "topic": ["pick-mattock"], "anchor": ["combination"], "discard": ["What combination is used for the", "as per"], "answer_shape": "single_fact", "relations": [["pick-mattock", "combination"]]}

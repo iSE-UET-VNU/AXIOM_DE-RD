@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["multiway trie"], "anchor": ["space complexity", "n nodes", "dictionary"], "discard": ["What is the", "required for storing", "when children are stored as"], "answer_shape": "single_fact", "relations": [["space complexity", "for storing", "n nodes"], ["children", "stored as", "dictionary"], ["multiway trie", "store", "children"]]}

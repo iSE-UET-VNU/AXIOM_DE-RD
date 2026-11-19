@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["quantum energy", "ΔE"], "anchor": ["nuclear physics"], "discard": ["What is", "in"], "answer_shape": "single_fact", "relations": [["quantum energy", "in", "nuclear physics"], ["quantum energy", "ΔE", "in", "nuclear physics"]]}

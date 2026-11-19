@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["Schrödinger equation"], "anchor": ["Schrödinger equation", "classical wave equations", "Newtonian mechanics"], "discard": ["What is the precise mathematical form of", "how does it incorporate principles different from", "in"], "answer_shape": "single_fact", "relations": [["Schrödinger equation", "different from", "classical wave equations"]] }

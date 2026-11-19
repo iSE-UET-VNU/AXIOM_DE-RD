@@ -1,0 +1,1 @@
+{"scope": ["concurrent operations"], "topic": ["loaded/unloaded"], "anchor": ["materials", "except under combat conditions"], "discard": ["What", "cannot", "during", "be"], "answer_shape": "every_instance", "relations": [["materials", "loaded/unloaded", "during concurrent operations"]]}

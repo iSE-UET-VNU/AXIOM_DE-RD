@@ -1,0 +1,1 @@
+{"scope": [], "topic": ["S-waves", "Earth's outer core"], "anchor": ["S-waves", "outer core"], "discard": ["Why don't", "travel through", "and what evidence does this provide about its physical state"], "answer_shape": "single_fact", "relations": [["S-waves", "travel through", "Earth's outer core"]]}

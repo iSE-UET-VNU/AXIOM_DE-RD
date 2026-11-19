@@ -1,0 +1,1 @@
+{"scope": ["GENOA TECHNOLOGIES LTD."], "topic": ["patent"], "anchor": ["January 7, 2003", "International Application Number"], "discard": ["What is the", "filed by", "on"], "answer_shape": "single_fact", "relations": [["patent", "filed by", "GENOA TECHNOLOGIES LTD."], ["patent", "on", "January 7, 2003"]]}
