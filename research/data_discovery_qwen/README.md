@@ -2,7 +2,7 @@
 
 This folder holds the code, inputs, caches and current outputs of the **data discovery** stage of the AXIOM_DE-RD
 retrieval pipeline. It is self-contained: it does not import anything else from the repo. Only the 5,091-page text
-and page vectors are not in this folder; they are read from the repo's local data caches (see Quick start). Use it to:
+and page vectors are not in this folder; they are read from the repo's local data caches (**see "Before you run" below: you must place them yourself**). Use it to:
 
 - reproduce and check the reported numbers;
 - start **accurate retrieval** from `outputs/data_discovery_output.jsonl`.
@@ -36,20 +36,64 @@ QA and accurate retrieval (EVIE) are not part of this folder and are not reporte
 Recall@100 (93.16) is the recall of the full 100-page list. The recall of the pages actually passed on to accurate
 retrieval is the adaptive-K prefix recall, **90.82** at mean K 58.86. Do not mix the two.
 
-## Quick start (no API key needed)
+## Before you run: two data files are NOT in git
 
-The 5,091-page corpus data is **not copied** into this folder, to keep it small (8.9 MB). Two files are read from the
-local repo caches that already exist on the team machines (`data/work/` is git-ignored, so they are not in git):
+Everything this folder needs is committed **except two corpus files** (5,091 pages). They are too large for git
+(`data/work/` is git-ignored), so **you must place them yourself before the first run**. Without them `run_all.py` stops
+at the first step with `page text not found: ...` or `page vectors not found: ...`.
 
-| What | Default path (relative to the repo root; this folder sits in `<repo>/research/data_discovery_qwen/`) | Override |
+What is committed and needs nothing else: the code, the 220 questions and qrels (`inputs/`), the 220 cached Qwen3-32B
+decompositions and the 220 query vectors (`cache/`), and the results (`outputs/`).
+
+| | 1. Page text | 2. Page vectors |
 |---|---|---|
-| Page text, 11 MB | `data/work/adaptive_routers_handoff/adaptive_routers_handoff/data/work/ondemand_v2/ef7f11811803/light_prep/pages_ppocrv5.jsonl` | `--pages <file>` or env `DD_PAGES` |
-| Page vectors, 83 MB (Qwen3-Embedding-8B, 5,091 × 4096) | `data/work/Cached-Ondemand-Eval/data/work/ondemand_v2/ef7f11811803/light_v2/dense_qwen8b_ppocr_pages.npy` | `--page-vectors <file>` or env `DD_PAGE_VECTORS` |
+| File | `pages_ppocrv5.jsonl` | `dense_qwen8b_ppocr_pages.npy` |
+| Content | one JSON row per page: `page_id`, `doc_id`, `text` (pdf-inspector text, PP-OCRv5 for 881 scanned/image pages) | Qwen3-Embedding-8B, float32, 5,091 × 4096, rows in the page order of `cache/vectors_meta.json` |
+| Size | 11 MB (11,139,236 bytes) | 83 MB (83,411,072 bytes) |
+| SHA-256 | `4344de3b7f9110949d80bea1b0b133c5424f9146dcd7563b682bad572ac5c6f4` | `12c6fab5d689e350cd3132e271b69e314fa9fb09101af61b89fcbc25c47b67d7` |
+| Where to get it | team archive **`adaptive_routers_handoff.zip`** (2026-10-19), inside it at `adaptive_routers_handoff/data/work/ondemand_v2/ef7f11811803/light_prep/pages_ppocrv5.jsonl` | **not in any team archive** (made on 2026-11-14). Ask the author of this folder for the file, **or** rebuild it yourself (below) |
+| Can this folder rebuild it? | no (it needs the parsing pipeline: pdf-inspector + PP-OCRv5, corpus fingerprint `ef7f11811803`) | yes, `--live`: about 20 min, 2.23 M tokens, **about $0.02** on OpenRouter ($0.01 / M tokens) |
 
-`cache/vectors_meta.json` holds the 5,091 page ids in order. The code checks that both files match them.
+### Where to put them (pick one)
+
+**a) Default paths, no arguments needed** (paths relative to the repo root):
+
+```text
+data/work/adaptive_routers_handoff/adaptive_routers_handoff/data/work/ondemand_v2/ef7f11811803/light_prep/pages_ppocrv5.jsonl
+data/work/Cached-Ondemand-Eval/data/work/ondemand_v2/ef7f11811803/light_v2/dense_qwen8b_ppocr_pages.npy
+```
+
+Unzipping `adaptive_routers_handoff.zip` into `data/work/adaptive_routers_handoff/` gives the first path. The page
+vectors can also simply be copied to `research/data_discovery_qwen/cache/page_vectors_qwen3-embedding-8b.npy`; that
+location is checked first and is git-ignored.
+
+**b) Anywhere, passed explicitly:** `--pages <file> --page-vectors <file>`, or the env vars `DD_PAGES` / `DD_PAGE_VECTORS`.
 
 The repo root is found automatically: the first parent folder of this one that has `data/work/`. Set `DD_REPO=<repo root>`
-when the data caches live in another checkout (for example a git worktree without `data/work/`).
+when the data lives in another checkout (for example a git worktree without `data/work/`).
+
+Check the files before running (the code also checks that the page ids and their order match `cache/vectors_meta.json`
+and that the vectors are 5,091 × 4096):
+
+```bash
+sha256sum <pages_ppocrv5.jsonl> <dense_qwen8b_ppocr_pages.npy>                   # Linux / Git Bash
+Get-FileHash <file> -Algorithm SHA256                                             # PowerShell
+```
+
+### Rebuilding the page vectors (only if you cannot get the file)
+
+```bash
+cd research/data_discovery_qwen
+OPENROUTER_API_KEY=... python run_all.py --live      # needs the page text (file 1) and `pip install tiktoken`
+```
+
+- It embeds the 4,937 non-empty pages (page text without `[Image: ...]` placeholders, clipped to 6,000 cl100k tokens; the
+  154 empty pages get a zero vector) and saves `cache/page_vectors_qwen3-embedding-8b.npy`. Later runs reuse it, without `--live`.
+- Everything else comes from `cache/`, so `--live` makes no other API call for the 220 benchmark questions.
+- API embeddings are not bit-for-bit reproducible, so rebuilt vectors can move the metrics slightly. If the check at the end
+  says `DIFFERENT: ...` by a few hundredths, that is the reason; the shared original file gives an exact match.
+
+## Quick start (no API key needed, once the two files are in place)
 
 ```bash
 cd research/data_discovery_qwen
@@ -57,12 +101,8 @@ pip install -r requirements.txt          # numpy scipy scikit-learn xgboost PySt
 python run_all.py                        # replays the chosen result (DeepInfra, 214 questions) from cache/, ~30 s, no API call
 python run_all.py --no-ablations         # same, without the ablation rows of metrics.json (faster)
 python run_all.py --pages <pages_ppocrv5.jsonl> --page-vectors <dense_qwen8b_ppocr_pages.npy>   # data files elsewhere
-DD_REPO=<path to the repo that has data/work/> python run_all.py                                # data caches in another checkout
+DD_REPO=<path to the repo that has data/work/> python run_all.py                                # data in another checkout
 ```
-
-If the page text file is missing, the run stops with `page text not found: ...`. Ask for the two files (11 MB + 83 MB)
-or point `--pages` / `--page-vectors` at your copy. The page text cannot be rebuilt by this folder; the page vectors can
-(see Live mode).
 
 The last line must be `reproduction check (DeepInfra, 214 questions): OK, all 10 numbers match`.
 - The script rebuilds every file in `outputs/` from `inputs/`, `cache/` and the two repo files.
@@ -106,13 +146,13 @@ inputs/
   qrels.jsonl              query_id, page_id, relevance
   documents.jsonl          103 files: doc_id, path, page_count, ...
   excluded_questions.json  the 6 questions left out of the official set
-  (page text: NOT in the bundle, read from the repo, see Quick start)
+  (page text: NOT in git, see "Before you run")
 cache/
   query_vectors_qwen3-embedding-8b.npy   220 x 4096, row order = vectors_meta.json "qids"
   vectors_meta.json                      model, page_ids (order of the page vectors), qids, how texts were built, timings
   llm_decomposition/DeepInfra/           220 raw Qwen3-32B responses + .meta.json (latency, provider, cost, tokens);
                                          file name = sha256("qwen/qwen3-32b\n" + prompt) + ".txt"
-  (page vectors: NOT in the bundle, read from the repo, see Quick start)
+  (page vectors: NOT in git, see "Before you run"; a local copy here is git-ignored)
 outputs/                   the chosen result (DeepInfra, 214 questions); regenerated identically by run_all.py
   query_preparation.jsonl  per question: scope, topic, anchor, discard, answer_shape, bm25_text, fallback flags, LLM call info
   light_retrieval_top100.jsonl  qid, selected_files (top 5), n_candidates, ranked_pages, scores
@@ -287,7 +327,7 @@ One JSON object per question (214 rows), the chosen result:
 
 - **Use `selected_pages`** (the first `k` pages, OOF K) as the candidate set for accurate retrieval. Accurate retrieval should rerank these pages and pass its top 10 to answer generation.
 - To test another budget, cut `top100` yourself.
-- Page text for those pages is in the repo page file (Quick start). Accurate retrieval may use its own parser (e.g. KDL) on the PDFs listed in `inputs/documents.jsonl`.
+- Page text for those pages is in the page text file (see "Before you run"). Accurate retrieval may use its own parser (e.g. KDL) on the PDFs listed in `inputs/documents.jsonl`.
 - Reference answers for QA are in `inputs/queries.jsonl` (`answers`).
 
 ## Reliability notes (read before quoting numbers)
